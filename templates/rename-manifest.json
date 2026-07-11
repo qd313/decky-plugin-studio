@@ -1,0 +1,9 @@
+{
+  "replacements": [
+    { "from": "decky-plugin-template", "to": "{{kebab}}" },
+    { "from": "Decky Plugin Template", "to": "{{display}}" },
+    { "from": "John Doe", "to": "{{author}}" }
+  ],
+  "templateUrl": "https://github.com/SteamDeckHomebrew/decky-plugin-template.git",
+  "pinnedRef": "main"
+}

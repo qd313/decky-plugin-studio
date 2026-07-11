@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "decky-plugin-studio": {
+      "command": "node",
+      "args": ["__DECKY_MCP_ENTRY__"],
+      "env": {
+        "DECKY_STUDIO_WORKSPACE": "${workspaceFolder}",
+        "DECKY_STUDIO_REPO": "${workspaceFolder}/../decky-plugin-studio"
+      }
+    }
+  }
+}

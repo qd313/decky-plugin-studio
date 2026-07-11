@@ -1,0 +1,122 @@
+{
+  "name": "decky-plugin-studio-extension",
+  "displayName": "Decky Plugin Studio",
+  "description": "Streamline Decky Loader plugin development with live preview, MCP tools, and agent pack for VS Code and Cursor",
+  "version": "0.2.0",
+  "publisher": "decky-plugin-studio",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:plugin.json"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "decky.initPack",
+        "title": "Init Pack",
+        "category": "Decky"
+      },
+      {
+        "command": "decky.createPlugin",
+        "title": "Create New Plugin",
+        "category": "Decky"
+      },
+      {
+        "command": "decky.openPreview",
+        "title": "Open Preview",
+        "category": "Decky"
+      },
+      {
+        "command": "decky.deployToDeck",
+        "title": "Deploy to Deck",
+        "category": "Decky"
+      },
+      {
+        "command": "decky.captureScreenshot",
+        "title": "Capture Screenshot",
+        "category": "Decky"
+      },
+      {
+        "command": "decky.startTunnel",
+        "title": "Start Tunnel",
+        "category": "Decky"
+      },
+      {
+        "command": "decky.stopTunnel",
+        "title": "Stop Tunnel",
+        "category": "Decky"
+      },
+      {
+        "command": "decky.refreshTree",
+        "title": "Refresh",
+        "category": "Decky",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "decky-plugin-studio",
+          "title": "Decky Plugin Studio",
+          "icon": "media/decky.svg"
+        }
+      ]
+    },
+    "views": {
+      "decky-plugin-studio": [
+        {
+          "id": "deckyStudioTree",
+          "name": "Decky Plugin Studio"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Decky Plugin Studio",
+      "properties": {
+        "deckyPluginStudio.previewHttpAllow": {
+          "type": "string",
+          "default": "127.0.0.1:11434,127.0.0.1:1234,api.steampowered.com:443,store.steampowered.com:443",
+          "description": "Comma-separated host:port allowlist for preview HTTP passthrough (Ollama, Steam Web API, mDNS hosts)"
+        },
+        "deckyPluginStudio.localLoaderUnit": {
+          "type": "string",
+          "default": "plugin_loader.service",
+          "description": "systemd unit name for local deploy restart"
+        },
+        "deckyPluginStudio.deckIp": {
+          "type": "string",
+          "default": "",
+          "description": "Steam Deck IP for remote deploy/tunnel"
+        },
+        "deckyPluginStudio.deckUser": {
+          "type": "string",
+          "default": "deck"
+        },
+        "deckyPluginStudio.ingestPort": {
+          "type": "number",
+          "default": 7682
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "prepackage": "node scripts/bundle-for-vsix.mjs",
+    "package": "vsce package --no-dependencies",
+    "lint": "tsc -p . --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.6.2"
+  }
+}

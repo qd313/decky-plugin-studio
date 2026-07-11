@@ -1,0 +1,26 @@
+name: Build VSIX
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm run build
+      - run: pnpm run package:vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: decky-plugin-studio-vsix
+          path: extension/*.vsix

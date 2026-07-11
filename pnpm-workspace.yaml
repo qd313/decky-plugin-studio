@@ -1,0 +1,4 @@
+packages:
+  - "extension"
+  - "mcp-server"
+  - "preview-server"

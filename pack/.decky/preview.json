@@ -1,0 +1,14 @@
+{
+  "rpcMode": "discover",
+  "rpcAllowlist": [],
+  "rpcDenylist": ["_main", "_unload", "_migration"],
+  "ipcTimeoutMs": 120000,
+  "permissions": {
+    "hardware_control": true,
+    "filesystem": true,
+    "network": true,
+    "clipboard": true,
+    "audio": true,
+    "notifications": true
+  }
+}

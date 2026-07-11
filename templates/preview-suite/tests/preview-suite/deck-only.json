@@ -1,0 +1,17 @@
+{
+  "scenarios": [
+    {
+      "id": "DECK-ONLY-placeholder",
+      "tier": "deckOnly",
+      "bucket": "E",
+      "evidenceProfile": "deck",
+      "tags": ["deck-only"],
+      "steps": [
+        {
+          "action": "note",
+          "text": "Run on device after deck.deploy — not executable in preview"
+        }
+      ]
+    }
+  ]
+}

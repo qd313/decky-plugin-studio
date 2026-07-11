@@ -1,0 +1,11 @@
+{
+  "_schema": "Decky Plugin Studio preview-suite tier batches",
+  "batches": {
+    "smoke": {
+      "description": "Quick preview smoke scenarios (RPC + DOM shell).",
+      "file": "smoke.json",
+      "requiresPreview": true
+    }
+  },
+  "executionOrder": ["smoke"]
+}

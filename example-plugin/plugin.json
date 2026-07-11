@@ -1,0 +1,9 @@
+{
+  "name": "Example Plugin",
+  "author": "Decky Plugin Studio",
+  "description": "Minimal example plugin for preview smoke tests",
+  "version": "0.0.1",
+  "api_version": 1,
+  "main": "main.py",
+  "flags": []
+}

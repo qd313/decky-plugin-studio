@@ -1,0 +1,9 @@
+Decky Plugin Studio
+Copyright 2026 Decky Plugin Studio contributors
+
+This product includes material from the bonsAI project (Apache-2.0):
+- Subagent personas and rules ported from BonsAI/.cursor/
+- Reverse tunnel and screenshot scripts ported from BonsAI/scripts/
+- Decky platform contract patterns derived from BonsAI/.cursorrules
+
+See the bonsAI repository: https://github.com/cantcurecancer/bonsAI

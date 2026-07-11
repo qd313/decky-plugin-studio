@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "id": "SMOKE-RPC-greeting",
+      "tier": "smoke",
+      "tags": ["smoke", "rpc", "get_greeting"],
+      "steps": [
+        { "action": "sleep", "ms": 300 },
+        { "action": "callRpc", "method": "get_greeting", "args": ["preview-suite"] },
+        { "action": "assert", "type": "rpcResult", "expect": "Hello, preview-suite!" }
+      ]
+    },
+    {
+      "id": "SMOKE-DOM-shell",
+      "tier": "smoke",
+      "tags": ["smoke", "dom"],
+      "steps": [
+        { "action": "sleep", "ms": 400 },
+        { "action": "snapshotDom" },
+        { "action": "assert", "type": "domContainsAny", "expect": ["Example Plugin", "Greet", "Name"] }
+      ]
+    },
+    {
+      "id": "SMOKE-DOM-focus-sequence",
+      "tier": "smoke",
+      "tags": ["smoke", "focus"],
+      "steps": [
+        { "action": "sleep", "ms": 300 },
+        { "action": "runSequence", "inputs": ["Down"], "delayMs": 80 },
+        { "action": "assert", "type": "focusPathIncludes", "expect": "Focusable" }
+      ]
+    }
+  ]
+}

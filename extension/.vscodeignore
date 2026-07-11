@@ -1,0 +1,8 @@
+node_modules/**
+**/.git/**
+**/__pycache__/**
+**/*.ts
+!dist/**
+!resources/preview-server/**
+scripts/**
+src/**
