@@ -58,7 +58,15 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
       return tailIngest(params as { since?: number; lines?: number; hypothesisId?: string });
 
     case "tools/deck_captureScreenshot":
-      return deck.captureScreenshot(String(params.mode ?? "auto"));
+      return deck.captureScreenshot(
+        String(params.mode ?? "auto"),
+        Boolean(params.allowNonPluginUi)
+      );
+
+    case "tools/deck_installCaptureHelper":
+      return deck.installCaptureHelper(
+        (params.which as "record" | "capture" | "both") ?? "both"
+      );
 
     case "tools/deck_deploy":
       return plugin.deployPlugin((params.mode as "auto" | "local" | "remote") ?? "auto");
@@ -129,7 +137,12 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
       );
 
     case "tools/deck_record":
-      return deck.recordDeck(String(params.seconds ?? "10"), String(params.mode ?? "auto"));
+      return deck.recordDeck(
+        String(params.seconds ?? "10"),
+        String(params.mode ?? "auto"),
+        String(params.quality ?? "compressed"),
+        Boolean(params.allowNonPluginUi)
+      );
 
     case "shutdown":
       stopIngestServer();

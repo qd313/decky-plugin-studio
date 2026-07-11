@@ -6,7 +6,7 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 
 - **Focus-graph first:** D-pad navigation uses Decky `Focusable` callbacks (`onMoveLeft`, `onMoveRight`, `onOKButton`, etc.), not DOM `keydown`.
 - **Build parity:** After changes to `src/`, `main.py`, or `plugin.json`, run `plugin.build` (MCP) or `./scripts/build.sh` / `./scripts/build.ps1` before on-device QA.
-- **Preview vs on-device:** Use `preview.start` for fast iteration; use `deck.deploy` + on-device QA for focus/layout bugs the preview cannot reproduce faithfully.
+- **Preview vs on-device:** The live preview is **very much beta**. Use `preview.start` for fast UI iteration; use `deck.deploy` + on-device QA for focus/layout bugs the preview cannot reproduce faithfully.
 
 ## MCP tools (Decky Plugin Studio)
 
@@ -15,8 +15,9 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 | `deck.configure` | Set DECK_IP, DECK_USER, ingest port |
 | `deck.startTunnel` / `deck.stopTunnel` | Reverse SSH tunnel for NDJSON ingest |
 | `deck.probeIngest` / `deck.tailIngest` | Debug log capture from Deck |
-| `deck.captureScreenshot` | Pull Deck UI screenshot |
-| `deck.record` | Pull Deck screen recording (optional) |
+| `deck.captureScreenshot` | Composited Deck screenshot (open QAM + plugin) |
+| `deck.record` | Composited screen recording to `recordings/` |
+| `deck.installCaptureHelper` | Install capture helpers on Deck |
 | `deck.deploy` | Build + deploy (local SteamOS/Bazzite or remote SSH) |
 | `plugin.detect` / `plugin.build` / `plugin.verifyZip` | Workspace validation and build |
 | `preview.start` / `preview.stop` / `preview.status` / `preview.health` | In-IDE QAM preview |
@@ -43,7 +44,6 @@ Requires **Decky: Open Preview**. Agent loop: `.cursor/skills/decky-tier-qa/SKIL
 - **decky-dev-loop** — build/deploy, BPM vs Gaming Mode, screenshots
 - **decky-tier-qa** — tier-by-tier preview QA
 - **refactor-specialist** / **security-auditor** / **foss-advocate**
-- **red-team** / **blue-team** — scope and ship decisions
 
 Archive substantive runs in `.cursor/agents/SUBAGENT_REPORTS.md`.
 

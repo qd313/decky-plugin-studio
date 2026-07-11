@@ -1,6 +1,6 @@
-# Preview limitations (v0.2)
+# Preview limitations (v0.3)
 
-Decky Plugin Studio preview is for **fast iteration**, not a replacement for on-device QA.
+Decky Plugin Studio preview is **very much beta** — useful for **fast iteration**, not a replacement for on-device QA.
 
 ## What works well
 

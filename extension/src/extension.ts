@@ -18,7 +18,7 @@ let statusBar: DeckyStatusBar;
 
 export function activate(context: vscode.ExtensionContext): void {
   treeProvider = new DeckyTreeProvider();
-  statusBar = new DeckyStatusBar();
+  statusBar = new DeckyStatusBar(context);
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("deckyStudioTree", treeProvider),

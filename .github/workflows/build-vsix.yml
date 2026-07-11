@@ -1,26 +1,165 @@
+# Build VSIX + GitHub Release (bonsAI-style).
+#
+# Triggers:
+#   - push tag v*
+#   - push to main when extension/package.json version changes
+#   - workflow_dispatch (optional ref + publish toggle)
 name: Build VSIX
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch, tag, or SHA; leave empty for default branch)"
+        required: false
+        default: ""
+        type: string
+      publish_github_release:
+        description: "Create/update GitHub Release with the VSIX"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+    paths:
+      - "extension/package.json"
+      - "package.json"
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref != '' && github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve extension version and release tag
+        id: release_meta
+        shell: bash
+        run: |
+          VERSION=$(jq -r .version extension/package.json)
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid extension/package.json version: $VERSION"
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide GitHub Release publish
+        id: publish_release
+        shell: bash
+        run: |
+          TAG="${{ steps.release_meta.outputs.tag_name }}"
+          PUBLISH=false
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/v* ]]; then
+            PUBLISH=true
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_github_release }}" == "true" ]]; then
+            PUBLISH=true
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            if git rev-parse "$TAG" >/dev/null 2>&1; then
+              echo "Tag ${TAG} already exists; skipping auto-release (artifact still uploaded)."
+            else
+              PUBLISH=true
+              echo "New version on main; will publish GitHub Release ${TAG}."
+            fi
+          fi
+          echo "publish=${PUBLISH}" >> "$GITHUB_OUTPUT"
+
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
+
       - run: pnpm install
       - run: pnpm run build
       - run: pnpm run package:vsix
+
       - uses: actions/upload-artifact@v4
         with:
           name: decky-plugin-studio-vsix
           path: extension/*.vsix
+
+      - name: Resolve GitHub Release tag for publish step
+        id: gh_release_tag
+        if: steps.publish_release.outputs.publish == 'true'
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            T="${{ inputs.ref }}"
+            T="${T#refs/tags/}"
+            if [[ -z "$T" ]]; then
+              T="${{ steps.release_meta.outputs.tag_name }}"
+            fi
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/v* ]]; then
+            T="${GITHUB_REF#refs/tags/}"
+          else
+            T="${{ steps.release_meta.outputs.tag_name }}"
+          fi
+          echo "tag_name=${T}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract CHANGELOG section for release notes
+        if: steps.publish_release.outputs.publish == 'true'
+        id: changelog_body
+        shell: bash
+        run: |
+          VERSION="${{ steps.release_meta.outputs.version }}"
+          TAG="v${VERSION}"
+          PREV_TAG=$(git tag --sort=-v:refname | awk -v cur="${TAG}" '$0 == cur { getline; print; exit }')
+          if [[ -z "$PREV_TAG" ]]; then
+            PREV_TAG=$(git tag --sort=-v:refname | head -1)
+            if [[ "$PREV_TAG" == "$TAG" ]]; then
+              PREV_TAG=""
+            fi
+          fi
+          NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
+          if [[ -f CHANGELOG.md ]]; then
+            awk -v ver="${VERSION}" '
+              /^## \[/ {
+                if (found) exit
+                if ($0 ~ "^## \\[" ver "\\]") { found=1; next }
+              }
+              found { print }
+            ' CHANGELOG.md > "$NOTES_FILE"
+          fi
+          if [[ -s "$NOTES_FILE" ]]; then
+            {
+              cat "$NOTES_FILE"
+              echo ""
+              echo "---"
+              echo ""
+              if [[ -n "$PREV_TAG" ]]; then
+                echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...v${VERSION}"
+              else
+                echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/v${VERSION}^...v${VERSION}"
+              fi
+            } > "${NOTES_FILE}.final"
+            mv "${NOTES_FILE}.final" "$NOTES_FILE"
+            echo "has_body=true" >> "$GITHUB_OUTPUT"
+            echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "No CHANGELOG section for v${VERSION}; falling back to auto-generated release notes."
+            echo "has_body=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub Release
+        if: steps.publish_release.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.gh_release_tag.outputs.tag_name }}
+          name: Decky Plugin Studio ${{ steps.gh_release_tag.outputs.tag_name }}
+          files: extension/*.vsix
+          body_path: ${{ steps.changelog_body.outputs.has_body == 'true' && steps.changelog_body.outputs.path || '' }}
+          generate_release_notes: ${{ steps.changelog_body.outputs.has_body != 'true' }}

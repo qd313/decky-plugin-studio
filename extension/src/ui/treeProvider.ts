@@ -47,6 +47,7 @@ export class DeckyTreeProvider implements vscode.TreeDataProvider<DeckyTreeItem>
         tool("deck.stopTunnel"),
         tool("deck.captureScreenshot"),
         tool("deck.record"),
+        tool("deck.installCaptureHelper"),
         tool("deck.deploy"),
         tool("plugin.build"),
         tool("plugin.verifyZip"),

@@ -34,6 +34,7 @@ Same-machine Deck dev: `DECK_IP=127.0.0.1`.
 | Validate + build frontend/backend | **`plugin.build`** |
 | Build + deploy to Deck | **`deck.deploy`** |
 | Pull UI screenshot from Deck | **`deck.captureScreenshot`** |
+| Pull screen recording from Deck | **`deck.record`** (open QAM + plugin first) |
 
 Shell fallback (build only — deploy still via MCP):
 
@@ -77,14 +78,15 @@ pnpm run build           # or npm run build
 
 Deck-facing changes: also run **`plugin.build`** then **`deck.deploy`** before closing the task.
 
-## Visual verification (screenshots)
+## Visual verification (screenshots & recordings)
 
 When debugging layout, focus, or QAM:
 
-1. Reproduce on Deck (QAM open for game-mode UI).
-2. **`deck.captureScreenshot`** (MCP) — preferred in Cursor / Decky Plugin Studio.
-3. Or run `scripts/screenshot-deck.ps1` / `scripts/screenshot-deck.sh` if present in the workspace.
-4. Follow **decky-screenshot-ingest** skill: read newest `screenshots/DeckCapture_*.png`.
+1. Reproduce on Deck — **QAM open**, plugin panel visible.
+2. **`deck.captureScreenshot`** or **`deck.record`** (MCP) — composited capture; fails closed without QAM/plugin unless `allowNonPluginUi`.
+3. Or run `scripts/screenshot-deck.*` / `scripts/record-deck.*` if present after Init Pack.
+4. Screenshots: follow **decky-screenshot-ingest** skill (`screenshots/DeckCapture_*.png`).
+5. Recordings: `recordings/DeckRecord_*.mkv` — verify plugin chrome is readable in the clip.
 
 ## Optional debug log tunnel
 
@@ -98,7 +100,7 @@ Do not commit private IPs or ingest secrets — use `.env` / MCP config only.
 
 ## Related skills & docs
 
-- `.cursor/skills/decky-preview/SKILL.md` — in-IDE QAM preview
+- `.cursor/skills/decky-preview/SKILL.md` — in-IDE QAM preview (**very much beta**)
 - `.cursor/skills/decky-screenshot-ingest/SKILL.md` — ingest `screenshots/`
 - `.cursor/skills/decky-tier-qa/SKILL.md` — tiered preview + on-device QA
 - `AGENTS.md` — MCP tool reference

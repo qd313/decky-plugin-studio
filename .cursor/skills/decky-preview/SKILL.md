@@ -10,6 +10,8 @@ description: >-
 
 # Decky preview (Decky Plugin Studio)
 
+> **Very much beta** — fast UI/RPC iteration only. Focus, layout, and Steam Input need `deck.deploy` + on-device QA.
+
 ## When to use
 
 - Iterating on `@decky/ui` components without full build/deploy/Steam loop

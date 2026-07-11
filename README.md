@@ -1,71 +1,110 @@
 # Decky Plugin Studio
 
-VS Code extension for **Decky Loader** plugin development (also works in Cursor): live in-IDE QAM preview, MCP tools for deck debug and deploy, and an agent pack laid down into your plugin repo.
+VS Code / Cursor extension for **Decky Loader** plugin development: live in-IDE QAM preview, MCP tools for build/deploy/debug on a real Steam Deck, composited screenshots and screen recordings, and an agent pack for your plugin repo.
+
+> **Live preview is very much beta.** It is great for fast UI and RPC iteration, but focus, layout, Steam Input, and gamescope compositing still need on-device QA. See [Preview limitations](docs/PREVIEW_LIMITATIONS.md).
+
+## What you get
+
+| Feature | What it does |
+|---------|----------------|
+| **Live preview** | QAM-sized webview with HMR, virtual gamepad, hardware simulator, Python sidecar for real `main.py` RPC |
+| **MCP tools** | Agents and commands for `deck.deploy`, `deck.captureScreenshot`, `deck.record`, preview suite, tunnel/ingest |
+| **Composited capture** | Screenshots and recordings that include QAM + your plugin UI (not raw game-only kmsgrab) |
+| **Init Pack** | Drops `AGENTS.md`, Cursor/VS Code MCP config, skills, and optional `scripts/` into your plugin repo |
+| **Create New Plugin** | Clones decky-plugin-template, renames boilerplate, runs Init Pack |
 
 ## Install
 
-Download the latest `.vsix` from [GitHub Releases](https://github.com/decky-plugin-studio/decky-plugin-studio/releases) (when published), or use a VSIX file you received.
+1. Download the latest `.vsix` from [GitHub Releases](https://github.com/decky-plugin-studio/decky-plugin-studio/releases)
+2. **Extensions** → **…** → **Install from VSIX…**
+3. Reload the editor
 
-In **VS Code** or **Cursor**:
+The **status bar** (bottom-right) shows the installed version, preview/tunnel state, and ingest count.
 
-1. Open **Extensions**
-2. Click **…** (More Actions)
-3. Choose **Install from VSIX…**
-4. Select the `decky-plugin-studio-extension-*.vsix` file
+## Quick start
 
-Reload the editor if prompted.
+### 1. Open a plugin workspace
 
-## Getting started
+Any folder with `plugin.json` and `main.py`. This repo includes [example-plugin/](example-plugin/) for smoke testing.
 
-### 1. Open a Decky plugin workspace
+### 2. Configure your Deck (remote dev)
 
-Open any folder that contains `plugin.json` and `main.py`. The repo includes [example-plugin/](example-plugin/) for smoke testing.
+Use MCP **`deck.configure`** or create `.env` in your plugin repo:
 
-### 2. Initialize the agent pack
+```env
+DECK_IP=192.168.x.x
+DECK_USER=deck
+```
+
+Deck credentials are also stored under `~/.config/decky-plugin-studio/deck.env` when using MCP configure.
+
+### 3. Init Pack
 
 Command Palette → **`Decky: Init Pack`**
 
-Copies agent guidance and MCP config into your plugin repo:
+Copies agent guidance, MCP config, skills, and optional scripts (`record-deck`, `screenshot-deck`, preview suite).
 
-- **VS Code:** `.vscode/mcp.json` (Copilot MCP), `.github/copilot-instructions.md`
-- **Cursor:** `mcp.json`, `.cursor/{rules,agents,skills,hooks}`, `AGENTS.md`
-
-Both editors share the same Decky MCP server entry path after Init Pack.
-
-### 3. Open preview
+### 4. Open preview (beta)
 
 Command Palette → **`Decky: Open Preview`**
 
-Edit `src/` — Vite HMR updates the QAM frame. Edit `main.py` — the Python sidecar restarts with state preserved under `~/.decky-plugin-studio/sandbox/`.
+- Edit `src/` → Vite HMR in the QAM frame  
+- Edit `main.py` → Python sidecar restarts with preserved state  
 
-The preview panel includes a **virtual gamepad**, **hardware simulator** sliders, and a live console.
+**Do not ship** based on preview alone — deploy to a Deck for focus and layout bugs.
 
-### 4. Create a new plugin (optional)
+### 5. Day-to-day loop
 
-Command Palette → **`Decky: Create New Plugin`**
+```
+preview (fast UI) → plugin.build → deck.deploy → on-device QA
+```
 
-Clones the official [decky-plugin-template](https://github.com/SteamDeckHomebrew/decky-plugin-template), renames boilerplate identifiers, and runs **Init Pack** automatically.
+| Task | How |
+|------|-----|
+| Build plugin zip | MCP `plugin.build` or your `pnpm run build` |
+| Deploy to Deck | MCP `deck.deploy` or **Decky: Deploy to Deck** |
+| Screenshot (QAM + plugin) | MCP `deck.captureScreenshot` — open QAM + plugin first |
+| Screen recording | MCP `deck.record` — open QAM + plugin before/during capture |
+| Debug logs from Deck | `deck.startTunnel` → `deck.probeIngest` / `deck.tailIngest` |
+| Agent automation | See [MCP tools](docs/MCP_TOOLS.md) |
 
-## What's new in v0.2
+**Artifacts** land in your plugin workspace: `screenshots/`, `recordings/`.
 
-- **Dynamic preview RPC** — discovers public methods from `main.py`; configure via `.decky/preview.json`
-- **Generic preview test kit** — `run-preview-suite.mjs`, `preview.callTestHook`, `preview.health`
-- **Deploy parity** — `py_modules/`, root `*.py` helpers, SSH retry
-- **Permission simulator**, richer `@decky/ui` shims, hardened `deck.captureScreenshot`
+### 6. MCP in Cursor / VS Code
 
-See [ROADMAP.md](docs/ROADMAP.md) for deferred platform work.
+After Init Pack, your plugin repo’s `mcp.json` points at the extension’s MCP server. Tools are documented in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
 
-## More documentation
+Example agent flows:
 
-- [MCP tools reference](docs/MCP_TOOLS.md) — `deck.*`, `plugin.*`, `preview.*` tools for Copilot and Cursor agents
-- [Preview limitations](docs/PREVIEW_LIMITATIONS.md) — what the preview approximates vs on-device QA
-- [VS Code smoke test](docs/VSCODE_SMOKE_TEST.md) — verify extension behavior in VS Code
-- **Hardware simulator presets:** Idle, Hot Game, Thermal Throttle, Low Battery (preview panel or `preview.setHardware`)
+- `deck.configure` → `plugin.build` → `deck.deploy` → `deck.captureScreenshot`
+- `preview.start` → `preview.runSequence` for smoke tests
+- `deck.record` with `{ seconds: 15, mode: "game", quality: "compressed" }`
+
+## Capture prerequisites
+
+For **game mode** screenshots and recordings:
+
+1. Deploy your plugin (`deck.deploy`)
+2. Open **QAM** on the Deck
+3. Open **your plugin panel** and keep it visible during capture
+
+Recordings use composited pipewire-gamescope (game) or wf-recorder (desktop). They **fail closed** if only game-plane capture would succeed — unless you pass `allowNonPluginUi: true`.
+
+Optional: `deck.installCaptureHelper` installs `studio-record` / `studio-capture` to `~/.local/bin` on the Deck.
 
 ## Developing this extension
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for build, package, and deploy instructions.
+- **Branch model:** feature work on `develop` → merge to `main` with a version bump in `extension/package.json` → CI publishes a GitHub Release + VSIX
+- Build locally: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+
+## More documentation
+
+- [MCP tools reference](docs/MCP_TOOLS.md)
+- [Preview limitations](docs/PREVIEW_LIMITATIONS.md) — beta preview vs on-device QA
+- [Consumer sync (bonsAI & other plugins)](docs/MCP_CONSUMER_SYNC.md)
+- [Device QA runbook](docs/device-qa-runbook.md)
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE) for bonsAI attribution.
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

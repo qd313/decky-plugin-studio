@@ -123,6 +123,6 @@ When the preview tier runner supports `--write`:
 |-------|---------|
 | Focus / layout / ingest | **master-debugger** |
 | RPC / logging / permissions | **security-auditor** |
-| Ship scope / tier priority | **red-team** / **blue-team** |
+| Ship scope / tier priority | Maintainer / roadmap |
 
 Archive substantive runs in `.cursor/agents/SUBAGENT_REPORTS.md`.

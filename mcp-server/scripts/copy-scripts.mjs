@@ -5,15 +5,25 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 
-function copyDir(src, dest) {
+function copyRecursive(src, dest) {
   if (!fs.existsSync(src)) return;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const f of fs.readdirSync(src)) {
-    fs.copyFileSync(path.join(src, f), path.join(dest, f));
+  const stat = fs.statSync(src);
+  if (stat.isDirectory()) {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const entry of fs.readdirSync(src)) {
+      copyRecursive(path.join(src, entry), path.join(dest, entry));
+    }
+    return;
   }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
 }
 
-copyDir(path.join(root, "src", "scripts"), path.join(root, "dist", "scripts"));
+const distScripts = path.join(root, "dist", "scripts");
+if (fs.existsSync(distScripts)) {
+  fs.rmSync(distScripts, { recursive: true, force: true });
+}
+copyRecursive(path.join(root, "src", "scripts"), distScripts);
 
 const syncScript = path.join(root, "scripts", "sync-rpc-allowlist.mjs");
 if (fs.existsSync(syncScript)) {

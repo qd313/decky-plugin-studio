@@ -2,6 +2,8 @@
 
 For installing or building the extension, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
+> **Preview:** `preview.*` tools drive the in-IDE QAM preview, which is **very much beta**. Use `deck.deploy` + on-device QA for focus, layout, and Steam Input.
+
 ## Workspace config
 
 Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json):
@@ -21,9 +23,20 @@ Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json):
 - **deck.status** — tunnel, ingest, deck, ollama state
 - **deck.startTunnel** / **deck.stopTunnel**
 - **deck.probeIngest** / **deck.tailIngest** — `{ since?, lines?, hypothesisId? }`
-- **deck.captureScreenshot** — `{ mode: "auto"|"game"|"desktop" }` — parses `---CAPTURE_RESULT---`
-- **deck.record** — `{ seconds?, mode? }` — screen recording to `recordings/`
+- **deck.captureScreenshot** — `{ mode?: "auto"|"game"|"desktop", allowNonPluginUi?: boolean }`  
+  Returns `{ path, bytes, mode, method }`. Composited methods preferred (`gamescope-atom`, `grim`). Open QAM + plugin first.
+- **deck.record** — `{ seconds?, mode?, quality?: "compressed"|"full", allowNonPluginUi?: boolean }`  
+  Returns `{ path, bytes, mode, method, seconds }`. Requires composited `pipewire-gamescope` or `wf-recorder` unless `allowNonPluginUi`. Artifacts: `<workspace>/recordings/`.
+- **deck.installCaptureHelper** — `{ which?: "record"|"capture"|"both" }` — installs `studio-record` / `studio-capture` on Deck `~/.local/bin` (remote SSH only).
 - **deck.deploy** — `{ mode?: "auto"|"local"|"remote" }` — unified copy manifest + retry
+
+### Capture environment
+
+| Variable | Purpose |
+|----------|---------|
+| `DECKY_STUDIO_WORKSPACE` | Plugin workspace root (artifacts, cwd) |
+| `DECKY_STUDIO_ALLOW_STEAMOS_RW` | Set `0` to skip optional pacman/steamos-readonly on Deck |
+| `BONSAI_ALLOW_STEAMOS_RW` | Legacy alias (still read) |
 
 ## plugin.*
 
