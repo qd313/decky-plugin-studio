@@ -8,7 +8,7 @@ const extRoot = path.join(__dirname, "..");
 const repoRoot = path.join(extRoot, "..");
 const resources = path.join(extRoot, "resources");
 
-const SKIP = new Set(["node_modules", ".git", "dist", "__pycache__", ".hw-state.json"]);
+const SKIP = new Set(["node_modules", ".git", "dist", "__pycache__", ".hw-state.json", "package-lock.json"]);
 
 function cpFiltered(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
