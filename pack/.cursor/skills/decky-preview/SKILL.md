@@ -46,4 +46,4 @@ Workspace [`.decky/preview.json`](../../.decky/preview.json): `rpcMode`, `ipcTim
 
 ## Limitations
 
-See [PREVIEW_LIMITATIONS.md](../../../docs/PREVIEW_LIMITATIONS.md). On-device QA: `deck.deploy` + **master-debugger**.
+See [PREVIEW_LIMITATIONS.md](../../../docs/PREVIEW_LIMITATIONS.md). On-device QA: `deck.deploy` + **decky-debugger**.

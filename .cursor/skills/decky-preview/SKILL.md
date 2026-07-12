@@ -47,4 +47,4 @@ MCP `preview.injectFocusEvent` and `preview.runSequence` reach the live preview 
 
 ## Limitations
 
-Preview mocks `@decky/api` and `@decky/ui`. Physical gamepad requires a user gesture in the preview webview (press any button after focusing the panel). Steam Input chord actions are not mapped. Tricky CEF focus bugs still need on-device QA via `deck.deploy` and the **master-debugger** persona.
+Preview mocks `@decky/api` and `@decky/ui`. Physical gamepad requires a user gesture in the preview webview (press any button after focusing the panel). Steam Input chord actions are not mapped. Tricky CEF focus bugs still need on-device QA via `deck.deploy` and the **decky-debugger** persona.

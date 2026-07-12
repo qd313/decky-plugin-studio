@@ -40,10 +40,9 @@ Requires **Decky: Open Preview**. Agent loop: `.cursor/skills/decky-tier-qa/SKIL
 
 ## Subagents
 
-- **master-debugger** — Decky/Steam focus, layout, ingest/tunnel workflow
-- **decky-dev-loop** — build/deploy, BPM vs Gaming Mode, screenshots
-- **decky-tier-qa** — tier-by-tier preview QA
-- **refactor-specialist** / **security-auditor** / **foss-advocate**
+- **decky-debugger** — Decky/Steam focus, layout, ingest/tunnel workflow
+
+Related skills (not subagents): **decky-dev-loop**, **decky-tier-qa**, **decky-preview**, **decky-screenshot-ingest**.
 
 Archive substantive runs in `.cursor/agents/SUBAGENT_REPORTS.md`.
 

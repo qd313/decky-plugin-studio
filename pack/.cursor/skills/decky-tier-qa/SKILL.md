@@ -121,8 +121,7 @@ When the preview tier runner supports `--write`:
 
 | Issue | Persona |
 |-------|---------|
-| Focus / layout / ingest | **master-debugger** |
-| RPC / logging / permissions | **security-auditor** |
+| Focus / layout / ingest | **decky-debugger** |
 | Ship scope / tier priority | Maintainer / roadmap |
 
 Archive substantive runs in `.cursor/agents/SUBAGENT_REPORTS.md`.

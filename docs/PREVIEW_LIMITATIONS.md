@@ -44,7 +44,7 @@ Use **`deck.deploy`** or **`Decky: Deploy to Deck`** before merging changes that
 - Screenshot/vision capture
 - Privileged sysfs writes
 
-Invoke the **master-debugger** subagent for on-device ingest/tunnel workflows.
+Invoke the **decky-debugger** subagent for on-device ingest/tunnel workflows.
 
 ## Steam Input / native controller bridge (deferred)
 
