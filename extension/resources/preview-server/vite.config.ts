@@ -95,17 +95,18 @@ export default defineConfig({
           let body = "";
           req.on("data", (c) => (body += c));
           req.on("end", () => {
+            let parsed: unknown = {};
             try {
-              const parsed = JSON.parse(body);
+              parsed = JSON.parse(body || "{}");
               fs.writeFileSync(
                 path.join(process.cwd(), ".preview-permissions.json"),
                 JSON.stringify(parsed, null, 2)
               );
             } catch {
-              /* ignore */
+              /* ignore malformed JSON; still return safe default */
             }
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ permissions: JSON.parse(body || "{}") }));
+            res.end(JSON.stringify({ permissions: parsed }));
           });
           return;
         }
