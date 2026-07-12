@@ -3,8 +3,20 @@
   "hooks": {
     "afterFileEdit": [
       {
+        "matcher": "src/**/*.{ts,tsx}|main.py|plugin.json",
+        "command": "echo Decky: run plugin.build (MCP) after Deck-facing edits; preview: node scripts/run-preview-suite.mjs --tier=smoke",
+        "enabled": true
+      },
+      {
         "matcher": "src/**/*.{ts,tsx}|main.py",
-        "command": "echo Decky: run plugin.build or Decky: Open Preview; optional: node scripts/run-preview-suite.mjs --tier=smoke",
+        "command": "node scripts/decky-rpc-drift-hint.mjs",
+        "enabled": true
+      }
+    ],
+    "stop": [
+      {
+        "matcher": "src/**/*.{ts,tsx}|main.py|plugin.json",
+        "command": "node scripts/decky-handoff-check.mjs",
         "enabled": true
       }
     ]

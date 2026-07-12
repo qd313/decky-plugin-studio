@@ -14,3 +14,5 @@ __pycache__/
 *.tsbuildinfo
 .pnpm-store/
 coverage/
+screenshots/preview/
+!tests/preview-baselines/

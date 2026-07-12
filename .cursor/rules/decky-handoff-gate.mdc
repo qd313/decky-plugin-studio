@@ -1,0 +1,17 @@
+---
+description: Remind agents that Deck-facing handoffs require build/deploy evidence.
+globs:
+  - src/**/*
+  - main.py
+  - plugin.json
+alwaysApply: false
+---
+
+# Decky handoff gate
+
+Before marking Deck-facing UI/RPC work complete:
+
+1. Run **`plugin.build`** after `src/`, `main.py`, or `plugin.json` edits.
+2. Run preview smoke (`node scripts/run-preview-suite.mjs --tier=smoke`) or **`deck.deploy`** for on-device scenarios.
+3. Run **`plugin.diffRpc`** when RPC names changed.
+4. For deck-only tags in `tests/preview-suite/deck-only.json`, complete the device QA runbook checklist.

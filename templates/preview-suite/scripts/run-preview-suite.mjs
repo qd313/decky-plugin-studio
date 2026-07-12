@@ -32,6 +32,7 @@ const previewStatePath = path.join(os.homedir(), ".decky-plugin-studio", "previe
 const args = process.argv.slice(2);
 const writeBack = args.includes("--write");
 const evidenceFlag = args.includes("--evidence") || writeBack;
+const updateBaselines = args.includes("--update-baselines");
 const filterArg = args.find((a) => a.startsWith("--filter="))?.split("=")[1] ?? "";
 const tierArg = args.find((a) => a.startsWith("--tier="))?.split("=")[1] ?? "";
 
@@ -151,6 +152,75 @@ function assertStep(step, context) {
       throw new Error(`hookResult failed: expected "${expect}" in ${val.slice(0, 200)}`);
     }
   }
+  if (type === "compareScreenshot") {
+    const pct = context.lastCompareDiffPercent ?? 0;
+    const max = Number(expect ?? 1.5);
+    if (pct > max) {
+      throw new Error(`compareScreenshot failed: diff ${pct}% > ${max}%`);
+    }
+  }
+}
+
+async function comparePng(baselinePath, capturePath, threshold = 1.5) {
+  let pixelmatch;
+  let PNG;
+  try {
+    pixelmatch = (await import("pixelmatch")).default;
+    PNG = (await import("pngjs")).PNG;
+  } catch {
+    throw new Error(
+      "compareScreenshot requires pixelmatch and pngjs — npm i -D pixelmatch pngjs"
+    );
+  }
+  const img1 = PNG.sync.read(fs.readFileSync(baselinePath));
+  const img2 = PNG.sync.read(fs.readFileSync(capturePath));
+  if (img1.width !== img2.width || img1.height !== img2.height) {
+    return { match: false, diffPercent: 100 };
+  }
+  const { width, height } = img1;
+  const diff = new PNG({ width, height });
+  const diffPixels = pixelmatch(img1.data, img2.data, diff.data, width, height, { threshold: 0.1 });
+  const diffPercent = (diffPixels / (width * height)) * 100;
+  return {
+    match: diffPercent <= threshold,
+    diffPercent: Math.round(diffPercent * 100) / 100,
+    diffPng: diff,
+    PNG,
+  };
+}
+
+async function runCompareScreenshot(step, context) {
+  const name = step.baseline ?? step.name;
+  if (!name) throw new Error("compareScreenshot requires baseline or name");
+  const baselineDir = path.join(repoRoot, "tests", "preview-baselines");
+  const baselinePath = path.join(baselineDir, `${name}.png`);
+  const res = await sendIpc({ cmd: "captureScreenshot", selector: step.selector });
+  if (!res.ok) throw new Error(res.error ?? "captureScreenshot failed");
+  const captureDir = path.join(repoRoot, "screenshots", "preview");
+  fs.mkdirSync(captureDir, { recursive: true });
+  const capturePath = path.join(captureDir, `suite-${name}-${Date.now()}.png`);
+  if (res.result?.pngBase64) {
+    fs.writeFileSync(capturePath, Buffer.from(res.result.pngBase64, "base64"));
+  } else {
+    throw new Error("captureScreenshot returned no PNG");
+  }
+  if (updateBaselines || !fs.existsSync(baselinePath)) {
+    fs.mkdirSync(baselineDir, { recursive: true });
+    fs.copyFileSync(capturePath, baselinePath);
+    context.lastCompareDiffPercent = 0;
+    return;
+  }
+  const threshold = step.threshold ?? 1.5;
+  const out = await comparePng(baselinePath, capturePath, threshold);
+  context.lastCompareDiffPercent = out.diffPercent;
+  if (!out.match && out.diffPng) {
+    const diffDir = path.join(captureDir, "diffs");
+    fs.mkdirSync(diffDir, { recursive: true });
+    fs.writeFileSync(path.join(diffDir, `${name}-diff.png`), out.PNG.sync.write(out.diffPng));
+  }
+  if (!out.match) {
+    throw new Error(`visual diff ${out.diffPercent}% exceeds threshold ${threshold}%`);
+  }
 }
 
 async function runStep(step, context) {
@@ -199,6 +269,9 @@ async function runStep(step, context) {
     }
     case "assert":
       assertStep(step, context);
+      break;
+    case "compareScreenshot":
+      await runCompareScreenshot(step, context);
       break;
     default:
       throw new Error(`Unknown step action: ${step.action}`);

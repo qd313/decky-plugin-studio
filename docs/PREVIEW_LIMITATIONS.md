@@ -11,11 +11,14 @@ Decky Plugin Studio preview is **very much beta** — useful for **fast iteratio
 - Local Ollama at `127.0.0.1:11434` (HTTP allowlist via `preview.setHttpAllow`)
 - Python state preservation across sidecar restarts (JSON-serializable attrs)
 - Automated scenarios via `scripts/run-preview-suite.mjs` + `preview.callTestHook`
+- **Visual regression (coarse)** via `preview.compareScreenshot` and suite `compareScreenshot` steps (html2canvas — not pixel-perfect)
+- **Streaming RPC (experimental)** via sidecar `decky.emit`, `preview.tailEmit`, and `preview.callRpc` with `collectEmitsMs`
 
 ## What is approximate or missing
 
 | Area | Preview behavior |
 |------|------------------|
+| `deck.openPlugin` on device | MCP returns a manual checklist only — no Steam/QAM automation |
 | Steam CEF focus graph | Approximated via `Focusable` message bridge |
 | `@decky/ui` styling | Mock components — richer in v0.2, not pixel-perfect Steam |
 | Gamescope / QAM compositing | Static QAM-sized frame only |

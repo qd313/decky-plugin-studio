@@ -30,6 +30,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("decky.captureScreenshot", () => captureScreenshot()),
     vscode.commands.registerCommand("decky.startTunnel", () => startTunnel()),
     vscode.commands.registerCommand("decky.stopTunnel", () => stopTunnel()),
+    vscode.commands.registerCommand("decky.showOpenPluginHint", async () => {
+      const { callMcpTool } = await import("../mcp/client");
+      const result = (await callMcpTool("deck_openPlugin", {})) as {
+        pluginName?: string;
+        checklist?: string[];
+      };
+      const lines = result.checklist ?? [];
+      vscode.window.showInformationMessage(
+        `Open "${result.pluginName ?? "plugin"}" on Deck: ${lines[0] ?? "Open QAM → Decky → your plugin"}`
+      );
+    }),
     vscode.commands.registerCommand("decky.refreshTree", () => {
       treeProvider.refresh();
       statusBar.refresh();

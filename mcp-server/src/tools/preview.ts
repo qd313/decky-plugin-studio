@@ -10,6 +10,8 @@ import { loadPreviewConfig } from "../preview/previewConfig.js";
 import { isPreviewRpcAllowed } from "../preview/rpcAllowlist.js";
 import { syncRpcAllowlistToSandbox } from "../preview/syncRpcAllowlist.js";
 import { sendPreviewCommand, waitPreviewResult } from "../preview/ipc.js";
+import { clearEmitLog, tailEmitEvents } from "../preview/emitLog.js";
+import { previewCompareScreenshot } from "../preview/compareScreenshot.js";
 import {
   previewHealth,
   previewCallTestHook,
@@ -89,11 +91,19 @@ export function previewInjectFocusEvent(direction: string) {
   return { injected: direction, id, note: "Queued for live preview via IPC" };
 }
 
-export async function previewCallRpc(method: string, args: unknown[] = []) {
+export async function previewCallRpc(
+  method: string,
+  args: unknown[] = [],
+  collectEmitsMs = 0
+) {
   const workspace = getWorkspaceRoot();
   if (!isPreviewRpcAllowed(method, workspace)) {
     return { error: `RPC method not allowlisted for preview: ${method}` };
   }
+
+  const since = Date.now();
+  if (collectEmitsMs > 0) clearEmitLog();
+
   const id = sendPreviewCommand({ cmd: "callRpc", method, args });
   try {
     const response = (await waitPreviewResult(id, ipcTimeout(workspace))) as {
@@ -104,11 +114,28 @@ export async function previewCallRpc(method: string, args: unknown[] = []) {
     if (!response.ok) {
       return { error: response.error ?? "Preview callRpc failed" };
     }
+
+    if (collectEmitsMs > 0) {
+      await new Promise((r) => setTimeout(r, collectEmitsMs));
+      const emits = tailEmitEvents({ since, lines: 200 }).events;
+      return { result: response.result, emits };
+    }
+
     return { result: response.result };
   } catch (err) {
     return { error: String(err) };
   }
 }
+
+export function previewTailEmit(params: {
+  since?: number;
+  lines?: number;
+  event?: string;
+}): { events: Array<{ t: number; event: string; args: unknown[] }> } {
+  return tailEmitEvents(params);
+}
+
+export { previewCompareScreenshot };
 
 export function previewReadLog(lines = 50): { lines: string[] } {
   const sandboxRoot =

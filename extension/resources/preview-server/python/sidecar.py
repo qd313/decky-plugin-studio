@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -20,6 +21,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("decky-sidecar")
 
 plugin_instance = None
+ws_clients: set = set()
+EMIT_LOG_PATH = SANDBOX_ROOT / "emit-log.jsonl"
 hw_state = {
     "preset": "Idle",
     "cpuTemp": 42,
@@ -76,6 +79,7 @@ async def load_plugin():
     if str(PLUGIN_ROOT) not in sys.path:
         sys.path.insert(0, str(PLUGIN_ROOT))
     shim = install_decky_shim()
+    shim.register_emit_handler(on_emit)
     from decky_shim.state_io import load_state, save_state
 
     main_path = PLUGIN_ROOT / "main.py"
@@ -97,6 +101,35 @@ async def load_plugin():
         if hasattr(plugin_instance, "_main"):
             await plugin_instance._main()
     return plugin_instance
+
+
+def on_emit(event, args):
+    """Forward decky.emit to WS clients and append to emit-log.jsonl for MCP tailEmit."""
+    try:
+        EMIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps({"t": int(time.time() * 1000), "event": event, "args": list(args)})
+        with open(EMIT_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as exc:
+        logger.warning("emit log write failed: %s", exc)
+
+    payload = json.dumps({"type": "emit", "event": event, "args": list(args)})
+
+    async def _broadcast():
+        dead = []
+        for ws in list(ws_clients):
+            try:
+                await ws.send(payload)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            ws_clients.discard(ws)
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_broadcast())
+    except RuntimeError:
+        pass
 
 
 async def teardown_plugin():
@@ -144,14 +177,18 @@ async def handle_rpc(method, args):
 
 
 async def ws_handler(websocket):
-    async for message in websocket:
-        data = json.loads(message)
-        if data.get("type") == "rpc":
-            out = await handle_rpc(data.get("method"), data.get("args", []))
-            if "error" in out:
-                await websocket.send(json.dumps({"type": "rpc_result", "id": data["id"], "error": out["error"]}))
-            else:
-                await websocket.send(json.dumps({"type": "rpc_result", "id": data["id"], "result": out["result"]}))
+    ws_clients.add(websocket)
+    try:
+        async for message in websocket:
+            data = json.loads(message)
+            if data.get("type") == "rpc":
+                out = await handle_rpc(data.get("method"), data.get("args", []))
+                if "error" in out:
+                    await websocket.send(json.dumps({"type": "rpc_result", "id": data["id"], "error": out["error"]}))
+                else:
+                    await websocket.send(json.dumps({"type": "rpc_result", "id": data["id"], "result": out["result"]}))
+    finally:
+        ws_clients.discard(websocket)
 
 
 async def handle_http(reader, writer):

@@ -29,6 +29,10 @@ Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json):
   Returns `{ path, bytes, mode, method, seconds }`. Requires composited `pipewire-gamescope` or `wf-recorder` unless `allowNonPluginUi`. Artifacts: `<workspace>/recordings/`.
 - **deck.installCaptureHelper** — `{ which?: "record"|"capture"|"both" }` — installs `studio-record` / `studio-capture` on Deck `~/.local/bin` (remote SSH only).
 - **deck.deploy** — `{ mode?: "auto"|"local"|"remote" }` — unified copy manifest + retry
+- **deck.reloadPlugin** — `{ mode?: "auto"|"local"|"remote" }` — restart `plugin_loader` without redeploy
+- **deck.openPlugin** — returns `{ pluginName, checklist[], note }` (manual QAM steps; no UI automation)
+- **deck.readPluginLog** — `{ lines?, filter? }` — tail `plugin_loader` journal via SSH/local shell; filter applied in-process (not shell)
+- **deck.getEnv** — workspace, deck config, tunnel, plugin detect, optional remote SteamOS probe
 
 ### Capture environment
 
@@ -41,6 +45,7 @@ Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json):
 ## plugin.*
 
 - **plugin.detect** / **plugin.build** / **plugin.verifyZip**
+- **plugin.diffRpc** — `{ backendOnly, frontendOnly, matched, previewDenied? }` from `main.py` vs `src/` `call()` sites
 
 ## preview.*
 
@@ -49,10 +54,12 @@ Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json):
 - **preview.injectFocusEvent** — `{ direction }`
 - **preview.setHardware** — partial hardware state
 - **preview.runSequence** — `{ inputs, delayMs?, hwOverrides?, snapshot? }`
-- **preview.callRpc** — `{ method, args? }` — discovery-based allowlist
+- **preview.callRpc** — `{ method, args?, collectEmitsMs? }` — discovery-based allowlist; optional emit collection window
+- **preview.tailEmit** — `{ since?, lines?, event? }` — tail sidecar `decky.emit` log (`emit-log.jsonl`)
 - **preview.callTestHook** — `{ method, args? }` — `window.__deckyPreviewTestHooks`
 - **preview.snapshotDom** — `{ selector? }`
 - **preview.captureScreenshot** — `{ selector? }` → `screenshots/preview/`
+- **preview.compareScreenshot** — `{ name, selector?, threshold?, updateBaseline? }` — vs `tests/preview-baselines/<name>.png`
 - **preview.setHttpAllow** — `{ allowlist }`
 - **preview.setPermissions** — `{ permissions: { hardware_control: false, … } }`
 - **preview.readLog** — `{ lines? }`
@@ -63,6 +70,17 @@ After **Decky: Init Pack** and **Decky: Open Preview**:
 
 ```bash
 node scripts/run-preview-suite.mjs --tier=smoke
+node scripts/run-preview-suite.mjs --update-baselines   # refresh preview-baselines/
 ```
 
 See [device-qa-runbook.md](../docs/device-qa-runbook.md).
+
+## Skills and agents (Init Pack)
+
+| Skill / agent | MCP tools used |
+|---------------|----------------|
+| **decky-onboard** | `deck.configure`, `plugin.detect`, `plugin.build`, `deck.deploy`, `deck.openPlugin` |
+| **decky-release** | `plugin.build`, `plugin.verifyZip`, `plugin.diffRpc`, `deck.deploy` |
+| **decky-focus-audit** | `preview.runSequence`, `preview.compareScreenshot`, `deck.captureScreenshot` |
+| **decky-debugger** | `deck.tailIngest`, `deck.readPluginLog`, `deck.reloadPlugin` |
+| **decky-focus-architect** | design-time; validates with preview + device QA |

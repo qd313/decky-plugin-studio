@@ -49,6 +49,27 @@ No session archived
 
 ---
 
+## Template: decky-focus-architect
+
+Use when archiving a design review from `.cursor/agents/decky-focus-architect.md`.
+
+```text
+Review: <short title>
+Scope: <modals|tabs|settings|full plugin>
+Focus graph: <summary or link to mermaid>
+Risks: <deck-only vs preview-testable>
+Recommendations: <ordered implementation checklist>
+Test plan: <preview suite IDs + device QA tags>
+```
+
+If there is nothing to archive from a run, record:
+
+```text
+No session archived
+```
+
+---
+
 ## Report log
 
 (Newest first. Add entries after each substantive `decky-debugger` run.)

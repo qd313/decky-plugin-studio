@@ -12,6 +12,8 @@ import { writeDeckEnv, getWorkspaceRoot } from "./config.js";
 import * as deck from "./tools/deck.js";
 import * as plugin from "./tools/plugin.js";
 import * as preview from "./tools/preview.js";
+import * as deckAutonomy from "./tools/deckAutonomy.js";
+import { diffRpc } from "./preview/rpcDiff.js";
 
 startIngestServer(Number(process.env.DEBUG_INGEST_PORT ?? 7682));
 
@@ -71,6 +73,24 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
     case "tools/deck_deploy":
       return plugin.deployPlugin((params.mode as "auto" | "local" | "remote") ?? "auto");
 
+    case "tools/deck_reloadPlugin":
+      return deckAutonomy.reloadPlugin((params.mode as "auto" | "local" | "remote") ?? "auto");
+
+    case "tools/deck_openPlugin":
+      return deckAutonomy.openPlugin();
+
+    case "tools/deck_readPluginLog":
+      return deckAutonomy.readPluginLog(
+        Number(params.lines ?? 50),
+        params.filter != null ? String(params.filter) : undefined
+      );
+
+    case "tools/deck_getEnv":
+      return deckAutonomy.getEnv();
+
+    case "tools/plugin_diffRpc":
+      return diffRpc();
+
     case "tools/plugin_detect":
       return plugin.detectPlugin();
 
@@ -93,7 +113,26 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
       return preview.previewInjectFocusEvent(String(params.direction));
 
     case "tools/preview_callRpc":
-      return preview.previewCallRpc(String(params.method), (params.args as unknown[]) ?? []);
+      return preview.previewCallRpc(
+        String(params.method),
+        (params.args as unknown[]) ?? [],
+        Number(params.collectEmitsMs ?? 0)
+      );
+
+    case "tools/preview_tailEmit":
+      return preview.previewTailEmit({
+        since: params.since != null ? Number(params.since) : undefined,
+        lines: params.lines != null ? Number(params.lines) : undefined,
+        event: params.event != null ? String(params.event) : undefined,
+      });
+
+    case "tools/preview_compareScreenshot":
+      return preview.previewCompareScreenshot({
+        name: String(params.name),
+        selector: params.selector != null ? String(params.selector) : undefined,
+        threshold: params.threshold != null ? Number(params.threshold) : undefined,
+        updateBaseline: Boolean(params.updateBaseline),
+      });
 
     case "tools/preview_readLog":
       return preview.previewReadLog(Number(params.lines ?? 50));
