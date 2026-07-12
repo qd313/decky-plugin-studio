@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.1]
+
+### Fixed
+
+- Preview shim event listeners: bind a single backend dispatch instead of stacking handlers per `addEventListener`
+- Preserve sidecar-injected `hw_state` in Decky Shim instead of resetting it on module load
+- Gamepad handler extraction in `focusManager` now reads Focusable callback props correctly
+
+### Changed
+
+- Remove temporary debug ingest logging from preview focus/modal paths
+- Refresh extension-bundled pack and preview-server resources
+
 ## [0.3.0]
 
 ### Added
