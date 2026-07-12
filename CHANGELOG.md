@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.2]
+
+### Fixed
+
+- `/api/permissions` POST no longer re-parses the request body outside the try/catch; malformed JSON returns a safe `{}` response instead of leaving the HTTP response unsent
+
 ## [0.3.1]
 
 ### Fixed
