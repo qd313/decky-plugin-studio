@@ -1,6 +1,6 @@
 {
   "name": "decky-plugin-studio",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "description": "VS Code extension for Decky plugin development (also works in Cursor)",
   "license": "Apache-2.0",

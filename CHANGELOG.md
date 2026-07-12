@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.3]
+
+### Added
+
+- MCP **deck.reloadPlugin**, **deck.openPlugin** (manual QAM checklist), **deck.readPluginLog**, **deck.getEnv**
+- MCP **plugin.diffRpc** — frontend `call()` vs `main.py` RPC parity
+- MCP **preview.compareScreenshot** + `tests/preview-baselines/` visual regression
+- MCP **preview.tailEmit** and **preview.callRpc** `collectEmitsMs` — experimental streaming RPC in preview sidecar
+- Init Pack skills: **decky-onboard**, **decky-release**, **decky-focus-audit**; agent **decky-focus-architect**
+- Hooks: build-parity reminder, RPC drift hint, handoff check; template scripts for deck-only lint
+- Extension command **decky.showOpenPluginHint**; MCP tools in Decky tree
+
+### Changed
+
+- Pack agent set streamlined (decky-debugger + focus-architect); updated AGENTS.md and MCP docs
+
 ## [0.3.2]
 
 ### Fixed

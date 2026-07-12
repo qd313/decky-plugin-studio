@@ -2,7 +2,7 @@
   "name": "decky-plugin-studio-extension",
   "displayName": "Decky Plugin Studio",
   "description": "Streamline Decky Loader plugin development with live preview, MCP tools, and agent pack for VS Code and Cursor",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "decky-plugin-studio",
   "license": "Apache-2.0",
   "engines": {
