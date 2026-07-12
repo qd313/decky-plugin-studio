@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "matcher": "src/**/*.{ts,tsx}|main.py",
+        "command": "echo Decky: run plugin.build or Decky: Open Preview; optional: node scripts/run-preview-suite.mjs --tier=smoke",
+        "enabled": true
+      }
+    ]
+  }
+}
