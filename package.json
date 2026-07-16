@@ -1,6 +1,6 @@
 {
   "name": "decky-plugin-studio",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "VS Code extension for Decky plugin development (also works in Cursor)",
   "license": "Apache-2.0",
@@ -15,6 +15,7 @@
     "deploy:vscode:build-only": "node scripts/deploy-to-vscode.mjs --skip-install",
     "deploy:cursor": "node scripts/deploy-to-cursor.mjs",
     "deploy:cursor:build-only": "node scripts/deploy-to-cursor.mjs --skip-install",
+    "sync:example-plugin": "node scripts/sync-plugin-templates.mjs",
     "dev:preview": "pnpm --filter @decky-plugin-studio/preview-server run dev"
   },
   "engines": {

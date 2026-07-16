@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.4]
+
+### Added
+
+- Universal plugin dev scripts in Init Pack templates: `setup-dev`, `revert-dev`, full `build`/`deploy`, `watch-deploy`, `reverse-tunnel-deck-ingest`, `verify-decky-plugin-zip`
+- `templates/.env.example` copied on Init Pack
+- `example-plugin/` pre-seeded with `scripts/` and `.env.example`
+- `scripts/sync-plugin-templates.mjs` maintainer sync from templates → example-plugin
+
+### Changed
+
+- MCP bundle scripts now sync from `templates/scripts/` (single source of truth; removed `mcp-server/src/scripts/`)
+- `revert-dev.ps1`: surgical SSH key removal (no longer wipes all `authorized_keys`)
+- README and dev-loop skills document full Windows/Linux script paths
+
 ## [0.3.3]
 
 ### Added

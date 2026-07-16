@@ -23,7 +23,7 @@ const distScripts = path.join(root, "dist", "scripts");
 if (fs.existsSync(distScripts)) {
   fs.rmSync(distScripts, { recursive: true, force: true });
 }
-copyRecursive(path.join(root, "src", "scripts"), distScripts);
+copyRecursive(path.join(root, "..", "templates", "scripts"), distScripts);
 
 const syncScript = path.join(root, "scripts", "sync-rpc-allowlist.mjs");
 if (fs.existsSync(syncScript)) {

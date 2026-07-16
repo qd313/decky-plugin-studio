@@ -6,7 +6,7 @@ param(
     [switch]$Open
 )
 
-$RepoRoot = if ($env:DECKY_STUDIO_WORKSPACE) { $env:DECKY_STUDIO_WORKSPACE } else { Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
+$RepoRoot = if ($env:DECKY_STUDIO_WORKSPACE) { $env:DECKY_STUDIO_WORKSPACE } else { Split-Path -Parent $PSScriptRoot }
 if (Test-Path "$RepoRoot\.env") {
     foreach ($line in Get-Content "$RepoRoot\.env") {
         if ($line -match '^\s*([^#]\S+?)\s*=\s*(.+)$') {

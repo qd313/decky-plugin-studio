@@ -18,8 +18,10 @@ Consumer repos should document a **minimum** Decky Plugin Studio / MCP version (
 | Sync from studio | Stay in product repo |
 |------------------|----------------------|
 | MCP server (via extension) | Product-specific MCP (e.g. bonsai knowledge server) |
-| `deck.*` / `preview.*` / `plugin.*` tools | Ollama setup, app wipe, product build scripts |
-| Init Pack skills referencing studio tools | Domain agents and docs |
+| `deck.*` / `preview.*` / `plugin.*` tools | Ollama setup, app wipe, product-only maintenance scripts |
+| Init Pack skills + `templates/scripts/` | Domain agents and product docs |
+
+**Shell scripts:** `templates/scripts/` in studio is canonical (setup-dev, build/deploy, capture, tunnel, watch-deploy). Init Pack copies them into consumer plugin repos. Product repos should **thin or remove** duplicate `scripts/` over time and pin a minimum studio version in `AGENTS.md`.
 
 After studio ships composited capture, consumers should **thin or remove** duplicate `scripts/deck/*` and point maintainers at MCP + Init Pack templates.
 

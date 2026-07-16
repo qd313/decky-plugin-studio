@@ -44,6 +44,10 @@ export function copyStudioTemplates(workspaceRoot: string): number {
       dest: path.join(workspaceRoot, "docs", "device-qa-runbook.md"),
     },
     {
+      src: path.join(repoRoot, "templates", ".env.example"),
+      dest: path.join(workspaceRoot, ".env.example"),
+    },
+    {
       src: path.join(repoRoot, "templates", "scripts"),
       dest: path.join(workspaceRoot, "scripts"),
     },

@@ -20,7 +20,8 @@ description: >-
 From repo root:
 
 ```bash
-cp .env.example .env   # DECK_IP, DECK_USER (and PC_IP if using ingest tunnel)
+cp .env.example .env   # DECK_IP, DECK_USER
+./scripts/setup-dev.sh # once: SSH keys (+ Decky CLI on Linux)
 ```
 
 Configure Deck connection via MCP **`deck.configure`** (`DECK_IP`, `DECK_USER`, ingest port) or `.env` values the MCP server reads.
@@ -36,10 +37,12 @@ Same-machine Deck dev: `DECK_IP=127.0.0.1`.
 | Pull UI screenshot from Deck | **`deck.captureScreenshot`** |
 | Pull screen recording from Deck | **`deck.record`** (open QAM + plugin first) |
 
-Shell fallback (build only — deploy still via MCP):
+Shell fallback (build + deploy):
 
 ```bash
-./scripts/build.sh    # or .\scripts\build.ps1
+./scripts/build.sh          # remote Deck
+./scripts/build.sh local    # same SteamOS machine
+.\scripts\build.ps1         # Windows → remote Deck
 ```
 
 After deploy, if QAM does not show changes: **Decky Reload** in QAM or restart `plugin_loader`.
@@ -48,8 +51,8 @@ After deploy, if QAM does not show changes: **Decky Reload** in QAM or restart `
 
 ## Fast frontend loop (watch)
 
-1. Terminal: `./scripts/watch-deploy.sh` (runs `pnpm run watch` / `npm run watch`).
-2. Rollup rebuilds `dist/`; script debounces and reminds you to **`deck.deploy`** (deploy-only — no full install).
+1. Terminal: `./scripts/watch-deploy.sh` or `.\scripts\watch-deploy.ps1` (rollup watch + debounced deploy).
+2. Rollup rebuilds `dist/`; script debounces and runs **`scripts/build.*`** deploy.
 3. In Steam Desktop → **Big Picture Mode** → QAM → Decky → **Reload** your plugin after each deploy.
 
 Python/RPC changes still need a full deploy (`deck.deploy` copies `py_modules/` + `main.py`).

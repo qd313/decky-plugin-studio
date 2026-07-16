@@ -30,7 +30,15 @@ Any folder with `plugin.json` and `main.py`. This repo includes [example-plugin/
 
 ### 2. Configure your Deck (remote dev)
 
-Use MCP **`deck.configure`** or create `.env` in your plugin repo:
+Use MCP **`deck.configure`** or copy `.env.example` → `.env` in your plugin repo:
+
+```bash
+cp .env.example .env   # Linux / macOS
+```
+
+```powershell
+Copy-Item .env.example .env   # Windows
+```
 
 ```env
 DECK_IP=192.168.x.x
@@ -39,11 +47,13 @@ DECK_USER=deck
 
 Deck credentials are also stored under `~/.config/decky-plugin-studio/deck.env` when using MCP configure.
 
+Run **`scripts/setup-dev.ps1`** (Windows) or **`scripts/setup-dev.sh`** (Linux) once per Deck to install SSH keys and passwordless sudo for deploy (dev-only — use **`revert-dev`** when finished).
+
 ### 3. Init Pack
 
 Command Palette → **`Decky: Init Pack`**
 
-Copies agent guidance, MCP config, skills, and optional scripts (`record-deck`, `screenshot-deck`, preview suite).
+Copies agent guidance, MCP config, skills, `.env.example`, and the full `scripts/` toolkit (build, setup-dev, capture, tunnel, watch-deploy).
 
 ### 4. Open preview (beta)
 
@@ -57,21 +67,44 @@ Command Palette → **`Decky: Open Preview`**
 ### 5. Day-to-day loop
 
 ```
-preview (fast UI) → plugin.build → deck.deploy → on-device QA
+preview (fast UI) → build/deploy → on-device QA
 ```
 
-| Task | How |
-|------|-----|
-| Build plugin zip | MCP `plugin.build` or your `pnpm run build` |
-| Deploy to Deck | MCP `deck.deploy` or **Decky: Deploy to Deck** |
-| Screenshot (QAM + plugin) | MCP `deck.captureScreenshot` — open QAM + plugin first |
-| Screen recording | MCP `deck.record` — open QAM + plugin before/during capture |
-| Debug logs from Deck | `deck.startTunnel` → `deck.probeIngest` / `deck.tailIngest` |
-| Agent automation | See [MCP tools](docs/MCP_TOOLS.md) |
+| Task | MCP (agents) | Shell (human fallback) |
+|------|----------------|------------------------|
+| First-time Deck SSH/sudo | — | `scripts/setup-dev.ps1` / `scripts/setup-dev.sh` |
+| Build + deploy | `plugin.build` → `deck.deploy` | `scripts/build.ps1` / `scripts/build.sh` |
+| Deploy on same SteamOS machine | `deck.deploy` `{ mode: "local" }` | `scripts/build.sh local` |
+| Watch + auto-deploy | — | `scripts/watch-deploy.ps1` / `scripts/watch-deploy.sh` |
+| Screenshot (QAM + plugin) | `deck.captureScreenshot` | `scripts/screenshot-deck.ps1` / `scripts/screenshot-deck.sh` |
+| Screen recording | `deck.record` | `scripts/record-deck.ps1` / `scripts/record-deck.sh` |
+| Debug logs from Deck | `deck.startTunnel` → `deck.tailIngest` | `scripts/reverse-tunnel-deck-ingest.ps1` / `.sh` |
+| Undo dev setup | — | `scripts/revert-dev.ps1` / `scripts/revert-dev.sh` |
+| Release zip | `plugin.verifyZip` | `scripts/build.sh release` |
 
-**Artifacts** land in your plugin workspace: `screenshots/`, `recordings/`.
+**Artifacts:** `screenshots/`, `recordings/`.
 
-### 6. MCP in Cursor / VS Code
+### 6. Shell scripts reference
+
+After **Init Pack** (or in [example-plugin/](example-plugin/)), scripts live under **`scripts/`** in your plugin repo. Source templates: [`templates/scripts/`](templates/scripts/) in this repo.
+
+| Purpose | Windows | Linux / macOS |
+|---------|---------|---------------|
+| Environment template | `.env.example` (repo root) | `.env.example` |
+| Dev SSH + sudo setup | `scripts/setup-dev.ps1` | `scripts/setup-dev.sh` |
+| Build + deploy | `scripts/build.ps1` | `scripts/build.sh` |
+| Watch + deploy | `scripts/watch-deploy.ps1` | `scripts/watch-deploy.sh` |
+| Screenshot Deck → PC | `scripts/screenshot-deck.ps1` | `scripts/screenshot-deck.sh` |
+| Record Deck → PC | `scripts/record-deck.ps1` | `scripts/record-deck.sh` |
+| Reverse tunnel (ingest) | `scripts/reverse-tunnel-deck-ingest.ps1` | `scripts/reverse-tunnel-deck-ingest.sh` |
+| Revert dev setup | `scripts/revert-dev.ps1` | `scripts/revert-dev.sh` |
+| Verify release zip | — | `scripts/verify-decky-plugin-zip.sh` |
+
+**Security:** `setup-dev` grants broad passwordless sudo on the Deck (dev-only). Run **`revert-dev`** before handing the Deck back. Re-run **`setup-dev`** after SteamOS/client updates.
+
+Init Pack **skips existing** script files — delete old `scripts/build.*` or choose **Overwrite all** to pick up template updates.
+
+### 7. MCP in Cursor / VS Code
 
 After Init Pack, your plugin repo’s `mcp.json` points at the extension’s MCP server. Tools are documented in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
 

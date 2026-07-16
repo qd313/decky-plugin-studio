@@ -20,6 +20,7 @@ description: >-
 2. Configure Deck:
    - MCP **`deck.configure`** with `{ ip, user }`, or
    - Copy `.env.example` → `.env` with `DECK_IP` / `DECK_USER`.
+   - Run **`scripts/setup-dev.ps1`** / **`scripts/setup-dev.sh`** once for SSH + passwordless sudo (dev-only).
 3. Command Palette → **Decky: Open Preview**.
 
 ## First validation loop

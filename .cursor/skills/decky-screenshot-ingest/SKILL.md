@@ -32,10 +32,10 @@ Use during **debugging** of Decky / Steam Deck UI (this repo’s plugin, overlay
 4. **Use what you see**  
    Tie observations to code (e.g. `MainTab.tsx`, styles, focus order). Call out clipping, misalignment, wrong labels, focus rings, and QAM vs in-game context when visible.
 
-5. **Dev loop** — For build/deploy/watch workflow, read `.cursor/skills/bonsai-deck-dev-loop/SKILL.md`.
+5. **Dev loop** — For build/deploy/watch workflow, read `.cursor/skills/decky-dev-loop/SKILL.md`.
 
 6. **If nothing to ingest**  
-   Say that `screenshots/` is empty or unchanged, and suggest running `scripts/screenshot-deck.ps1` after reproducing on the Deck (with `.env` `DECK_IP` / `DECK_USER`). For QAM/bonsAI in game mode, keep QAM open before capturing; use `-Mode auto` or `-Mode game`.
+   Say that `screenshots/` is empty or unchanged, and suggest running `scripts/screenshot-deck.ps1` after reproducing on the Deck (with `.env` `DECK_IP` / `DECK_USER`). For QAM in game mode, keep QAM open before capturing; use `-Mode auto` or `-Mode game`.
 
 ## Notes
 
