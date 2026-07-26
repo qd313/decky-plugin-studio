@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.5]
+
+### Added
+
+- **decky-ui-focus-gate** agent and **decky-ui-change-focus-gate** skill — mandatory D-pad focus triage before shipping Deck UI changes
+- `ui-change-focus-gate` Cursor rule and `decky-focus-gate-hint` hook script in Init Pack templates
+- Focus-graph patterns doc in Init Pack (`pack/docs/focus-graph-patterns.md`)
+- Subagent report template for archiving focus gate triages
+
+### Changed
+
+- AGENTS.md documents the focus gate agent and skill alongside existing subagents
+
 ## [0.3.4]
 
 ### Added
