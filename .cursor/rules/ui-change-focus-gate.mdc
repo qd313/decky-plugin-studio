@@ -1,0 +1,25 @@
+---
+description: Mandatory D-pad focus gate before shipping Deck UI edits
+globs:
+  - src/components/**/*
+  - src/utils/build*Element.tsx
+  - src/utils/liveTurnFocusGraph.ts
+  - src/utils/answerBubbleNavigation.ts
+  - src/utils/chatPanelScroll.ts
+alwaysApply: false
+---
+
+# UI change focus gate
+
+When editing matched files, **ALWAYS** run the **decky-ui-change-focus-gate** skill workflow before marking work complete.
+
+Invoke **decky-ui-focus-gate** triage (or **decky-focus-audit** + **decky-debugger** when triage is unavailable).
+
+**Missing focus-graph update is a ship blocker** — treat it like a failing build.
+
+## Pre-ship checklist
+
+1. **Enumerate focus stops** in document order for the affected section.
+2. **Wire explicit graph** at section parent per Pattern A in `docs/focus-graph-patterns.md` (section parent owns `onMoveUp` / `onMoveDown`).
+3. **Add/update** `docs/testing.md` D-pad row (or the project's prompt-testing doc).
+4. **On-Deck verify** via **`deck.deploy`** — preview mocks do not validate focus graphs.

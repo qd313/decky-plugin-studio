@@ -51,8 +51,9 @@ Requires **Decky: Open Preview**. Agent loop: `.cursor/skills/decky-tier-qa/SKIL
 |-------|------|
 | **decky-debugger** | Runtime focus/layout bugs — evidence-first fixes |
 | **decky-focus-architect** | Design-time focus graphs before implementation |
+| **decky-ui-focus-gate** | Mandatory pre-ship D-pad focus triage for UI edits — invoke via **decky-ui-change-focus-gate** skill |
 
-Related skills (not subagents): **decky-onboard**, **decky-dev-loop**, **decky-tier-qa**, **decky-preview**, **decky-screenshot-ingest**, **decky-release**, **decky-focus-audit**.
+Related skills (not subagents): **decky-onboard**, **decky-dev-loop**, **decky-tier-qa**, **decky-preview**, **decky-screenshot-ingest**, **decky-release**, **decky-focus-audit**, **decky-ui-change-focus-gate**.
 
 Archive substantive runs in `.cursor/agents/SUBAGENT_REPORTS.md`.
 

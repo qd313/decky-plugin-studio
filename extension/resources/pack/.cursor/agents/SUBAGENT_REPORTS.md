@@ -1,6 +1,6 @@
 # Subagent review reports
 
-Structured findings from Cursor subagents in this folder (currently `decky-debugger.md`). Paste or summarize each run here so results live next to the agent definitions and survive chat context.
+Structured findings from Cursor subagents in this folder (`decky-debugger.md`, `decky-focus-architect.md`, `decky-ui-focus-gate.md`). Paste or summarize each run here so results live next to the agent definitions and survive chat context.
 
 ## How to use
 
@@ -70,6 +70,28 @@ No session archived
 
 ---
 
+## Template: decky-ui-focus-gate
+
+Use when archiving a pre-ship focus gate triage from `.cursor/agents/decky-ui-focus-gate.md`.
+
+```text
+Gate: <short title>
+Scope: <component/section affected>
+Focus stops: <numbered vertical list>
+Checklist: <pass/fail per mandatory item>
+Test row: <docs/testing.md scenario ID or proposed row>
+Verdict: <ship|block>
+Blockers: <if block — what failed and escalation target>
+```
+
+If there is nothing to archive from a run, record:
+
+```text
+No session archived
+```
+
+---
+
 ## Report log
 
-(Newest first. Add entries after each substantive `decky-debugger` run.)
+(Newest first. Add entries after each substantive subagent run.)

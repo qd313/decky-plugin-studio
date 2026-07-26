@@ -11,6 +11,11 @@
         "matcher": "src/**/*.{ts,tsx}|main.py",
         "command": "node scripts/decky-rpc-drift-hint.mjs",
         "enabled": true
+      },
+      {
+        "matcher": "src/components/**/*.{ts,tsx}|src/utils/build*Element.tsx",
+        "command": "node scripts/decky-focus-gate-hint.mjs",
+        "enabled": true
       }
     ],
     "stop": [
