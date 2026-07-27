@@ -15,6 +15,7 @@ Your job: **design navigation that survives CEF/Decky focus semantics** before c
 1. D-pad routes through Decky **Focusable** callbacks (`onMoveLeft`, `onMoveRight`, `onMoveUp`, `onMoveDown`, `onOKButton`, `onCancelButton`, `onButtonDown`) — not DOM `keydown`.
 2. Modals: plan **cancel/OK** surfaces, tab restore after close, and footer discovery via ancestor walk — not `[role="dialog"]` alone.
 3. Dynamic geometry: CSS custom properties on a stable scope root — not ref-set inline styles on React-managed nodes.
+4. Column-preserving grids (2×2 / non-DOM-order vertical): design hops between **registered focus owners** (mount-time callback refs / a small registry) — not Steam spatial-nav hope or `querySelector` / `aria-label` / `data-*` / class / `activeElement` probes.
 
 ## Design workflow
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Init Pack focus guidance now bans `querySelector` / `activeElement` for Decky sibling/column hops; Pattern D documents mount-time focus-owner registries instead
+
 ## [0.3.5]
 
 ### Added

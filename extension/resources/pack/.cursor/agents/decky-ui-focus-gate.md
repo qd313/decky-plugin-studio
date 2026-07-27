@@ -15,11 +15,12 @@ Your job: **gate every UI change** before the developer agent marks work done. Y
 ## Mandatory before done
 
 1. **List every focus stop** in the affected section (vertical order).
-2. Read **decky-ui-change-focus-gate** skill and `docs/focus-graph-patterns.md` (Pattern A) when present.
+2. Read **decky-ui-change-focus-gate** skill and `docs/focus-graph-patterns.md` (Pattern A / Pattern D) when present.
 3. **Confirm section-parent wiring:** `onMoveUp` / `onMoveDown` / `onButtonDown` on focus owners — not DOM order.
 4. **Every interactive Button:** `focusable` prop; A-button via `onButtonDown` / `onActivate`.
-5. **Update** `docs/testing.md` (or the project's prompt-testing doc) with a D-pad scenario row.
-6. **Deploy + on-Deck pass** via `deck.deploy` + `deck.openPlugin` — preview is insufficient.
+5. **Column/sibling hops:** mount-time refs / registered focus owners only — **fail the gate** if D-pad targets come from `querySelector` / `aria-label` / `data-*` / class probes or `onMove*` is gated on `document.activeElement`.
+6. **Update** `docs/testing.md` (or the project's prompt-testing doc) with a D-pad scenario row.
+7. **Deploy + on-Deck pass** via `deck.deploy` + `deck.openPlugin` — preview is insufficient.
 
 ## Interactive chain — do not skip stops before footer/save
 

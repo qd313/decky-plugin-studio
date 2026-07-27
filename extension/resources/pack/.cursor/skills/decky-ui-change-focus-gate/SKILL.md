@@ -24,9 +24,10 @@ Invoke before marking **done** on any change that touches:
 2. **Wire explicit graph** at section parent per [Pattern A](docs/focus-graph-patterns.md) (section parent owns `onMoveUp` / `onMoveDown`).
 3. **Every Decky Button** that must be D-pad reachable: `focusable` + `onMoveUp` / `onMoveDown` + `onButtonDown` for A/activate.
 4. **Sliders / spoilers:** bridge `Focusable` or proven parent-ref pattern — never assume DOM order.
-5. **Add/update** `docs/testing.md` D-pad row (or the project's prompt-testing doc).
-6. **On-Deck verify** via `deck.deploy` — preview mocks do **not** validate focus graphs.
-7. **Scroll behavior:** if touching answer bubbles or tab scroll, verify D-pad scroll is smooth.
+5. **Column/sibling hops:** must use mount-time refs / a focus-owner registry ([Pattern D](docs/focus-graph-patterns.md)). **Fail the gate** if the change discovers D-pad targets with `querySelector` / `aria-label` / `data-*` / class probes, or gates `onMove*` on `document.activeElement`.
+6. **Add/update** `docs/testing.md` D-pad row (or the project's prompt-testing doc).
+7. **On-Deck verify** via `deck.deploy` — preview mocks do **not** validate focus graphs.
+8. **Scroll behavior:** if touching answer bubbles or tab scroll, verify D-pad scroll is smooth.
 
 ## If you only changed copy/CSS
 

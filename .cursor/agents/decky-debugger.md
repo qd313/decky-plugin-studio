@@ -34,6 +34,7 @@ Your job: **get runtime evidence on-screen or in a workspace log file yourself, 
 3. **Measured geometry beats vibes.** Width/position bugs come from container math exceeding the real parent. Measure `getBoundingClientRect()` / `clientWidth` / `scrollWidth` of the block AND its parent before changing CSS.
 4. **The deployed artifact is authoritative.** Always `plugin.build` (MCP) or `./scripts/build.ps1` / `.sh` after Deck-facing TS changes; on-device behavior wins over local reasoning.
 5. **127.0.0.1 on the Deck ≠ the dev PC.** Plugin `fetch` to `http://127.0.0.1:7682/...` lands on **the Deck's loopback**. Reaching the PC ingest requires a reverse SSH tunnel from PC → Deck (the PC is the one that runs `-R`, using its own ingest port). Prefer MCP `deck.startTunnel` / `deck.probeIngest` / `deck.tailIngest` over manual scripts.
+6. **Sibling/column hops use mount-time refs, not DOM probes.** NEVER implement Decky D-pad sibling or column hops by discovering targets with `document.querySelector` / `aria-label` / `data-*` / class probes, or by treating `document.activeElement` as proof that focus moved. On Deck those lookups repeatedly miss even when the controls are on-screen, and returning `false` from `onMove*` then lets Steam spatial nav steal the hop (wrong diagonal). ALWAYS register the mounted Deck focus-owner nodes at render time (callback refs / a small registry) and hop between those registered owners; return `true` from `onMove*` once the target is registered so Steam spatial nav cannot steal the move.
 
 ---
 
@@ -41,6 +42,7 @@ Your job: **get runtime evidence on-screen or in a workspace log file yourself, 
 
 - Capture-phase `window` `keydown` as the primary D-pad surface.
 - Gating handlers on `modal.contains(activeElement)` / `[role="dialog"]` alone.
+- Sibling/column hops via `querySelector` / `aria-label` / `data-*` / class discovery, or gating `onMove*` success on `document.activeElement`; cross-column fallbacks when primary lookup “missed.”
 - Writing `el.style.marginLeft / width / transform` via refs on React-managed nodes and expecting persistence across renders.
 - Speculative negative margins, bleed widths, or sticky headers without measured evidence.
 - Asking the user to "run this command and paste the output" when Shell/Await/Glob/Read or MCP can do it.

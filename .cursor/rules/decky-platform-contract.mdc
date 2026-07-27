@@ -7,6 +7,7 @@ alwaysApply: true
 # Decky platform contract
 
 - Treat Steam/Decky controller navigation as a **focus-graph contract**. Implement D-pad via Decky `Focusable` callbacks (`onMoveLeft`, `onMoveRight`, `onMoveUp`, `onMoveDown`, `onOKButton`, `onCancelButton`, `onButtonDown`) before DOM `keydown`.
+- NEVER implement Decky D-pad sibling or column hops by discovering targets with `document.querySelector` / `aria-label` / `data-*` / class probes, or by treating `document.activeElement` as proof that focus moved. On Deck those lookups repeatedly miss even when the controls are on-screen, and returning `false` from `onMove*` then lets Steam spatial nav steal the hop (wrong diagonal). ALWAYS register the mounted Deck focus-owner nodes at render time (callback refs / a small registry) and hop between those registered owners; return `true` from `onMove*` once the target is registered so Steam spatial nav cannot steal the move.
 - NEVER apply durable layout corrections via ref-set inline styles on React-managed nodes; route dynamic geometry through CSS custom properties on a stable scope root consumed by `!important` rules, or the JSX `style` prop.
 - After changes to `src/`, `main.py`, or `plugin.json`, run **`plugin.build`** (MCP) or `./scripts/build.ps1` / `./scripts/build.sh` before on-device QA.
 - For Deck debug sessions, use MCP tools: `deck.startTunnel`, `deck.probeIngest`, `deck.tailIngest`, `preview.runSequence` — do not ask the user to run tunnel scripts manually.
