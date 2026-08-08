@@ -2,7 +2,8 @@
   "mcpServers": {
     "decky-plugin-studio": {
       "command": "node",
-      "args": ["c:/Users/still/.cursor/extensions/decky-plugin-studio.decky-plugin-studio-extension-0.1.0/resources/mcp-server/dist/index.js"],
+      "_comment": "This repo dogfoods its own server. Point at the local build, not an installed VSIX — a version-pinned extension path goes stale on every release (this was still on 0.1.0 at v0.3.6). Run `pnpm run build:mcp` first.",
+      "args": ["${workspaceFolder}/mcp-server/dist/index.js"],
       "env": {
         "DECKY_STUDIO_WORKSPACE": "${workspaceFolder}",
         "DECKY_STUDIO_REPO": "${workspaceFolder}/../decky-plugin-studio"

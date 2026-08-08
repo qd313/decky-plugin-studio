@@ -32,6 +32,23 @@ const params = new URLSearchParams(location.search);
 const pluginRoot = params.get("root") ?? import.meta.env.DECKY_PLUGIN_ROOT;
 const pluginEntry = import.meta.env.DECKY_PLUGIN_ENTRY ?? `${pluginRoot}/src/index.tsx`;
 
+/**
+ * Read a design token off the live document.
+ *
+ * Capture used to hardcode its own colors, so screenshots never matched what
+ * the developer saw on screen — which quietly corrupted compareScreenshot
+ * baselines. Sourcing from the same tokens the page renders with keeps the two
+ * in step automatically.
+ */
+function readToken(name: string, fallback: string): string {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function captureDomSnapshot(selector?: string): { html: string; activeElement: string } {
   const target = selector ? document.querySelector(selector) : document.getElementById("root");
   const html = (target ?? document.body).innerHTML.slice(0, 8000);
@@ -44,10 +61,12 @@ async function capturePngFallback(selector?: string): Promise<{ pngBase64?: stri
     return { htmlFallback: "<!-- no target -->" };
   }
   const htmlFallback = target.innerHTML.slice(0, 4000);
+  const bgColor = readToken("--decky-bg-deep", "#0e1419");
+  const fgColor = readToken("--decky-text", "#c7d5e0");
   try {
     const { default: html2canvas } = await import("html2canvas");
     const canvas = await html2canvas(target, {
-      backgroundColor: "#1b2838",
+      backgroundColor: bgColor,
       scale: Math.min(2, window.devicePixelRatio || 1),
       logging: false,
       useCORS: true,
@@ -65,9 +84,9 @@ async function capturePngFallback(selector?: string): Promise<{ pngBase64?: stri
       canvas.height = Math.max(1, Math.floor(rect.height));
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("no canvas context");
-      ctx.fillStyle = "#1b2838";
+      ctx.fillStyle = bgColor;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#c7d5e0";
+      ctx.fillStyle = fgColor;
       ctx.font = "12px monospace";
       ctx.fillText("Decky preview snapshot (placeholder)", 12, 24);
       ctx.fillText(`${canvas.width}x${canvas.height}`, 12, 44);

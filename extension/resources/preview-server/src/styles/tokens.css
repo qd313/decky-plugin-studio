@@ -1,0 +1,66 @@
+/*
+ * Decky Plugin Studio — SteamOS design tokens
+ *
+ * Single source of truth for the preview's look. Consumed by BOTH:
+ *   - the sandboxed plugin iframe (via decky-theme.css)
+ *   - the VS Code webview chrome (via asWebviewUri in extension/src/preview/manager.ts)
+ *
+ * Keeping one sheet is what stops the chrome and the content drifting into two
+ * different design systems. Add colors here, never inline.
+ */
+:root {
+  /* ---- Surface ------------------------------------------------------- */
+  --decky-bg-deep: #0e1419;      /* QAM backdrop / page background        */
+  --decky-bg-panel: #1a2634;     /* panel surface sitting on the backdrop */
+  --decky-bg-row: #23262e;       /* rows, secondary buttons               */
+  --decky-bg-raised: #2a3f52;    /* hover / raised state                  */
+  --decky-bg-input: #3d4450;     /* text input fill                       */
+  --decky-bg-sunken: #0a0e12;    /* log console, wells                    */
+
+  --decky-grad-panel: linear-gradient(180deg, #1b2838 0%, #0e1419 100%);
+  --decky-grad-btn: linear-gradient(180deg, #4b9cd6 0%, #1a9fff 100%);
+  --decky-grad-btn-hover: linear-gradient(180deg, #66c0f4 0%, #2eaaff 100%);
+  --decky-grad-chrome: linear-gradient(180deg, #1a2634 0%, #141c26 100%);
+
+  /* ---- Text ---------------------------------------------------------- */
+  --decky-text: #c7d5e0;
+  --decky-text-dim: #8f98a0;
+  --decky-text-strong: #ffffff;
+
+  /* ---- Accent & state ------------------------------------------------ */
+  --decky-accent: #1a9fff;
+  --decky-accent-hi: #66c0f4;
+  --decky-accent-glow: rgba(26, 159, 255, 0.45);
+  --decky-danger: #d94126;
+  --decky-success: #8bc53f;
+  --decky-warn: #e8a33d;
+  --decky-scrim: rgba(0, 0, 0, 0.82);
+
+  --decky-border: rgba(255, 255, 255, 0.08);
+  --decky-border-strong: rgba(255, 255, 255, 0.16);
+
+  /* ---- Geometry ------------------------------------------------------ */
+  /* SteamOS is near-square; 2px is the house radius. */
+  --decky-radius: 2px;
+  --decky-radius-lg: 4px;
+  --decky-row-min-h: 34px;
+  --decky-gutter: 14px;
+
+  /* ---- Device geometry ----------------------------------------------- */
+  /* Steam Deck native panel is 1280x800. The QAM is a right-edge flyout.
+     Keep these in sync with preview-server/src/qamGeometry.ts — that module
+     is the source these mirror, and it documents how to recalibrate. */
+  --decky-stage-w: 1280px;
+  --decky-stage-h: 800px;
+  --decky-qam-w: 400px;
+
+  /* ---- Face-button glyphs (Deck uses Xbox layout) --------------------- */
+  --decky-glyph-a: #5ba32b;
+  --decky-glyph-b: #c0392b;
+  --decky-glyph-x: #2f80c4;
+  --decky-glyph-y: #d9a520;
+
+  /* ---- Type ---------------------------------------------------------- */
+  --decky-font: "Motiva Sans", "Segoe UI", system-ui, sans-serif;
+  --decky-font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+}

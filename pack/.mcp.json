@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "decky-plugin-studio": {
+      "command": "node",
+      "args": ["__DECKY_MCP_ENTRY__"]
+    }
+  }
+}

@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Real MCP protocol support.** `mcp-server` now serves a compliant `initialize`, `tools/list` and `tools/call`, exposing all 34 tools to any MCP client (Claude Code, Cursor, Copilot). Previously it spoke only a private JSON-RPC dialect, so external agents saw zero tools and the handshake failed. The extension's own dialect is detected per-connection and continues to work unchanged.
+- `mcp-server/src/toolRegistry.ts` — tool names, descriptions and JSON Schemas, with `toolRegistry.test.ts` diffing the registry against the dispatch switch so a new tool cannot silently become undiscoverable.
+- **Claude Code target for Init Pack** — `pack/.claude/` (3 agents, 8 skills, hooks in `settings.json`), `pack/CLAUDE.md`, `pack/.mcp.json`. Init Pack now asks whether to install Cursor, Claude Code, or both; editor-neutral files are copied either way.
+- `templates/scripts/decky-claude-hook.mjs` — adapts the pack's hint scripts to Claude Code's hook model (tool-name matchers plus a stdin payload) so the same scripts serve both editors.
+- SteamOS design tokens split into `preview-server/src/styles/tokens.css` and `controls.css`, shared by the preview iframe *and* the webview chrome.
+
+### Changed
+
+- **Preview is now a true-to-device QAM frame.** The iframe was `flex:1` and filled whatever width the panel happened to be; it is now a fixed 400px right-docked flyout on a 1280x800 Deck stage, scaled to fit. Clipping and overflow bugs that only appear at real QAM width are now visible in preview.
+- The QAM / Desktop toolbar buttons now work. They were rendered and styled but never wired to a click handler.
+- Webview chrome restyled from VS Code gray to the shared SteamOS tokens, so the chrome and the plugin content no longer read as two different design systems.
+- `input[type=range]`, `select` and `input[type=checkbox]` are styled to SteamOS in both the shim components and the hardware simulator; they previously rendered as raw Chromium widgets.
+- Styled the six shim classes that had no CSS rule at all: `.decky-router`, `.decky-sidebar`, `.decky-field`, `.decky-slider-field`, `.decky-dropdown`, `.decky-spinner`.
+- `.decky-qam-scope` has real padding — content used to touch the flyout edges.
+- Log console gains severity colouring and a 500-line cap; it previously appended to `textContent` without bound.
+
+### Fixed
+
+- Server no longer replies with an error to JSON-RPC notifications. Answering `notifications/initialized` violated the spec and broke the handshake for strict MCP clients.
+- Preview start waits for Vite and the Python sidecar to actually respond instead of sleeping a fixed 1500ms, and reports which one failed.
+- Preview port is bind-tested instead of a blind `5173 + random(1000)`, which could silently collide.
+- Screenshot capture reads its background and text colours from the live tokens; it hardcoded `#1b2838`/`#c7d5e0` while the page rendered `#0e1419`, so captures never matched the screen. **Existing `tests/preview-baselines/` need regenerating.**
+- Ollama status is addressed by id rather than a positional `.hw-panel div:last-child` selector that broke on any markup change and threw when the panel was empty.
+- `ProgressBar` used the VS Code teal `#4ec9b0`; it now uses the Steam accent.
+- Root `mcp.json` pointed at a hardcoded `...-extension-0.1.0/...` install path at v0.3.6; it now targets the local build.
+- Removed dead `extension/src/preview/viewportFrame.html` and the unused `frameUri` computed from it.
+
 ## [0.3.6]
 
 ### Changed

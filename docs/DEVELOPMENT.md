@@ -6,7 +6,7 @@ For end-user install and daily use, see [README.md](../README.md).
 
 ## Branching and releases
 
-- Feature work lands on **`develop`**
+- Feature work lands on a feature branch
 - Merge to **`main`** with a version bump in `extension/package.json` (and root `package.json`)
 - GitHub Actions publishes a **Release** `vX.Y.Z` with the `.vsix` when a new version hits `main`
 

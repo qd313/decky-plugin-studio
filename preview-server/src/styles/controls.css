@@ -1,0 +1,122 @@
+/*
+ * Native form controls, restyled to SteamOS.
+ *
+ * Split out from decky-theme.css because BOTH surfaces need these while only
+ * the iframe wants the theme's html/body rules:
+ *   - the sandboxed plugin iframe (SliderField, Dropdown, ToggleField)
+ *   - the VS Code webview chrome (hardware simulator sliders and checkboxes)
+ *
+ * Requires tokens.css to be loaded first.
+ */
+
+/* ---- Scrollbars ------------------------------------------------------ */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--decky-border-strong);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--decky-text-dim); }
+
+/* ---- Range ----------------------------------------------------------- */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--decky-bg-row);
+  border: 1px solid rgba(0, 0, 0, 0.4);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 18px;
+  margin-top: -7px;
+  border-radius: 2px;
+  background: var(--decky-accent);
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+input[type="range"]:hover::-webkit-slider-thumb { background: var(--decky-accent-hi); }
+
+input[type="range"]:focus { outline: none; }
+input[type="range"]:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--decky-accent-glow);
+}
+
+/* ---- Select ---------------------------------------------------------- */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-height: var(--decky-row-min-h);
+  padding: 7px 30px 7px 10px;
+  background-color: var(--decky-bg-input);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%238f98a0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  border-radius: var(--decky-radius);
+  color: var(--decky-text);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--decky-accent);
+  box-shadow: 0 0 0 2px var(--decky-accent-glow);
+}
+
+select option {
+  background: var(--decky-bg-panel);
+  color: var(--decky-text);
+}
+
+/* ---- Checkbox -------------------------------------------------------- */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  margin: 0;
+  border: 1px solid var(--decky-border-strong);
+  border-radius: var(--decky-radius);
+  background: var(--decky-bg-input);
+  cursor: pointer;
+  transition: background 90ms ease-out, border-color 90ms ease-out;
+}
+
+input[type="checkbox"]:hover { border-color: var(--decky-accent); }
+
+input[type="checkbox"]:checked {
+  background-color: var(--decky-accent);
+  border-color: var(--decky-accent);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3.2 3.2L13 5' fill='none' stroke='%23ffffff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 14px;
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--decky-accent-glow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input[type="checkbox"] { transition: none; }
+}

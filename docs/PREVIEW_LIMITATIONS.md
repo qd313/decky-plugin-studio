@@ -20,8 +20,8 @@ Decky Plugin Studio preview is **very much beta** — useful for **fast iteratio
 |------|------------------|
 | `deck.openPlugin` on device | MCP returns a manual checklist only — no Steam/QAM automation |
 | Steam CEF focus graph | Approximated via `Focusable` message bridge |
-| `@decky/ui` styling | Mock components — richer in v0.2, not pixel-perfect Steam |
-| Gamescope / QAM compositing | Static QAM-sized frame only |
+| `@decky/ui` styling | Mock components on a shared SteamOS token set — close in palette and geometry, still not pixel-perfect Steam |
+| Gamescope / QAM compositing | Device-accurate geometry only — a 400px flyout on a 1280x800 stage. Real gamescope composition still needs `deck.captureScreenshot`. |
 | TDP / sysfs writes | Logged and mocked success |
 | Physical gamepad (USB/BT) | W3C standard layout when preview panel focused |
 | Steam Input chords | Not simulated — on-device QA required |

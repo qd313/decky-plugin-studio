@@ -138,7 +138,7 @@ export function TextField(
     const textareaProps = rest as React.TextareaHTMLAttributes<HTMLTextAreaElement>;
     return (
       <label style={{ display: "block", width: "100%" }}>
-        {label && <div style={{ marginBottom: 6, color: "var(--decky-text-dim)", fontSize: 12 }}>{label}</div>}
+        {label && <div className="decky-field-label">{label}</div>}
         <textarea
           rows={rows ?? 3}
           className="decky-input"
@@ -151,7 +151,7 @@ export function TextField(
 
   return (
     <label style={{ display: "block", width: "100%" }}>
-      {label && <div style={{ marginBottom: 6, color: "var(--decky-text-dim)", fontSize: 12 }}>{label}</div>}
+      {label && <div className="decky-field-label">{label}</div>}
       <input ref={ref} className="decky-input" {...rest} style={{ ...(props.style ?? {}) }} />
     </label>
   );
@@ -170,7 +170,7 @@ export function ToggleField({
   const ref = useRef<HTMLLabelElement>(null);
   useGamepadRegistration(ref, rest, [rest.onMoveLeft, rest.onMoveRight, rest.onMoveUp, rest.onMoveDown, rest.onOKButton]);
   return (
-    <label ref={ref} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 34 }}>
+    <label ref={ref} className="decky-toggle-field">
       <input type="checkbox" checked={checked} onChange={(e) => onChange?.(e.target.checked)} />
       {label}
     </label>
@@ -321,7 +321,7 @@ export function Field({
 }) {
   return (
     <div className="decky-field" style={{ marginBottom: 8 }}>
-      {label ? <div style={{ marginBottom: 4, color: "var(--decky-text-dim)", fontSize: 12 }}>{label}</div> : null}
+      {label ? <div className="decky-field-label">{label}</div> : null}
       {children}
     </div>
   );
@@ -347,7 +347,7 @@ export function SliderField({
   useGamepadRegistration(ref, rest, [rest.onOKButton]);
   return (
     <div ref={ref} className="decky-slider-field" tabIndex={0}>
-      <label style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+      <label>
         <span>{label}</span>
         <span>{value}</span>
       </label>
@@ -358,7 +358,6 @@ export function SliderField({
         step={step}
         value={value}
         onChange={(e) => onChange?.(Number(e.target.value))}
-        style={{ width: "100%" }}
       />
     </div>
   );
@@ -381,11 +380,10 @@ export function Dropdown({
   const opts = rgOptions ?? [];
   return (
     <div ref={ref} className="decky-dropdown" tabIndex={0}>
-      {label ? <div style={{ marginBottom: 4, fontSize: 12 }}>{label}</div> : null}
+      {label ? <div className="decky-field-label">{label}</div> : null}
       <select
         value={selectedOption ?? opts[0]?.data ?? ""}
         onChange={(e) => onChange?.(e.target.value)}
-        style={{ width: "100%", minHeight: 32 }}
       >
         {opts.map((o) => (
           <option key={o.data} value={o.data}>
@@ -404,14 +402,20 @@ export function DropdownOption({ children }: { children?: React.ReactNode }) {
 export function ProgressBar({ nProgress }: { nProgress?: number }) {
   const pct = Math.max(0, Math.min(100, nProgress ?? 0));
   return (
-    <div style={{ background: "#1a3a52", borderRadius: 4, height: 8, overflow: "hidden" }}>
-      <div style={{ width: `${pct}%`, height: "100%", background: "#4ec9b0" }} />
+    <div
+      className="decky-progress"
+      role="progressbar"
+      aria-valuenow={pct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div className="decky-progress__fill" style={{ width: `${pct}%` }} />
     </div>
   );
 }
 
 export function Spinner() {
-  return <div className="decky-spinner" style={{ padding: 8, opacity: 0.8 }}>Loading…</div>;
+  return <div className="decky-spinner">Loading…</div>;
 }
 
 export const Marquee = PanelSectionRow;

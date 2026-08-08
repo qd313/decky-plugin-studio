@@ -38,10 +38,59 @@ async function pickConflictAction(): Promise<ConflictAction> {
   return choice?.value ?? "cancel";
 }
 
-const MCP_TEMPLATE_PATHS = new Set(["mcp.json", ".vscode/mcp.json"]);
+const MCP_TEMPLATE_PATHS = new Set(["mcp.json", ".vscode/mcp.json", ".mcp.json"]);
 
 function isMcpTemplate(relativePath: string): boolean {
   return MCP_TEMPLATE_PATHS.has(relativePath.replace(/\\/g, "/"));
+}
+
+type PackTarget = "cursor" | "claude" | "both";
+
+/**
+ * Files that belong to exactly one editor. Everything else in the pack (AGENTS.md,
+ * docs/, .decky/, .github/) is editor-neutral and always copied.
+ */
+function targetOf(relativePath: string): "cursor" | "claude" | "shared" {
+  const p = relativePath.replace(/\\/g, "/");
+  if (p.startsWith(".cursor/") || p === "mcp.json") return "cursor";
+  if (p.startsWith(".claude/") || p === ".mcp.json" || p === "CLAUDE.md") return "claude";
+  return "shared";
+}
+
+function filterByTarget(files: PackFile[], target: PackTarget): PackFile[] {
+  if (target === "both") return files;
+  return files.filter((f) => {
+    const owner = targetOf(f.relativePath);
+    return owner === "shared" || owner === target;
+  });
+}
+
+async function pickTarget(): Promise<PackTarget | undefined> {
+  const choice = await vscode.window.showQuickPick(
+    [
+      {
+        label: "Both",
+        description: "default",
+        detail: "Cursor rules/agents/skills and Claude Code agents/skills/hooks",
+        value: "both" as const,
+      },
+      {
+        label: "Cursor",
+        detail: ".cursor/ rules, agents, skills, hooks + mcp.json",
+        value: "cursor" as const,
+      },
+      {
+        label: "Claude Code",
+        detail: ".claude/ agents, skills, settings hooks + CLAUDE.md + .mcp.json",
+        value: "claude" as const,
+      },
+    ],
+    {
+      title: "Decky: Init pack — which agent setup?",
+      placeHolder: "Editor-neutral files (AGENTS.md, docs, .decky, scripts) are copied either way",
+    }
+  );
+  return choice?.value;
 }
 
 async function writeMcpTemplate(sourcePath: string, targetPath: string): Promise<void> {
@@ -88,7 +137,10 @@ export async function initPack(targetRoot?: string): Promise<void> {
     return;
   }
 
-  const files = collectPackFiles(packRoot);
+  const target = await pickTarget();
+  if (!target) return;
+
+  const files = filterByTarget(collectPackFiles(packRoot), target);
   const conflicts = files.filter((f) => fs.existsSync(path.join(workspaceRoot, f.relativePath)));
 
   let action: ConflictAction = conflicts.length === 0 ? "overwrite" : await pickConflictAction();
@@ -124,8 +176,10 @@ export async function initPack(targetRoot?: string): Promise<void> {
     copied++;
   }
 
+  const targetLabel =
+    target === "both" ? "Cursor + Claude Code" : target === "claude" ? "Claude Code" : "Cursor";
   vscode.window.showInformationMessage(
-    `Decky: Init pack complete — ${copied} file(s) copied, ${skipped} skipped.`
+    `Decky: Init pack complete (${targetLabel}) — ${copied} file(s) copied, ${skipped} skipped.`
   );
 
   const { copyStudioTemplates } = await import("./copyTemplates");

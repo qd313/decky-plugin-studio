@@ -11,7 +11,7 @@ VS Code / Cursor extension for **Decky Loader** plugin development: live in-IDE 
 | **Live preview** | QAM-sized webview with HMR, virtual gamepad, hardware simulator, Python sidecar for real `main.py` RPC |
 | **MCP tools** | Agents and commands for `deck.deploy`, `deck.captureScreenshot`, `deck.record`, preview suite, tunnel/ingest |
 | **Composited capture** | Screenshots and recordings that include QAM + your plugin UI (not raw game-only kmsgrab) |
-| **Init Pack** | Drops `AGENTS.md`, Cursor/VS Code MCP config, skills, and optional `scripts/` into your plugin repo |
+| **Init Pack** | Drops `AGENTS.md`, MCP config, agents/skills/hooks for **Cursor and/or Claude Code**, and optional `scripts/` into your plugin repo |
 | **Create New Plugin** | Clones decky-plugin-template, renames boilerplate, runs Init Pack |
 
 ## Install
@@ -104,9 +104,11 @@ After **Init Pack** (or in [example-plugin/](example-plugin/)), scripts live und
 
 Init Pack **skips existing** script files — delete old `scripts/build.*` or choose **Overwrite all** to pick up template updates.
 
-### 7. MCP in Cursor / VS Code
+### 7. MCP in Cursor / VS Code / Claude Code
 
-After Init Pack, your plugin repo’s `mcp.json` points at the extension’s MCP server. Tools are documented in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
+After Init Pack, your plugin repo’s MCP config points at the extension’s MCP server — `mcp.json` and `.vscode/mcp.json` for Cursor/VS Code, `.mcp.json` for Claude Code. The server speaks the standard MCP protocol, so all 34 tools appear in any MCP client’s tool list. Tools are documented in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
+
+MCP tool names use underscores (`deck_deploy`, `preview_runSequence`); the dotted forms in prose refer to the same tools.
 
 Example agent flows:
 
@@ -128,7 +130,7 @@ Optional: `deck.installCaptureHelper` installs `studio-record` / `studio-capture
 
 ## Developing this extension
 
-- **Branch model:** feature work on `develop` → merge to `main` with a version bump in `extension/package.json` → CI publishes a GitHub Release + VSIX
+- **Branch model:** feature work on a branch → merge to `main` with a version bump in `extension/package.json` → CI publishes a GitHub Release + VSIX
 - Build locally: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 
 ## More documentation

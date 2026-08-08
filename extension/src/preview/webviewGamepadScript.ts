@@ -28,6 +28,14 @@ export function getWebviewGamepadScript(): string {
         if (!el) return;
         el.textContent = label;
         el.title = detail || label;
+        const live = !/none|unsupported/i.test(label);
+        el.classList.toggle('connected', live);
+      }
+
+      /* Mirror physical input onto the on-screen tray. Defined in manager.ts,
+         which shares this script's scope; guarded in case that changes. */
+      function flash(dir) {
+        if (typeof flashButton === 'function') flashButton(dir);
       }
 
       function pickGamepad(pads) {
@@ -78,7 +86,7 @@ export function getWebviewGamepadScript(): string {
         for (const [btnIndex, dir] of Object.entries(BUTTON_MAP)) {
           const idx = Number(btnIndex);
           const pressed = Boolean(pad.buttons[idx]?.pressed);
-          if (pressed && !prev[idx]) injectFocus(dir);
+          if (pressed && !prev[idx]) { injectFocus(dir); flash(dir); }
         }
 
         const activeDirs = new Set();
@@ -87,7 +95,7 @@ export function getWebviewGamepadScript(): string {
         }
         const prevDirs = prevAxisDirs.get(pad.index) || new Set();
         for (const dir of activeDirs) {
-          if (!prevDirs.has(dir)) injectFocus(dir);
+          if (!prevDirs.has(dir)) { injectFocus(dir); flash(dir); }
         }
 
         prevButtons.set(

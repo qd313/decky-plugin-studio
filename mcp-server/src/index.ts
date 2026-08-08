@@ -14,6 +14,10 @@ import * as plugin from "./tools/plugin.js";
 import * as preview from "./tools/preview.js";
 import * as deckAutonomy from "./tools/deckAutonomy.js";
 import { diffRpc } from "./preview/rpcDiff.js";
+import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
+
+const MCP_PROTOCOL_VERSION = "2024-11-05";
+const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.6" };
 
 startIngestServer(Number(process.env.DEBUG_INGEST_PORT ?? 7682));
 
@@ -192,15 +196,103 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
   }
 }
 
+/**
+ * Real MCP protocol surface.
+ *
+ * Implemented directly on the shared stdio stream rather than via the SDK's
+ * StdioServerTransport: that transport takes exclusive ownership of stdin, and
+ * this process must keep serving the extension's own JSON-RPC dialect on the
+ * same pipe. Two readers on one stdin is not possible, so the framing is
+ * hand-rolled and the dispatch below stays the single implementation.
+ */
+async function handleMcp(method: string, params: Record<string, unknown>): Promise<unknown> {
+  switch (method) {
+    case "initialize":
+      return {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: SERVER_INFO,
+      };
+
+    case "ping":
+      return {};
+
+    // Notifications: acknowledged by doing nothing. The previous implementation
+    // answered these with an "Unknown method" error, which is a JSON-RPC
+    // violation and failed the handshake for strict clients.
+    case "notifications/initialized":
+    case "notifications/cancelled":
+      return undefined;
+
+    case "tools/list":
+      return { tools: TOOLS };
+
+    case "tools/call": {
+      const name = String(params.name ?? "");
+      const args = (params.arguments as Record<string, unknown>) ?? {};
+      if (!TOOL_NAMES.has(name)) {
+        throw new Error(`Unknown tool: ${name}`);
+      }
+      try {
+        const result = await handle(`tools/${name}`, args);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result ?? null, null, 2) }],
+        };
+      } catch (err) {
+        // Tool failures go back as content with isError, per MCP convention, so
+        // the calling model can read and react to them. A protocol-level error
+        // would be invisible to it.
+        return { content: [{ type: "text", text: String(err) }], isError: true };
+      }
+    }
+
+    default:
+      throw new Error(`Unknown method: ${method}`);
+  }
+}
+
+/**
+ * Which dialect the peer speaks. A real MCP client sends `protocolVersion` on
+ * initialize; the VS Code extension's client (extension/src/mcp/client.ts)
+ * sends `workspaceRoot`. One process serves both so the extension keeps working
+ * unchanged while external agents get a discoverable tool list.
+ */
+let mcpMode = false;
+
 rl.on("line", async (line) => {
   if (!line.trim()) return;
+
+  let msg: { id?: number | string | null; method?: string; params?: Record<string, unknown> };
   try {
-    const msg = JSON.parse(line) as { id?: number; method: string; params?: Record<string, unknown> };
-    const result = await handle(msg.method, msg.params ?? {});
-    respond(msg.id, result);
-  } catch (err) {
-    respond(undefined, null, { message: String(err) });
+    msg = JSON.parse(line);
+  } catch {
+    return; // not JSON — ignore rather than emitting an unsolicited error frame
   }
+  if (typeof msg.method !== "string") return; // a response, not a request
+
+  const params = msg.params ?? {};
+  if (msg.method === "initialize" && typeof params.protocolVersion === "string") {
+    mcpMode = true;
+  }
+
+  // A JSON-RPC notification has no id and must never receive a response.
+  const isNotification = msg.id === undefined || msg.id === null;
+
+  try {
+    const result = mcpMode
+      ? await handleMcp(msg.method, params)
+      : await handle(msg.method, params);
+    if (!isNotification) respond(msg.id as number, result);
+  } catch (err) {
+    if (!isNotification) respond(msg.id as number, null, { message: String(err) });
+  }
+});
+
+// MCP clients shut the server down by closing stdin rather than calling a
+// shutdown method.
+rl.on("close", () => {
+  stopIngestServer();
+  process.exit(0);
 });
 
 process.on("SIGINT", () => {
