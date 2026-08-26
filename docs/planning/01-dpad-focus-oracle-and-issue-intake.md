@@ -48,6 +48,46 @@ and a consumer asserting on a low-fidelity result must have had to opt in.
 
 ### A.1 Focus oracle — `deck.readFocus`
 
+**Status 2026-08-26 — built and verified against a live Deck.** Shipped as MCP tool
+`deck_readFocus`. Code: `mcp-server/src/deck/{ws,cdp,cdpTunnel,readFocus}.ts`. Round trip is
+**~360 ms**, including opening and closing its own SSH forward. Tests went 25 → 32; the new
+ones run against an in-process fake CDP server, so no Deck is needed to run the suite.
+
+**MEASURED CORRECTION — this section's target is wrong.** The text below says to read from
+`SharedJSContext` and gives `method: "cdp:SharedJSContext"`. On a live Deck (Steam CEF
+126.0.6478.183):
+
+| CDP target | Elements | Carries `gpfocus` |
+|---|---|---|
+| `QuickAccess_uid2` | 289 | **yes** |
+| `Steam Big Picture Mode` | 346 | no |
+| `MainMenu_uid2` | 80 | no |
+| `SharedJSContext` | **15** | no |
+
+`SharedJSContext` is essentially empty. The implementation therefore **assumes no target**:
+it asks every one and reports which answered, in `targetsScanned`. Had it followed the plan
+literally it would have returned "nothing is focused" every time — the exact failure this
+document was written to prevent.
+
+Two other things measurement settled:
+
+- **Decky is Quick Access tab `999`.** Steam's own tabs are 0 and 3-7, and Decky writes
+  nothing containing "decky" into the QAM DOM, so the `quickaccess_content_999` ancestor is
+  the only reliable "focus is inside a plugin" signal. Reported as `deckyPluginRoot`.
+- **Synthesised selectors cannot be trusted silently.** Steam mixes stable class names
+  (`DialogButton`, `Focusable`, `Panel`) with per-build hashes (`cXzBZxhPBl7fZs9LODEnc`). A
+  first attempt at a selector produced `div > div > div > div > button`, matching 21 elements
+  and not the focused one. The shipped version keeps letter-only classes, anchors on the
+  nearest real id, and then **re-queries to confirm the selector resolves back to the same
+  element**, reporting `selectorVerified`. An unverified selector is returned as unverified
+  rather than handed over as if it were good.
+
+**Node constraint worth recording:** the MCP server ships in the VSIX and runs on VS Code's
+Node (`engines.vscode` ^1.85 → Node 18), which has no global `WebSocket`, and `ws` is not a
+dependency. `ws.ts` is a hand-rolled RFC 6455 client — text frames, ping/pong, close and
+fragmentation, nothing else. Its framing is covered by a round-trip test rather than trusted.
+
+
 **What it does.** Returns the element chain Steam's nav graph currently owns on the connected
 Deck, plus enough identity to assert on it.
 
@@ -238,6 +278,25 @@ Order within Track B:
 | A.2 | `deck.pressButton` | A.3 passing |
 | A.4 | `deck.assertFocusMove` + suite step type | A.1 + A.2 |
 | A.5 | Pack: gate steps, new skill, fidelity fail-condition | A.4 |
+
+**Status 2026-08-26.** A.0 and A.1 are done. A.0 named and explained the `activeElement`
+trap in `docs/PREVIEW_LIMITATIONS.md` and `pack/docs/focus-graph-patterns.md` (and its
+mirror under `extension/resources/pack/`, which is hand-maintained — there is no sync script).
+
+**A.2 and A.3 are superseded by hardware that did not exist when this was written.** The
+ESP32-S3 bridge from plan 19 arrived 2026-08-25 and is a physical USB HID gamepad. Steam
+enumerates it and routes it through Steam Input, which is exactly the `steam-routed` fidelity
+A.2 specifies — proven by opening the QAM unattended with a GUIDE+A chord. So A.3's spike
+question ("does gamescope accept a fresh uinput device, or does it need a manual enable?") no
+longer gates anything: we already have a device Steam demonstrably accepts. A.2 reduces from
+"build a uinput virtual pad" to "expose the existing bridge as `deck_pressButton` with
+`method: usb-hid:bridge`". That removes the largest unknown in this plan.
+
+The decisions around it still stand: never drive the virtual pad and the real controller at
+once, and refuse rather than degrade when the pad is unavailable (E2).
+
+**Next is A.4**, `deck.assertFocusMove` — readFocus before, bridge press, readFocus after,
+with `moved` and `matched` reported separately. Both halves now exist.
 
 Note A.0 is not a consolation prize — the findings doc lists it as ask #4, and it is the only
 item that helps consumers *already on v0.3.6*.

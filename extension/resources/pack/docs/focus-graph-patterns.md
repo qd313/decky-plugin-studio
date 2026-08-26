@@ -64,6 +64,34 @@ NEVER implement Decky D-pad sibling or column hops by discovering targets with `
 - Skill: `.cursor/skills/decky-ui-change-focus-gate/SKILL.md` — mandatory gate before shipping UI changes
 - Skill: `.cursor/skills/decky-focus-audit/SKILL.md` — static + preview audit pass
 
+## The `activeElement` trap
+
+**Steam's gamepad focus and the browser's `document.activeElement` are two different things,
+and on Deck they routinely disagree.**
+
+Steam writes the classes `gpfocus` and `gpfocuswithin` onto the element its nav graph
+currently owns. That is the real answer to "what is focused". `document.activeElement` is the
+browser's own idea of focus, and it is not what Steam routes presses to.
+
+This is worth naming rather than filing under "gotchas", because **it fails in the direction
+that looks like success**. A focus check written against `activeElement` reports moves that
+never happened. bonsAI shipped three separate "fixed" releases against this trap - each one
+verified with `activeElement`, each one changing nothing on the device.
+
+**What to do instead**
+
+- To *move* focus: register the element when it is created, and focus the registered owner.
+- To *verify* focus: read `gpfocus`. Never `activeElement`.
+
+`deck_readFocus` (Decky Plugin Studio) reads this over CDP and returns both, plus an `agree`
+flag. When `agree` is `false`, any assertion you were about to make on `activeElement` would
+have been wrong.
+
+**Where the marker actually lives.** Measured against a live Deck on Steam CEF
+126.0.6478.183: the marker is in the **QuickAccess** CEF target. `SharedJSContext` holds
+about 15 elements and never carries it. A plugin's focus sits under
+`quickaccess_content_999`; Steam's own Quick Access tabs are 0 and 3-7.
+
 ## Anti-patterns (all patterns)
 
 | Anti-pattern | Do instead |
@@ -72,5 +100,5 @@ NEVER implement Decky D-pad sibling or column hops by discovering targets with `
 | `window` / capture-phase `keydown` as primary D-pad path | Decky `Focusable` `onMove*` / `onOKButton` / `onButtonDown` |
 | Add a control without updating the parent section graph | Extend the section stop list and parent `onMove*` edges |
 | Sibling/column hops via `querySelector` / `aria-label` / `data-*` / class discovery | Mount-time callback refs / registry of focus owners |
-| Gate `onMove*` success on `document.activeElement` | Return `true` once the registered owner is focused; do not require `activeElement` proof |
+| Gate `onMove*` success on `document.activeElement` | Return `true` once the registered owner is focused; do not require `activeElement` proof - see [The `activeElement` trap](#the-activeelement-trap) |
 | Cross-column fallbacks when primary lookup “missed” | Only hop to the registered neighbor; never claim a wrong-column focus as success |

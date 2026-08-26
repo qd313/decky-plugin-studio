@@ -51,6 +51,7 @@ export class DeckyTreeProvider implements vscode.TreeDataProvider<DeckyTreeItem>
         tool("deck.reloadPlugin"),
         tool("deck.openPlugin"),
         tool("deck.readPluginLog"),
+        tool("deck.readFocus"),
         tool("deck.getEnv"),
         tool("deck.deploy"),
         tool("plugin.build"),

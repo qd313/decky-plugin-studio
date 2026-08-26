@@ -28,6 +28,21 @@ Decky Plugin Studio preview is **very much beta** — useful for **fast iteratio
 | Decky permissions | **Simulator** via `preview.setPermissions` / `.decky/preview.json` (approximation) |
 | Real Deck loopback networking | N/A — preview runs on dev machine |
 
+## Focus: what preview cannot tell you
+
+Preview renders your plugin in a browser. A browser has `document.activeElement`; it does not
+have Steam's gamepad nav graph. Preview can show you that a handler *ran*. It cannot show you
+where Steam would actually put the highlight.
+
+That gap is the `activeElement` trap, explained in full in
+[focus-graph-patterns.md](../pack/docs/focus-graph-patterns.md#the-activeelement-trap). The
+short version: a focus check written against `activeElement` reports moves that never
+happened, and it fails in the direction that looks like success.
+
+So treat "focus moved to the right control" as **`deck-only`**. On device, **`deck_readFocus`**
+reads Steam's own `gpfocus` marker over CDP and tells you whether it agrees with
+`activeElement`.
+
 ## Deck-only QA bucket
 
 Some scenarios cannot run in preview (Steam Input chords, gamescope capture, in-game overlay). Tag them **`deck-only`** in `tests/preview-suite/` and run via:

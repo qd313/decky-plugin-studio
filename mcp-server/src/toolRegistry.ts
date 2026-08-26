@@ -194,6 +194,22 @@ export const TOOLS: ToolDef[] = [
     inputSchema: noArgs,
   },
   {
+    name: "deck_readFocus",
+    description:
+      "Report what Steam's gamepad nav graph actually owns on the connected Deck, read over CDP. Returns the gpfocus element and its gpfocuswithin ancestors, plus document.activeElement as a contrast field and an 'agree' flag - the two disagree often on Deck, and believing activeElement is what makes a focus fix look successful when nothing moved. Needs a Deck reachable over SSH with CEF debugging enabled; it opens and closes its own forward tunnel. This reads focus, it does not move it - to check that a press actually lands, press with the bridge and read focus before and after.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        cdpUrl: {
+          type: "string",
+          description:
+            "Existing CDP endpoint, e.g. http://127.0.0.1:8080. Omit to open a temporary SSH forward to the configured Deck.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_readPluginLog",
     description:
       "Read the plugin's log from the Deck. Use filter to grep server-side rather than pulling a large log and searching locally.",
