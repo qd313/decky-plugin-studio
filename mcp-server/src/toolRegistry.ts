@@ -212,6 +212,40 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "deck_walkTo",
+    description:
+      "Move the Deck's focus ring one direction until it lands on a control with the given text, reading focus after every single press. This is how you get the ring somewhere before asserting anything, and it is a search rather than a guess: no press count is assumed, and the label that actually matched is reported back. It only ever sends direction presses, never A/B/START, so a walk cannot activate a control or launch anything — acting on what it finds is the caller's job. Matching is substring by default and also considers the nearest labelled ancestor, because Decky's ToggleField puts the ring on an unlabelled inner div. Watch for near-misses: walking to \"ask\" stops on \"Attach screenshot to Ask\"; pass exact:true when the name is a common word. A walk whose ring stops moving reports stalled:true rather than burning its budget on a dead end.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        direction: {
+          type: "string",
+          enum: ["UP", "DOWN", "LEFT", "RIGHT"],
+          description: "Which way to walk. Only directions are accepted.",
+        },
+        text: {
+          type: "string",
+          description: "Text to look for on the focused control or its nearest labelled ancestor.",
+        },
+        exact: {
+          type: "boolean",
+          default: false,
+          description: "Require the whole label to equal text rather than contain it.",
+        },
+        budget: { type: "number", default: 20, description: "Max presses before giving up." },
+        stallLimit: {
+          type: "number",
+          default: 3,
+          description: "Give up after this many presses that do not move the ring.",
+        },
+        port: { type: "string", description: "Serial port of the bridge's COM side." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
+      required: ["direction", "text"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_runSequence",
     description:
       "Run a list of button presses on the Deck unattended, asserting where focus lands at each one, over a single SSH tunnel. Use this instead of calling deck_assertFocusMove in a loop: it is much faster (one tunnel, not one per press), it writes an evidence file, and it detects cycles — a focus ring that returns to somewhere it has already been. That last one matters because a focus graph can trap the ring in a region with no way out while every individual press still reports moved:true and matched:true; no per-step assertion can see it, because the defect is a property of the path rather than of any one edge. The cycle report is a measurement, not a verdict — a tab bar that wraps is a legitimate cycle.",

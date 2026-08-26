@@ -221,3 +221,32 @@ the harder rows still need a human to judge what they saw.
 `bonsai-strategy-branches` fence, which the local model did not do on a generic Strategy question
 with no game running. That half is unreachable rather than broken, and a QA control that forces
 branches would fix the reachability.
+
+---
+
+## 9. `deck_walkTo` — the thing that should have been a tool first
+
+For two days this was a scratchpad script, and it was used more than anything else in the repo.
+Almost every QA row starts with *get the ring onto X* and only then asserts something. Without a
+tool for the first half, that half is a person reading focus dumps and deciding to press again.
+Navigation, not assertion, is where the time actually goes.
+
+It walks one direction until the focused control's label matches, reading after every press. It
+sends **direction presses only** — never A, B or START — so a walk cannot activate anything,
+launch a game, or leave the screen it started on. Acting on what it finds is the caller's job, and
+the caller gets the read that justifies it.
+
+Three behaviours came straight from getting them wrong on hardware:
+
+**Substring matches are reported as such.** Walking to `ask` stopped on *Attach screenshot to Ask* —
+the wrong control, one press before the right one, and pressing A there attaches a screenshot. The
+matched label always comes back, and `exact: true` exists for names that are common words.
+
+**Labels are read from the nearest labelled ancestor too.** Decky's `ToggleField` puts the ring on
+an unlabelled inner div, so own-text-only matching misses every toggle in a settings page.
+
+**A ring that stops moving ends the walk.** At the bottom of a list, further presses cost a round
+trip each and learn nothing; the first time this happened it silently ate sixteen. Confirmed on
+device: at the end of the bonsAI panel the shipped tool now gives up after 3 presses with *"this is
+the end of the line going DOWN"* instead of spending its whole budget.
+

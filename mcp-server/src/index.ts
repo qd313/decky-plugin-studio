@@ -20,6 +20,7 @@ import { pressButton } from "./deck/pressButton.js";
 import { assertFocusMove } from "./deck/assertFocusMove.js";
 import { runSequence, SequenceStep } from "./deck/runSequence.js";
 import { openPluginDriven } from "./deck/openPlugin.js";
+import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -99,6 +100,17 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         listBudget: params.listBudget != null ? Number(params.listBudget) : undefined,
       });
     }
+
+    case "tools/deck_walkTo":
+      return walkTo({
+        direction: String(params.direction ?? "DOWN").toUpperCase() as WalkDirection,
+        text: String(params.text ?? ""),
+        budget: params.budget != null ? Number(params.budget) : undefined,
+        exact: params.exact != null ? Boolean(params.exact) : undefined,
+        stallLimit: params.stallLimit != null ? Number(params.stallLimit) : undefined,
+        port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+      });
 
     case "tools/deck_runSequence":
       return runSequence({

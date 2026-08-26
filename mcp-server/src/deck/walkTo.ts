@@ -1,0 +1,240 @@
+/**
+ * deck.walkTo -- move the focus ring one direction until it lands on a named
+ * control, reading after every single press.
+ *
+ * This was the most-used thing in the first two days of driving a Deck, and for
+ * a while it was a scratchpad script rather than a tool, which is backwards.
+ * Almost every QA row starts with "get the ring onto X" and only then asserts
+ * something; without this, that first half is a human reading focus dumps and
+ * deciding to press again. Navigation, not assertion, is where the time goes.
+ *
+ * It never presses A, B or START. Direction presses move the ring and nothing
+ * else, so a walk cannot activate a control, launch a game, or leave the screen
+ * it started on. Acting on what it finds is the caller's job, and the caller
+ * gets the read that justifies it.
+ *
+ * Three things it learned from hardware:
+ *
+ *   MATCHING IS SUBSTRING BY DEFAULT, AND THAT CUTS BOTH WAYS. Walking to "ask"
+ *   stopped on "Attach screenshot to Ask" -- the wrong control, one press before
+ *   the right one, and pressing A there would have attached a screenshot. The
+ *   match is always reported back so a caller can check it, and `exact` is there
+ *   for when the name is a common word.
+ *
+ *   LABELS OFTEN LIVE ON AN ANCESTOR. Decky's ToggleField puts the ring on an
+ *   unlabelled inner div with the text several parents up, so matching only the
+ *   focused element's own text misses every toggle in a settings page.
+ *
+ *   DEAD ENDS ARE COMMON AND SHOULD STOP THE WALK. At the bottom of a list the
+ *   ring simply stops moving. Sixteen more presses cost sixteen round trips and
+ *   learn nothing, so a walk that stops making progress gives up and says so.
+ */
+import { openCdpTunnel } from "./cdpTunnel.js";
+import { pressButton } from "./pressButton.js";
+import { readFocusAt, ReadFocusResult } from "./readFocus.js";
+import { focusKey, describe } from "./focusKey.js";
+
+export type WalkDirection = "UP" | "DOWN" | "LEFT" | "RIGHT";
+
+export interface WalkToOptions {
+  direction: WalkDirection;
+  /** Text to look for on the focused control, or on its nearest labelled ancestor. */
+  text: string;
+  /** Max presses. Default 20. */
+  budget?: number;
+  /** Require the whole label to equal `text` rather than contain it. */
+  exact?: boolean;
+  /** Give up after this many presses that do not move the ring. Default 3. */
+  stallLimit?: number;
+  port?: string;
+  cdpUrl?: string;
+}
+
+export interface WalkToResult {
+  ok: boolean;
+  found: boolean;
+  reason?: string;
+  fidelity: "steam-routed" | null;
+  direction: WalkDirection;
+  text: string;
+  /** The label actually matched. Check this -- a substring match can land next door. */
+  matched: string | null;
+  presses: number;
+  /** Distinct labels seen, in order. The useful half of a miss. */
+  seen: string[];
+  focus: ReadFocusResult | null;
+  /** True when the walk stopped because the ring stopped moving. */
+  stalled: boolean;
+  summary: string;
+}
+
+const DIRECTIONS: WalkDirection[] = ["UP", "DOWN", "LEFT", "RIGHT"];
+
+/** Own text, then aria-label, then the nearest ancestor that has any. */
+export function labelOf(r: ReadFocusResult | null): string {
+  const el = r?.gpfocus;
+  if (!el) return "";
+  return (el.text || el.ariaLabel || el.ownerText || "").trim();
+}
+
+function matches(label: string, needle: string, exact: boolean): boolean {
+  if (!label) return false;
+  return exact
+    ? label.toLowerCase() === needle.toLowerCase()
+    : label.toLowerCase().includes(needle.toLowerCase());
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
+  const direction = (opts.direction ?? "").toString().toUpperCase() as WalkDirection;
+  const text = opts.text ?? "";
+  const budget = opts.budget ?? 20;
+  const exact = opts.exact === true;
+  const stallLimit = opts.stallLimit ?? 3;
+
+  const base: WalkToResult = {
+    ok: false,
+    found: false,
+    fidelity: null,
+    direction,
+    text,
+    matched: null,
+    presses: 0,
+    seen: [],
+    focus: null,
+    stalled: false,
+    summary: "",
+  };
+
+  if (!DIRECTIONS.includes(direction)) {
+    return {
+      ...base,
+      reason: `walkTo only moves the ring: direction must be one of ${DIRECTIONS.join(", ")}. ` +
+        "A, B and START are refused here because a walk must not be able to activate anything.",
+      summary: "refused: not a direction",
+    };
+  }
+  if (!text.trim()) {
+    return { ...base, reason: "No text to look for.", summary: "refused: nothing to look for" };
+  }
+
+  let cdpBase = opts.cdpUrl;
+  let closeTunnel: (() => void) | null = null;
+  if (!cdpBase) {
+    try {
+      const tunnel = await openCdpTunnel();
+      cdpBase = tunnel.base;
+      closeTunnel = tunnel.close;
+    } catch (err) {
+      return {
+        ...base,
+        reason: (err as Error).message,
+        summary: "could not reach the Deck, so nothing was pressed",
+      };
+    }
+  }
+
+  const seen: string[] = [];
+  let presses = 0;
+  let stalls = 0;
+  let stalled = false;
+
+  try {
+    let focus = await readFocusAt(cdpBase, 10_000);
+    if (!focus.ok) {
+      return {
+        ...base,
+        focus,
+        reason: focus.reason,
+        summary:
+          "could not read focus before the walk started, so nothing was pressed. " +
+          "If the ring is unowned -- which it is right after a plugin opens -- one press " +
+          "places it, and the walk can start after that.",
+      };
+    }
+
+    for (;;) {
+      const label = labelOf(focus);
+      if (label && !seen.includes(label)) seen.push(label);
+
+      if (matches(label, text, exact)) {
+        return {
+          ok: true,
+          found: true,
+          fidelity: presses > 0 ? "steam-routed" : null,
+          direction,
+          text,
+          matched: label,
+          presses,
+          seen,
+          focus,
+          stalled: false,
+          summary:
+            `found after ${presses} press(es): ${describe(focus)}` +
+            (exact || label.toLowerCase() === text.toLowerCase()
+              ? ""
+              : ` -- matched as a substring, so check this is the control you meant`),
+        };
+      }
+
+      if (presses >= budget) break;
+
+      const before = focusKey(focus);
+      const p = await pressButton({ buttons: [direction], port: opts.port });
+      if (!p.ok) {
+        return {
+          ...base,
+          presses,
+          seen,
+          focus,
+          reason: p.reason,
+          summary: `no press could be delivered after ${presses} step(s)`,
+        };
+      }
+      presses++;
+      await sleep(200);
+      focus = await readFocusAt(cdpBase, 10_000);
+      if (!focus.ok) {
+        return {
+          ...base,
+          presses,
+          seen,
+          focus,
+          reason: focus.reason,
+          summary: `focus became unreadable after ${presses} press(es)`,
+        };
+      }
+
+      // A ring that stops moving is at a dead end. Spending the rest of the
+      // budget on it costs a round trip per press and learns nothing.
+      if (focusKey(focus) === before) {
+        stalls++;
+        if (stalls >= stallLimit) {
+          stalled = true;
+          break;
+        }
+      } else {
+        stalls = 0;
+      }
+    }
+
+    return {
+      ...base,
+      ok: true,
+      found: false,
+      fidelity: presses > 0 ? "steam-routed" : null,
+      presses,
+      seen,
+      focus,
+      stalled,
+      summary: stalled
+        ? `the ring stopped moving after ${presses} press(es) without finding "${text}" - ` +
+          `this is the end of the line going ${direction}. Seen: ${seen.join(" | ") || "nothing labelled"}`
+        : `walked ${presses} control(s) without finding "${text}". ` +
+          `Seen: ${seen.join(" | ") || "nothing labelled"}`,
+    };
+  } finally {
+    closeTunnel?.();
+  }
+}
