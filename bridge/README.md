@@ -362,3 +362,54 @@ machine.
 
 Also still missing before P1 is real: `deck_pad*` MCP tools, the extension kill
 switch and status display, the stream/tee pipeline (S3), and BLE transport (L3).
+
+## Verification policy
+
+**Verify before every A press. Not before every D-pad move.**
+
+A D-pad move is reversible and harmless - the worst case is the highlight
+sitting somewhere unintended, which the next check catches. **A is the
+commitment.** It is where "walking a menu you only believe you are in" turns
+into activating something unknown, so that is the one place a check is
+mandatory.
+
+This keeps the rule that no macro may act on an unverified position, without
+paying for a check on every keypress. The cheap pattern:
+
+> Read the list **once** to compute the plan, execute the presses, verify
+> **once** before committing.
+
+Thirteen plugins in the Decky list means one live read plus one verify, not
+thirteen screenshots. Verification overhead for a full run lands around 20-30
+seconds rather than several minutes.
+
+### Oracles return verdicts, not pictures
+
+A check is **a program that returns a string**, never an image for a model to
+interpret. `qam_tab=decky conf=0.98` is a few tokens; a screenshot is over a
+thousand, and a nightly loop pays that on every step of every row.
+
+Screenshots belong on disk. An image should reach a model's context only when a
+check has **failed** and needs diagnosing, or when a human asked to see it.
+
+This is not aspirational: mapping the button table analysed 1,273 frames and put
+**four** images in front of a model, all four for calibration and for showing
+the maintainer. The map itself came from a script printing bounding boxes.
+
+### Which oracle answers which question
+
+| Question | Oracle | Why |
+|---|---|---|
+| Which QAM tab is focused? Is the QAM open? Which plugin row is highlighted? | CDP if it can reach Steam's chrome, else a cropped screenshot | Fixed screen regions, large highlight areas, and it survives DOM reshuffles |
+| What is the plugin's own focus state? | **CDP only** | A screenshot cannot distinguish `gpfocus` from `activeElement`, and that distinction is the entire content of bonsAI finding P1-5 |
+
+Worth testing early: Steam's UI is CEF and Decky injects into the same context,
+so CDP may be able to read the QAM rail directly. If it can, chrome checks
+become free and instant and screenshots drop to a fallback.
+
+### Scope
+
+Steam's chrome and Decky's own plugin list are **generic** - every Decky
+developer has the same QAM and the same loader list - so recognising them
+belongs here. Anything inside a plugin belongs to that plugin's repo. Per plan
+19 § 3, plugin-specific selectors never enter this tooling.
