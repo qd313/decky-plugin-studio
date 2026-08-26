@@ -413,3 +413,28 @@ Steam's chrome and Decky's own plugin list are **generic** - every Decky
 developer has the same QAM and the same loader list - so recognising them
 belongs here. Anything inside a plugin belongs to that plugin's repo. Per plan
 19 § 3, plugin-specific selectors never enter this tooling.
+
+## Tools
+
+| Tool | Does |
+|---|---|
+| `flash.ps1` | Compile + flash a sketch. Holds the FQBN and why each option matters. |
+| `pad.py` | Drive the board: `status`, `press`, `hold`, `release`, `watchdog-test`. |
+| `chord.py` | Hold one button, tap another. `chord.py GUIDE A` opens the QAM. |
+| `sweep.py` | Press named buttons in turn, for watching which lights up. |
+| `bitsweep.py` | Press raw bits 0-15 on a fixed 2.0 s grid, for mapping an unknown host. |
+| `runs.py` | **The one that produced the button map.** Finds every lit event in a recording and reports its bounding box. |
+| `analyze-sweep.py` | Same idea, keyed off a clapper marker instead of detected runs. |
+| `diag-activity.py` | Dumps the per-frame activity profile. Reach for this when a recording will not align. |
+| `watch-pad.py` | PC-side: watch what SDL receives from the board. |
+| `check-mapping.py` | PC-side: does SDL have a controller mapping for this device, or is it a raw joystick? |
+| `read-log.py` | Read the board's serial log for N seconds. Resets the board on open. |
+
+**Use `runs.py`, not `analyze-sweep.py`, until the latter is fixed.**
+`analyze-sweep.py` aligns frames by locating a clapperboard press, and on the
+recording that produced the button map it never found one - the opening seconds
+were swamped by the screen still settling. `runs.py` sidesteps alignment
+entirely by reporting every event it detects with a timestamp, which is then
+matched against the known 2.0 s grid by hand. That worked first time.
+
+A louder sync marker would fix `analyze-sweep.py`; nothing yet needs it.
