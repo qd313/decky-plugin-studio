@@ -1,13 +1,35 @@
 import * as vscode from "vscode";
-import { getMcpState } from "../mcp/client";
+import { getMcpState, McpState } from "../mcp/client";
 
+/**
+ * The one always-visible surface Studio has.
+ *
+ * Two things here are deliberate, both from a 2026-08-26 report of "the status
+ * bar is missing" (the real cause that time was the extension not being
+ * installed in that editor at all -- but both of these produce the identical
+ * symptom, and neither leaves a trace):
+ *
+ *   IT HAS AN id AND A name. Without them a user who hides the item has no
+ *   findable entry in the status bar's right-click *Manage* menu, so hiding it
+ *   once looks permanent.
+ *
+ *   THE TEXT STAYS SHORT. VS Code silently drops right-aligned items that do
+ *   not fit, with no overflow affordance -- so a crowded bar or a narrow window
+ *   makes a long item vanish. Detail belongs in the tooltip, which has no such
+ *   limit; the text carries only what is worth a glance.
+ */
 export class DeckyStatusBar {
   private item: vscode.StatusBarItem;
   private extensionVersion: string;
 
   constructor(context: vscode.ExtensionContext) {
     this.extensionVersion = context.extension.packageJSON.version ?? "?";
-    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    this.item = vscode.window.createStatusBarItem(
+      "deckyPluginStudio.status",
+      vscode.StatusBarAlignment.Right,
+      100,
+    );
+    this.item.name = "Decky Plugin Studio";
     this.item.command = "decky.openPreview";
     this.item.show();
     this.refresh();
@@ -16,8 +38,34 @@ export class DeckyStatusBar {
   refresh(): void {
     const s = getMcpState();
     const dot = (on: boolean) => (on ? "●" : "○");
-    this.item.text = `Decky v${this.extensionVersion} | $(${s.previewRunning ? "play" : "debug-pause"}) Preview ${dot(s.previewRunning)} | ${dot(s.tunnelRunning)} Tunnel | ${s.ingestCount} ingest | ${dot(s.ollamaReachable)} Ollama | HW: ${s.hwPreset}`;
-    this.item.tooltip = "Decky Plugin Studio (live preview is beta) — click to open preview";
+    this.item.text =
+      `$(${s.previewRunning ? "play" : "debug-pause"}) Decky ` +
+      `${dot(s.previewRunning)}${dot(s.tunnelRunning)}${dot(s.ollamaReachable)}`;
+    this.item.tooltip = this.tooltipFor(s);
+  }
+
+  /** Everything the text used to carry, plus what it never had room for. */
+  private tooltipFor(s: McpState): vscode.MarkdownString {
+    const row = (label: string, on: boolean, extra = "") =>
+      `| ${label} | ${on ? "● on" : "○ off"} | ${extra} |`;
+    const md = new vscode.MarkdownString(
+      [
+        `**Decky Plugin Studio** v${this.extensionVersion}`,
+        "",
+        "| | | |",
+        "|---|---|---|",
+        row("Preview", s.previewRunning, "live preview is beta"),
+        row("Tunnel", s.tunnelRunning),
+        row("Deck", s.deckReachable),
+        row("Ollama", s.ollamaReachable),
+        `| Ingest | ${s.ingestCount} | events |`,
+        `| Hardware | ${s.hwPreset} | |`,
+        "",
+        "Click to open the preview.",
+      ].join("\n"),
+    );
+    md.supportThemeIcons = true;
+    return md;
   }
 
   dispose(): void {
