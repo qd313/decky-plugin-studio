@@ -14,6 +14,7 @@ import * as plugin from "./tools/plugin.js";
 import * as preview from "./tools/preview.js";
 import * as deckAutonomy from "./tools/deckAutonomy.js";
 import { diffRpc } from "./preview/rpcDiff.js";
+import { lintFocus } from "./lint/index.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -94,6 +95,9 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
 
     case "tools/plugin_diffRpc":
       return diffRpc();
+
+    case "tools/plugin_lintFocus":
+      return lintFocus(params.pluginRoot != null ? String(params.pluginRoot) : undefined);
 
     case "tools/plugin_detect":
       return plugin.detectPlugin();

@@ -231,6 +231,21 @@ export const TOOLS: ToolDef[] = [
       "Report RPC parity between the frontend's call() sites and the methods main.py actually exposes. Catches renamed or removed backend methods before they fail at runtime on the device.",
     inputSchema: noArgs,
   },
+  {
+    name: "plugin_lintFocus",
+    description:
+      "Check a plugin's D-pad focus wiring from source: one-way moves, unreachable controls, controls with no A-button action, banned focus patterns, and sections that reveal or remove focus stops. Static only - it does not render or use a Deck, so it cannot check visual ordering. For 'does this press actually work on hardware', use deck_assertFocusMove.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        pluginRoot: {
+          type: "string",
+          description: "Plugin directory to check. Defaults to the current workspace root.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 
   // ---- Preview: lifecycle ------------------------------------------------
   {

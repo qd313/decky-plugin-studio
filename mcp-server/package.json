@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "tsc -p . && node scripts/copy-scripts.mjs",
-    "test": "tsc -p . && node --import tsx --test src/preview/rpcDiscover.test.ts src/preview/rpcDiff.test.ts src/toolRegistry.test.ts",
+    "test": "tsc -p . && node --import tsx --test src/preview/rpcDiscover.test.ts src/preview/rpcDiff.test.ts src/toolRegistry.test.ts src/lint/lint.test.ts",
     "pack": "npm pack",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"
@@ -18,11 +18,11 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "pixelmatch": "^7.1.0",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "typescript": "^5.6.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.6.2"
+    "tsx": "^4.7.0"
   }
 }

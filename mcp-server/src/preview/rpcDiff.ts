@@ -3,22 +3,10 @@ import path from "path";
 import { getWorkspaceRoot } from "../config.js";
 import { discoverWorkspaceRpcMethods } from "./rpcDiscover.js";
 import { resolveRpcAllowlist } from "./rpcAllowlist.js";
+import { walkSourceFiles } from "../lint/files.js";
 
 const CALL_RE = /\bcall\s*\(\s*["']([a-zA-Z_][\w]*)["']/g;
 const SERVER_CALL_RE = /ServerAPI\.callPluginMethod\s*\(\s*["']([a-zA-Z_][\w]*)["']/g;
-
-function walkSourceFiles(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === "dist") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      walkSourceFiles(full, out);
-    } else if (/\.(tsx?|jsx?)$/.test(entry.name)) {
-      out.push(full);
-    }
-  }
-}
 
 export function discoverFrontendRpcMethods(workspaceRoot?: string): string[] {
   const root = workspaceRoot ?? getWorkspaceRoot();

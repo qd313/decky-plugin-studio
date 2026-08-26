@@ -11,5 +11,8 @@
     "declaration": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  // Linter fixtures are sample PLUGIN source (JSX, decky imports). They exist
+  // to be parsed by the linter, never compiled by this server.
+  "exclude": ["src/lint/__fixtures__"]
 }

@@ -1,0 +1,21 @@
+{
+  "states": [
+    {
+      "name": "default",
+      "description": "Plugin as it first opens",
+      "reach": []
+    },
+    {
+      "name": "advanced-open",
+      "description": "Advanced section expanded by the toggle",
+      "reach": [
+        {
+          "press": "Down"
+        },
+        {
+          "press": "A"
+        }
+      ]
+    }
+  ]
+}
