@@ -24,8 +24,36 @@ function cpFiltered(src, dest) {
 fs.rmSync(resources, { recursive: true, force: true });
 fs.mkdirSync(resources, { recursive: true });
 
-cpFiltered(path.join(repoRoot, "mcp-server", "dist"), path.join(resources, "mcp-server", "dist"));
-fs.cpSync(path.join(repoRoot, "mcp-server", "dist", "scripts"), path.join(resources, "mcp-server", "dist", "scripts"), { recursive: true });
+const mcpDest = path.join(resources, "mcp-server");
+cpFiltered(path.join(repoRoot, "mcp-server", "dist"), path.join(mcpDest, "dist"));
+fs.cpSync(path.join(repoRoot, "mcp-server", "dist", "scripts"), path.join(mcpDest, "dist", "scripts"), { recursive: true });
+
+/*
+ * The MCP server needs its manifest and its runtime dependencies, and for a
+ * long time it shipped with neither.
+ *
+ * Only `dist/` was copied, so an installed VSIX contained a server that could
+ * not start: the first import of `pngjs` threw ERR_MODULE_NOT_FOUND and the
+ * process died before reading a single request. The extension swallowed that
+ * ("dev mode without built MCP"), so the status bar simply rendered its
+ * all-false defaults forever and every Studio tool was dead. It looked like a
+ * network problem. It was a packaging problem, and it had never worked.
+ *
+ * package.json matters on its own: without `"type": "module"` Node only guesses
+ * ESM by sniffing syntax, which it warns about and is not obliged to keep doing.
+ */
+fs.copyFileSync(path.join(repoRoot, "mcp-server", "package.json"), path.join(mcpDest, "package.json"));
+
+console.log("Installing MCP server dependencies for VSIX bundle...");
+const mcpInstall = spawnSync("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], {
+  cwd: mcpDest,
+  stdio: "inherit",
+  shell: true,
+});
+if (mcpInstall.status !== 0) {
+  console.error("Failed to install MCP server dependencies into extension/resources/mcp-server");
+  process.exit(1);
+}
 
 const previewDest = path.join(resources, "preview-server");
 cpFiltered(path.join(repoRoot, "preview-server"), previewDest);
@@ -48,5 +76,25 @@ if (!fs.existsSync(reactDomClient)) {
 }
 
 cpFiltered(path.join(repoRoot, "pack"), path.join(resources, "pack"));
+
+/*
+ * Prove the bundled server actually starts.
+ *
+ * A dependency check would have caught the pngjs omission, but only that one.
+ * Starting the thing and requiring an answer catches the whole class: a missing
+ * dep, a bad module type, a top-level throw, a dist that was never rebuilt.
+ * This runs against exactly what ships, which is the only version whose failure
+ * a user ever sees.
+ */
+console.log("Smoke-testing the bundled MCP server...");
+const smoke = spawnSync(
+  process.execPath,
+  [path.join(__dirname, "smoke-mcp-bundle.mjs"), path.join(mcpDest, "dist", "index.js"), extRoot],
+  { stdio: "inherit" },
+);
+if (smoke.status !== 0) {
+  console.error("The bundled MCP server does not start. Packaging it would ship a dead extension.");
+  process.exit(1);
+}
 
 console.log("Bundled MCP server, preview-server, and pack into extension/resources/");

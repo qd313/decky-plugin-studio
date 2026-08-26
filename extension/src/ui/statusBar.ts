@@ -38,6 +38,32 @@ export class DeckyStatusBar {
   refresh(): void {
     const s = getMcpState();
     const dot = (on: boolean) => (on ? "●" : "○");
+
+    // A dead server must not render as a row of "off" dots. Every signal below
+    // is reported *by* the server, so when it is not running they are all false
+    // for the same uninformative reason, and the bar ends up describing a
+    // healthy Deck as unreachable.
+    if (s.mcpHealth === "failed") {
+      this.item.text = "$(warning) Decky (server failed)";
+      this.item.command = "decky.showMcpOutput";
+      this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+      this.item.tooltip = new vscode.MarkdownString(
+        [
+          `**Decky Plugin Studio** v${this.extensionVersion}`,
+          "",
+          "The Studio server is not running, so none of the usual signals can be read.",
+          "This is **not** a report that your Deck is offline.",
+          "",
+          "Click to open the log.",
+          ...(s.mcpError ? ["", "```", s.mcpError.slice(0, 800), "```"] : []),
+        ].join("\n"),
+      );
+      this.item.show();
+      return;
+    }
+
+    this.item.command = "decky.openPreview";
+    this.item.backgroundColor = undefined;
     this.item.text =
       `$(${s.previewRunning ? "play" : "debug-pause"}) Decky ` +
       `${dot(s.previewRunning)}${dot(s.tunnelRunning)}${dot(s.ollamaReachable)}`;
@@ -60,6 +86,7 @@ export class DeckyStatusBar {
         row("Ollama", s.ollamaReachable),
         `| Ingest | ${s.ingestCount} | events |`,
         `| Hardware | ${s.hwPreset} | |`,
+        `| Server | ${s.mcpHealth} | |`,
         "",
         "Click to open the preview.",
       ].join("\n"),

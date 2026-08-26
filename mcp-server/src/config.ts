@@ -14,13 +14,33 @@ export function ensureConfigDir(): void {
   fs.mkdirSync(getConfigDir(), { recursive: true });
 }
 
+/**
+ * Settings the host editor may override, in order of who wins.
+ *
+ * These were dead until 2026-08-26. The extension declared
+ * `deckyPluginStudio.deckIp` and `.deckUser` in its manifest and then never
+ * read them -- there was not a single `getConfiguration` call anywhere in the
+ * extension -- so a user could type their Deck's IP into VS Code settings, see
+ * it saved, and get no connection and no complaint. A setting that does nothing
+ * is worse than no setting: it sends you looking at your network.
+ */
+const HOST_OVERRIDABLE = ["DECK_IP", "DECK_USER"] as const;
+
 export function readDeckEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   const envPath = getDeckEnvPath();
-  if (!fs.existsSync(envPath)) return env;
-  for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
-    const m = line.match(/^\s*([^#]\S+?)\s*=\s*(.+)$/);
-    if (m) env[m[1]] = m[2].trim();
+  if (fs.existsSync(envPath)) {
+    for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
+      const m = line.match(/^\s*([^#]\S+?)\s*=\s*(.+)$/);
+      if (m) env[m[1]] = m[2].trim();
+    }
+  }
+  // An explicitly set variable wins over the file, because it is the one the
+  // user just typed. Blank counts as unset, so an empty setting -- which is the
+  // default -- cannot wipe out a working deck.env.
+  for (const key of HOST_OVERRIDABLE) {
+    const v = process.env[key];
+    if (v && v.trim()) env[key] = v.trim();
   }
   return env;
 }

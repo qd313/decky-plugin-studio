@@ -58,6 +58,11 @@
         "title": "Refresh",
         "category": "Decky",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "decky.showMcpOutput",
+        "title": "Show Studio Server Log",
+        "category": "Decky"
       }
     ],
     "viewsContainers": {
