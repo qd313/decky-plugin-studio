@@ -194,6 +194,56 @@ export const TOOLS: ToolDef[] = [
     inputSchema: noArgs,
   },
   {
+    name: "deck_pressButton",
+    description:
+      "Deliver a real controller press to the Deck through the ESP32 bridge board, which Steam sees as a USB gamepad and routes through Steam Input. This is the only press that proves anything about D-pad wiring; if the bridge is unavailable it refuses rather than falling back to a synthetic press, because a synthetic one proves a handler ran and nothing more. To press AND check what happened, use deck_assertFocusMove instead.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        buttons: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "One or more of UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3. Several at once is a chord, e.g. [GUIDE, A] opens the Quick Access Menu.",
+        },
+        holdMs: { type: "number", default: 80, description: "How long to hold the press." },
+        port: { type: "string", description: "Serial port of the bridge's COM side, e.g. COM7." },
+      },
+      required: ["buttons"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_assertFocusMove",
+    description:
+      "Press a button on the Deck and report what Steam's nav graph actually did, reading focus before and after. Reports 'moved' and 'matched' separately, which is the point: moved=false means the press never landed anywhere, while moved=true with matched=false means the press arrived and focus went somewhere other than the target - a wiring bug rather than a missing handler. Needs both the bridge board and a Deck reachable over SSH; it refuses rather than guessing when either is missing.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        press: {
+          type: "array",
+          items: { type: "string" },
+          description: "Button(s) to press, as for deck_pressButton.",
+        },
+        expect: {
+          type: "string",
+          description:
+            "CSS selector the focused element should match afterwards. Omit to just report where focus went.",
+        },
+        holdMs: { type: "number", default: 80 },
+        settleTimeoutMs: {
+          type: "number",
+          default: 2500,
+          description: "How long to keep reading focus until it stops changing.",
+        },
+        port: { type: "string", description: "Serial port of the bridge's COM side." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
+      required: ["press"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_readFocus",
     description:
       "Report what Steam's gamepad nav graph actually owns on the connected Deck, read over CDP. Returns the gpfocus element and its gpfocuswithin ancestors, plus document.activeElement as a contrast field and an 'agree' flag - the two disagree often on Deck, and believing activeElement is what makes a focus fix look successful when nothing moved. Needs a Deck reachable over SSH with CEF debugging enabled; it opens and closes its own forward tunnel. This reads focus, it does not move it - to check that a press actually lands, press with the bridge and read focus before and after.",

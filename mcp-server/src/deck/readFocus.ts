@@ -58,6 +58,8 @@ export interface ReadFocusResult {
   /** e.g. "999" for Decky; Steam's own tabs are 0 and 3-7. */
   quickAccessTab: string | null;
   targetsScanned: string[];
+  /** Did the focused element match the caller's `expect` selector? null = not asked, or the selector was invalid. */
+  matchesExpect?: boolean | null;
 }
 
 /**
@@ -72,7 +74,10 @@ export interface ReadFocusResult {
  * does not verify is returned with selectorVerified:false rather than silently
  * handed over as if it were good.
  */
-const PAGE_EXPRESSION = `(() => {
+function pageExpression(expect?: string): string {
+  const EXPECT = expect ? JSON.stringify(expect) : "null";
+  return `(() => {
+  var EXPECT = ${EXPECT};
   var STABLE_CLASS = /^_?[A-Za-z]+$/;
   var REACT_ID = /^\\u00ab/;
 
@@ -154,6 +159,12 @@ const PAGE_EXPRESSION = `(() => {
     if (pane) tab = pane.id.replace('quickaccess_content_', '');
   }
 
+  // A selector we cannot parse is "unknown", not "did not match".
+  var matchesExpect = null;
+  if (EXPECT && gp) {
+    try { matchesExpect = gp.matches(EXPECT); } catch (e) { matchesExpect = null; }
+  }
+
   return {
     hasGpfocus: !!gp,
     elementCount: document.querySelectorAll('*').length,
@@ -162,9 +173,11 @@ const PAGE_EXPRESSION = `(() => {
     activeElement: describe(active),
     agree: !!gp && gp === active,
     quickAccessTab: tab,
-    deckyPluginRoot: tab === '999'
+    deckyPluginRoot: tab === '999',
+    matchesExpect: matchesExpect
   };
 })()`;
+}
 
 interface PageResult {
   hasGpfocus: boolean;
@@ -175,6 +188,7 @@ interface PageResult {
   agree: boolean;
   quickAccessTab: string | null;
   deckyPluginRoot: boolean;
+  matchesExpect: boolean | null;
 }
 
 export interface ReadFocusOptions {
@@ -212,7 +226,11 @@ function emptyResult(method: string): ReadFocusResult {
  * Exported so a caller holding its own tunnel -- or a test holding a fake CDP
  * server -- can use it without any SSH involved.
  */
-export async function readFocusAt(base: string, timeoutMs = 10_000): Promise<ReadFocusResult> {
+export async function readFocusAt(
+  base: string,
+  timeoutMs = 10_000,
+  expect?: string,
+): Promise<ReadFocusResult> {
   const empty = emptyResult(`cdp:${base}`);
 
   let targets: CdpTarget[];
@@ -245,7 +263,7 @@ export async function readFocusAt(base: string, timeoutMs = 10_000): Promise<Rea
     try {
       page = await evaluate<PageResult>(
         rewriteWsHost(t.webSocketDebuggerUrl!, base),
-        PAGE_EXPRESSION,
+        pageExpression(expect),
         timeoutMs,
       );
     } catch (err) {
@@ -267,6 +285,7 @@ export async function readFocusAt(base: string, timeoutMs = 10_000): Promise<Rea
       deckyPluginRoot: page.deckyPluginRoot,
       quickAccessTab: page.quickAccessTab,
       targetsScanned: scanned,
+      matchesExpect: page.matchesExpect ?? null,
     };
   }
 

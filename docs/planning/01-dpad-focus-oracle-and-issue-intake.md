@@ -139,6 +139,22 @@ build in the result for post-mortems.
 
 ### A.2 Input injection — `deck.pressButton`
 
+**Status 2026-08-26 — built, by a different mechanism than this section specifies.** Shipped
+as `deck_pressButton` (`mcp-server/src/deck/pressButton.ts`). The press comes from the ESP32-S3
+bridge board, not from a uinput virtual pad. The bridge is a physical USB HID gamepad; the Deck
+enumerates it as `js0: Espressif Systems ESP32S3_DEV`, and Steam routes it through Steam Input
+like any controller. That is the same `steam-routed` fidelity this section asks for, reached
+without writing a uinput helper or shipping anything to the device.
+
+**A.3's spike is therefore moot.** Its question was "will gamescope accept a fresh virtual
+device, or does it need a manual enable in Steam Input?" We have a device Steam demonstrably
+accepts. The three sub-questions about `python3`/`evdev` on stock SteamOS and read-only `/usr`
+fall away with it: nothing is installed on the Deck at all.
+
+Decision E2 is implemented as written -- when the bridge is unavailable the tool **refuses**,
+with a reason. There is no synthetic fallback.
+
+
 **Recommended mechanism: uinput virtual gamepad.** Create a virtual Xbox-layout pad on the
 Deck via `/dev/uinput`, emit a D-pad/A/B press, destroy it (or keep it warm for a session).
 Steam enumerates evdev devices and routes them through Steam Input into the same nav path a
@@ -194,6 +210,32 @@ alone converts "I think it's focused" into "Steam says it is not", which is the 
 bonsAI could not make.
 
 ### A.4 The composite — `deck.assertFocusMove`
+
+**Status 2026-08-26 — built and verified on hardware.** Shipped as `deck_assertFocusMove`
+(`mcp-server/src/deck/assertFocusMove.ts`). Roughly 4.4 s end to end including opening its own
+SSH forward; focus settles in ~290 ms and is polled until it stops changing, never sampled once
+(decision 21).
+
+All three outcomes were produced against a live Deck, in the Decky plugin list:
+
+| Press | `moved` | `matched` | Reading |
+|---|---|---|---|
+| `DOWN`, expect `.DialogButton` | true | true | worked -- MagicPods → Controller Tools |
+| `UP`, expect `.NoSuchThing` | true | **false** | the press arrived, focus went elsewhere: wiring wrong, not missing |
+| `L3`, expect `.DialogButton` | **false** | true | the press arrived and moved nothing |
+
+The middle row is the deliverable. It is the distinction bonsAI could not make, and it is why
+`moved` and `matched` are separate fields rather than one boolean.
+
+One implementation note worth keeping: the composite opens **one** tunnel for the whole
+sequence and reuses it for every poll. Opening one per read would add ~350 ms to each and make
+the settle figure mostly a measurement of SSH.
+
+**Not built:** the `screenshots` field this section sketches. The oracle returns a verdict in a
+few tokens; a screenshot is over a thousand, and the maintainer's standing preference is that
+oracles return strings rather than pictures. Worth adding as opt-in if a failure ever needs
+eyes on it.
+
 
 The tool a consumer actually calls, and the one the pack should require as gate evidence:
 
@@ -297,8 +339,10 @@ longer gates anything: we already have a device Steam demonstrably accepts. A.2 
 The decisions around it still stand: never drive the virtual pad and the real controller at
 once, and refuse rather than degrade when the pad is unavailable (E2).
 
-**Next is A.4**, `deck.assertFocusMove` — readFocus before, bridge press, readFocus after,
-with `moved` and `matched` reported separately. Both halves now exist.
+**A.4 is now built too** — see its section. The press-and-observe loop is closed: an agent can
+press a real button and get a truthful, machine-readable answer about what Steam did, with
+nobody at the device. **Next is A.5**, the pack work: gate steps, the skill, and the
+fidelity fail-condition.
 
 Note A.0 is not a consolation prize — the findings doc lists it as ask #4, and it is the only
 item that helps consumers *already on v0.3.6*.

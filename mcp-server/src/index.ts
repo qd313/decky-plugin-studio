@@ -16,6 +16,8 @@ import * as deckAutonomy from "./tools/deckAutonomy.js";
 import { diffRpc } from "./preview/rpcDiff.js";
 import { lintFocus } from "./lint/index.js";
 import { readFocus } from "./deck/readFocus.js";
+import { pressButton } from "./deck/pressButton.js";
+import { assertFocusMove } from "./deck/assertFocusMove.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -84,6 +86,24 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
 
     case "tools/deck_openPlugin":
       return deckAutonomy.openPlugin();
+
+    case "tools/deck_pressButton":
+      return pressButton({
+        buttons: (params.buttons as string[]) ?? [],
+        holdMs: params.holdMs != null ? Number(params.holdMs) : undefined,
+        port: params.port != null ? String(params.port) : undefined,
+      });
+
+    case "tools/deck_assertFocusMove":
+      return assertFocusMove({
+        press: (params.press as string | string[]) ?? [],
+        expect: params.expect != null ? String(params.expect) : undefined,
+        holdMs: params.holdMs != null ? Number(params.holdMs) : undefined,
+        port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        settleTimeoutMs:
+          params.settleTimeoutMs != null ? Number(params.settleTimeoutMs) : undefined,
+      });
 
     case "tools/deck_readFocus":
       return readFocus({

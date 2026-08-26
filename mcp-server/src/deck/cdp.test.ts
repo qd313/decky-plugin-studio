@@ -15,6 +15,8 @@ import type { Socket } from "node:net";
 
 import { evaluate, listTargets, getVersion, rewriteWsHost } from "./cdp.js";
 import { readFocusAt } from "./readFocus.js";
+import { pressButton, findPadTool } from "./pressButton.js";
+import { assertFocusMove } from "./assertFocusMove.js";
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -274,4 +276,65 @@ test("rewriteWsHost points a target's own address at the tunnel we dialled", () 
     rewriteWsHost("ws://127.0.0.1:8080/devtools/page/AB", "http://127.0.0.1:18080"),
     "ws://127.0.0.1:18080/devtools/page/AB",
   );
+});
+
+// --------------------------------------------------------------------------
+// Press + assert. These cover the refusal paths, which are the ones that must
+// never quietly degrade -- a synthetic press that "succeeds" is the exact bug
+// this feature exists to remove. The happy path needs a Deck and a bridge and
+// is verified on hardware instead.
+// --------------------------------------------------------------------------
+
+test("pressButton refuses an unknown button instead of guessing", async () => {
+  const r = await pressButton({ buttons: ["DIAGONAL"] });
+  assert.equal(r.ok, false);
+  assert.equal(r.fidelity, null);
+  assert.match(r.reason ?? "", /Unknown button/);
+  assert.match(r.reason ?? "", /UP, DOWN, LEFT, RIGHT/);
+});
+
+test("pressButton refuses an empty press", async () => {
+  const r = await pressButton({ buttons: [] });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /No buttons given/);
+});
+
+test("pressButton normalises case before validating", async () => {
+  // "down" is a real button; the refusal must not be about the name.
+  const r = await pressButton({ buttons: ["down"], timeoutMs: 1 });
+  assert.equal(r.buttons[0], "DOWN");
+  assert.doesNotMatch(r.reason ?? "", /Unknown button/);
+});
+
+test("the bridge tool is findable from the built server", () => {
+  // If this breaks, every press refuses with a confusing "not found" message.
+  assert.ok(findPadTool(), "bridge/tools/pad.py should be locatable by walking up");
+});
+
+test("assertFocusMove refuses when the Deck cannot be reached", async () => {
+  const r = await assertFocusMove({ press: "DOWN", cdpUrl: "http://127.0.0.1:1" });
+  assert.equal(r.ok, false);
+  assert.equal(r.moved, false);
+  assert.equal(r.fidelity, null);
+  assert.match(r.diagnosis, /nothing was pressed/);
+});
+
+test("assertFocusMove refuses when no real press can be delivered", async () => {
+  // Focus reads fine; the press is what fails. Nothing may be concluded about
+  // the wiring from that, and the result must say so rather than report a move.
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => focusedPage);
+  try {
+    const r = await assertFocusMove({
+      press: "NOT_A_BUTTON",
+      cdpUrl: fake.base,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.moved, false);
+    assert.equal(r.fidelity, null);
+    assert.ok(r.before?.ok, "focus before the press was read successfully");
+    assert.match(r.diagnosis, /no press was delivered/);
+    assert.match(r.reason ?? "", /Unknown button/);
+  } finally {
+    await fake.close();
+  }
 });
