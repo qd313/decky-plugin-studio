@@ -250,3 +250,60 @@ trip each and learn nothing; the first time this happened it silently ate sixtee
 device: at the end of the bonsAI panel the shipped tool now gives up after 3 presses with *"this is
 the end of the line going DOWN"* instead of spending its whole budget.
 
+---
+
+## 10. `deck_readPage` / `deck_waitFor` — asking the page a question
+
+`deck_readFocus` answers exactly one thing: where the gamepad ring is. That is enough for a pure
+D-pad row and nothing else. Every real bug settled in the first two days needed a second question
+it cannot answer — is the ladder mounted and whose is it, is the spoiler fence wrapped in a
+`<pre>`, which QAM pane is on screen, has the reply finished, what are this tab's controls called.
+All of that was answered with a throwaway script, which made the most load-bearing capability in
+the rig the one thing not shipped.
+
+`deck_readPage` evaluates an expression in the plugin's page and returns the value as JSON.
+`deck_waitFor` polls one until it holds, over a single tunnel — waiting for a reply to finish or a
+panel to mount was hand-rolled four or five times, each as a loop that opened a fresh tunnel per
+check.
+
+**Read, do not drive.** This runs JavaScript in the Steam client, so it *can* change the page, and
+it must not be used to. A DOM write that makes the UI look right proves nothing about whether a
+user could have reached that state with a controller; asserting on UI you drove by script is the
+exact no-op-fix shape this rig exists to remove. There is deliberately no attempt to detect or
+block mutation — pattern-matching for `.value =` would refuse honest reads, wave through dishonest
+ones, and sell a feeling of safety instead of the real thing. Setup that genuinely needs a write
+belongs in a named script that says so, the way bonsAI's `deck_send_ask.py` does.
+
+A timeout in `waitFor` is a finding, not an error: *"the reply never finished in 60s"* is a result,
+and the last value seen comes back so the caller can see how far it got.
+
+Measured live: a read is ~25 ms once the tunnel is up; a satisfied wait returned in one poll.
+
+### `acquireFocus`, on by default
+
+Opening a Decky plugin leaves the ring unowned (doc 03), and so does finishing an Ask. That state
+caught every early session: a walk would refuse, a human would press Down by hand, and the walk
+would then work. `deck_walkTo` now spends one press placing the ring and carries on. Turn it off
+when the unowned state is itself what you are testing.
+
+---
+
+## 11. The suite could drive the Deck, and did
+
+Adding `acquireFocus` made `walkTo`'s unit test send a live DOWN press to a real device, because
+the bridge board is plugged into the machine that runs the tests. It had been doing it for about
+eight seconds per run before anyone noticed — the test "passed" only because real hardware moved.
+
+`DPS_NO_BRIDGE=1` now makes every press refuse before anything is spawned, and each test file sets
+it. The guard sits *after* argument validation, so "unknown button" still means unknown button
+whether or not a board is attached.
+
+One test was genuinely hardware-dependent — stall detection needs presses to stall. Rather than
+fake a press, which would have meant a synthetic `steam-routed` success living in the codebase,
+that test now pins the refusal path and the stall behaviour stays hardware-verified.
+
+The same session found a defect in the fake CDP server: it answered *any* frame, so the close frame
+a client sends on disconnect was decoded as another `Runtime.evaluate` and silently ate a reply. A
+poller saw every second value — three evaluations reported as two polls. It now checks the opcode.
+A test double that miscounts is worse than no double at all.
+

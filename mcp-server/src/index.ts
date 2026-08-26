@@ -21,6 +21,7 @@ import { assertFocusMove } from "./deck/assertFocusMove.js";
 import { runSequence, SequenceStep } from "./deck/runSequence.js";
 import { openPluginDriven } from "./deck/openPlugin.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
+import { readPage, waitFor } from "./deck/readPage.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -101,6 +102,24 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
       });
     }
 
+    case "tools/deck_readPage":
+      return readPage({
+        expression: String(params.expression ?? ""),
+        target: params.target != null ? String(params.target) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        timeoutMs: params.timeoutMs != null ? Number(params.timeoutMs) : undefined,
+      });
+
+    case "tools/deck_waitFor":
+      return waitFor({
+        expression: String(params.expression ?? ""),
+        equals: Object.prototype.hasOwnProperty.call(params, "equals") ? params.equals : undefined,
+        waitMs: params.waitMs != null ? Number(params.waitMs) : undefined,
+        intervalMs: params.intervalMs != null ? Number(params.intervalMs) : undefined,
+        target: params.target != null ? String(params.target) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+      });
+
     case "tools/deck_walkTo":
       return walkTo({
         direction: String(params.direction ?? "DOWN").toUpperCase() as WalkDirection,
@@ -108,6 +127,7 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         budget: params.budget != null ? Number(params.budget) : undefined,
         exact: params.exact != null ? Boolean(params.exact) : undefined,
         stallLimit: params.stallLimit != null ? Number(params.stallLimit) : undefined,
+        acquireFocus: params.acquireFocus != null ? Boolean(params.acquireFocus) : undefined,
         port: params.port != null ? String(params.port) : undefined,
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
       });

@@ -6,6 +6,13 @@
  * substring match landing one control short of the target, a toggle whose label
  * lives on an ancestor, and a dead end that quietly ate a whole budget.
  */
+/*
+ * Hardware guard. The bridge board is plugged into the machine that runs this
+ * suite, so any test reaching pressButton would move the ring on a real Deck.
+ * Set before anything runs, and never overridden if the caller set it already.
+ */
+process.env.DPS_NO_BRIDGE ??= "1";
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -58,15 +65,36 @@ test("an unreachable Deck stops before any press", async () => {
   assert.match(r.summary, /could not read focus before the walk started/);
 });
 
-test("an unowned ring explains itself instead of pressing blind", async () => {
-  // The state right after a plugin opens. Telling the caller one press places
-  // the ring is the difference between a usable message and a dead end.
+test("acquireFocus:false leaves an unowned ring alone and says what to do", async () => {
+  // The state right after a plugin opens. With acquiring switched off nothing
+  // is pressed at all, and the message has to point at the way forward.
+  const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);
+  try {
+    const r = await walkTo({
+      direction: "DOWN",
+      text: "Retry",
+      acquireFocus: false,
+      cdpUrl: fake.base,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.presses, 0);
+    assert.equal(r.acquired, false);
+    assert.match(r.summary, /acquireFocus does that automatically/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("acquiring an unowned ring needs the bridge, and says so when it is disabled", async () => {
+  // With DPS_NO_BRIDGE set -- which the suite always sets -- the acquire press
+  // cannot be delivered, so the walk must report that rather than pretending it
+  // placed the ring. The press itself is verified on hardware, not here.
   const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);
   try {
     const r = await walkTo({ direction: "DOWN", text: "Retry", cdpUrl: fake.base });
     assert.equal(r.ok, false);
+    assert.equal(r.acquired, false, "no press landed, so nothing was acquired");
     assert.equal(r.presses, 0);
-    assert.match(r.summary, /one press places it/);
   } finally {
     await fake.close();
   }
@@ -124,23 +152,29 @@ test("a control labelled only by its ancestor is still findable", () => {
   assert.equal(labelOf(toggle), "Hybrid retrieval (meaning search)");
 });
 
-test("a dead end stops the walk instead of spending the whole budget", async () => {
-  // Bottom of a list: the ring stops moving. Found on hardware, where sixteen
-  // further presses cost sixteen round trips and learned nothing.
+test("a walk that cannot press says so rather than reporting a miss", async () => {
+  /*
+   * Stall detection -- giving up when the ring stops moving instead of spending
+   * the whole budget -- cannot be unit tested, because exercising the loop needs
+   * real presses and the suite is forbidden from sending them. An earlier
+   * version of this test did press, on a real Deck, for eight seconds, which is
+   * how the DPS_NO_BRIDGE guard came to exist.
+   *
+   * It is verified on hardware instead: at the bottom of the bonsAI panel the
+   * shipped tool gives up after 3 presses with "this is the end of the line
+   * going DOWN" rather than the 16 an earlier build spent there.
+   *
+   * What IS pinned here is that a walk which cannot press reports the refusal,
+   * rather than walking zero controls and calling it "not found" -- those two
+   * mean very different things to a caller.
+   */
   const fake = await startFakeCdp(["QuickAccess_uid2"], () => pageWith("Save chat to Desktop"));
   try {
-    const r = await walkTo({
-      direction: "DOWN",
-      text: "Retry",
-      budget: 40,
-      stallLimit: 2,
-      cdpUrl: fake.base,
-    });
+    const r = await walkTo({ direction: "DOWN", text: "Retry", budget: 40, cdpUrl: fake.base });
     assert.equal(r.found, false);
-    assert.equal(r.stalled, true);
-    assert.ok(r.presses <= 3, `should give up quickly, took ${r.presses}`);
-    assert.match(r.summary, /end of the line going DOWN/);
-    assert.deepEqual(r.seen, ["Save chat to Desktop"]);
+    assert.match(r.reason ?? "", /DPS_NO_BRIDGE/);
+    assert.match(r.summary, /no press could be delivered/);
+    assert.deepEqual(r.seen, ["Save chat to Desktop"], "it still reports what it did see");
   } finally {
     await fake.close();
   }

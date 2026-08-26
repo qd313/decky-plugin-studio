@@ -212,6 +212,50 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "deck_readPage",
+    description:
+      "Ask the plugin's own page a question and get the answer back as JSON. deck_readFocus answers exactly one thing — where the gamepad ring is — and almost every real investigation needs a second question it cannot answer: is this element mounted, is it wrapped in the tag we think, which panel is on screen, has the reply finished, what are this tab's controls called. READ, DO NOT DRIVE: this runs JavaScript in the Steam client so it CAN change the page, and it must not be used to. A DOM write that makes the UI look right proves nothing about whether a user could have reached that state with a controller, and asserting on UI you drove by script is the exact no-op-fix shape this rig exists to remove — if you want the UI to change, press a button. The expression must EVALUATE to a JSON-serialisable value: wrap statements in an IIFE and return plain data, never DOM nodes.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        expression: {
+          type: "string",
+          description:
+            "JavaScript expression evaluated in the page, e.g. (() => ({ ladders: document.querySelectorAll('.bonsai-chip-ladder').length }))()",
+        },
+        target: {
+          type: "string",
+          description:
+            "CEF target title to run against. Defaults to the Quick Access Menu, which is where Decky plugins render.",
+        },
+        timeoutMs: { type: "number", default: 10000 },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
+      required: ["expression"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_waitFor",
+    description:
+      "Poll a page expression until it is satisfied, over a single tunnel. Use it to wait for a reply to finish streaming, a panel to mount, or a state to settle, instead of sleeping a guessed number of seconds or opening a fresh tunnel per check. Stops on the first truthy value, or on an exact match when `equals` is given. A timeout is NOT an error — 'the reply never finished within 60s' is a finding, and the last value seen comes back so you can see how far it got. Same read-only contract as deck_readPage.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        expression: { type: "string", description: "Expression to poll, as for deck_readPage." },
+        equals: {
+          description: "Stop when the value equals this (compared as JSON). Omit to stop on any truthy value.",
+        },
+        waitMs: { type: "number", default: 30000, description: "How long to keep asking." },
+        intervalMs: { type: "number", default: 500, description: "Gap between reads." },
+        target: { type: "string", description: "CEF target title. Defaults to the Quick Access Menu." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
+      required: ["expression"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_walkTo",
     description:
       "Move the Deck's focus ring one direction until it lands on a control with the given text, reading focus after every single press. This is how you get the ring somewhere before asserting anything, and it is a search rather than a guess: no press count is assumed, and the label that actually matched is reported back. It only ever sends direction presses, never A/B/START, so a walk cannot activate a control or launch anything — acting on what it finds is the caller's job. Matching is substring by default and also considers the nearest labelled ancestor, because Decky's ToggleField puts the ring on an unlabelled inner div. Watch for near-misses: walking to \"ask\" stops on \"Attach screenshot to Ask\"; pass exact:true when the name is a common word. A walk whose ring stops moving reports stalled:true rather than burning its budget on a dead end.",
@@ -237,6 +281,12 @@ export const TOOLS: ToolDef[] = [
           type: "number",
           default: 3,
           description: "Give up after this many presses that do not move the ring.",
+        },
+        acquireFocus: {
+          type: "boolean",
+          default: true,
+          description:
+            "When nothing owns the ring — which is the state right after a plugin opens, and after an Ask finishes — spend one press placing it and carry on. Set false only when the unowned state is itself what you are testing.",
         },
         port: { type: "string", description: "Serial port of the bridge's COM side." },
         cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },

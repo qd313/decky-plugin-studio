@@ -7,6 +7,13 @@
  * round-trip to prove it, and anyone without a Steam Deck still has to be able
  * to run the suite.
  */
+/*
+ * Hardware guard. The bridge board is plugged into the machine that runs this
+ * suite, so any test reaching pressButton would move the ring on a real Deck.
+ * Set before anything runs, and never overridden if the caller set it already.
+ */
+process.env.DPS_NO_BRIDGE ??= "1";
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";

@@ -46,6 +46,17 @@ export interface WalkToOptions {
   exact?: boolean;
   /** Give up after this many presses that do not move the ring. Default 3. */
   stallLimit?: number;
+  /**
+   * When nothing owns the gamepad ring, spend one press placing it and carry on.
+   *
+   * Opening a Decky plugin leaves focus unowned -- platform behaviour, measured,
+   * see planning doc 03 -- and so does finishing an Ask. That state caught every
+   * early session: the walk would refuse, a human would press Down by hand, and
+   * the walk would then work. Default true, because "place the ring first" is
+   * the only sensible thing to do and making the caller remember it is just a
+   * tax. Set false when the unowned state is itself what you are testing.
+   */
+  acquireFocus?: boolean;
   port?: string;
   cdpUrl?: string;
 }
@@ -65,6 +76,8 @@ export interface WalkToResult {
   focus: ReadFocusResult | null;
   /** True when the walk stopped because the ring stopped moving. */
   stalled: boolean;
+  /** True when a press was spent placing an unowned ring before the walk began. */
+  acquired: boolean;
   summary: string;
 }
 
@@ -104,6 +117,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
     seen: [],
     focus: null,
     stalled: false,
+    acquired: false,
     summary: "",
   };
 
@@ -142,15 +156,33 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
 
   try {
     let focus = await readFocusAt(cdpBase, 10_000);
+    let acquired = false;
+
+    // Unowned ring: one press places it rather than moving it, so spend that
+    // press here and re-read before the walk proper begins.
+    const unowned = !focus.ok && (focus.reason ?? "").includes("gpfocus marker not found");
+    if (unowned && opts.acquireFocus !== false) {
+      const p = await pressButton({ buttons: [direction], port: opts.port });
+      if (p.ok) {
+        acquired = true;
+        presses++;
+        await sleep(250);
+        focus = await readFocusAt(cdpBase, 10_000);
+      }
+    }
+
     if (!focus.ok) {
       return {
         ...base,
         focus,
+        presses,
+        acquired,
         reason: focus.reason,
-        summary:
-          "could not read focus before the walk started, so nothing was pressed. " +
-          "If the ring is unowned -- which it is right after a plugin opens -- one press " +
-          "places it, and the walk can start after that.",
+        summary: acquired
+          ? `spent one press trying to place an unowned ring and focus is still unreadable: ${focus.reason ?? ""}`
+          : "could not read focus before the walk started, so nothing was pressed. " +
+            "If the ring is unowned -- which it is right after a plugin opens -- one press " +
+            "places it; acquireFocus does that automatically and is on by default.",
       };
     }
 
@@ -170,6 +202,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           seen,
           focus,
           stalled: false,
+          acquired,
           summary:
             `found after ${presses} press(es): ${describe(focus)}` +
             (exact || label.toLowerCase() === text.toLowerCase()
@@ -228,6 +261,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       seen,
       focus,
       stalled,
+      acquired,
       summary: stalled
         ? `the ring stopped moving after ${presses} press(es) without finding "${text}" - ` +
           `this is the end of the line going ${direction}. Seen: ${seen.join(" | ") || "nothing labelled"}`

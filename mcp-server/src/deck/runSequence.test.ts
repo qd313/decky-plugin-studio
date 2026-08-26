@@ -14,6 +14,13 @@
  * without hardware are the refusals, and those are exactly the ones that must
  * never quietly degrade. The happy path is verified on a Deck.
  */
+/*
+ * Hardware guard. The bridge board is plugged into the machine that runs this
+ * suite, so any test reaching pressButton would move the ring on a real Deck.
+ * Set before anything runs, and never overridden if the caller set it already.
+ */
+process.env.DPS_NO_BRIDGE ??= "1";
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 

@@ -83,6 +83,18 @@ export async function startFakeCdp(
     const title = targetTitles[idx];
 
     socket.on("data", (chunk: Buffer) => {
+      /*
+       * Only TEXT frames are commands.
+       *
+       * This used to answer whatever arrived, which meant the close frame the
+       * client sends on disconnect was decoded as another Runtime.evaluate and
+       * silently consumed a reply. A poller then saw every second value: three
+       * evaluations came back as two polls. Real Chrome ignores a close frame
+       * here, and a test double that miscounts is worse than no double at all.
+       */
+      const opcode = chunk[0] & 0x0f;
+      if (opcode !== 0x1) return;
+
       // Decode one masked client text frame. Enough for these tests.
       const len0 = chunk[1] & 0x7f;
       let offset = 2;
@@ -106,10 +118,18 @@ export async function startFakeCdp(
         /* keep the default */
       }
 
-      const body = Buffer.from(
-        JSON.stringify({ id, result: { result: { value: pageValue(title, reads++) } } }),
-        "utf8",
-      );
+      // A pageValue of { __throw: "..." } comes back as a real CDP
+      // exceptionDetails, so the "expression threw in the page" path can be
+      // tested without asking this fake to actually evaluate JavaScript.
+      const produced = pageValue(title, reads++) as { __throw?: string } | unknown;
+      const thrown =
+        produced && typeof produced === "object" && "__throw" in (produced as object)
+          ? (produced as { __throw?: string }).__throw
+          : undefined;
+      const reply = thrown
+        ? { id, result: { exceptionDetails: { text: "Uncaught", exception: { description: thrown } } } }
+        : { id, result: { result: { value: produced } } };
+      const body = Buffer.from(JSON.stringify(reply), "utf8");
 
       // Unmasked server text frame, with the 16-bit length path exercised for
       // anything over 125 bytes -- which every real reply here is.

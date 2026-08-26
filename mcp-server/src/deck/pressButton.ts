@@ -90,6 +90,32 @@ const REFUSAL =
   "handler ran and nothing more. Check that the board is plugged into this PC (its COM " +
   "side) and into the Deck (its USB side), and that python with pyserial is on PATH.";
 
+/**
+ * Hard stop for automated suites.
+ *
+ * Every press here reaches a real controller wired to a real Deck. The board is
+ * plugged into the machine that runs the tests, so a test that happens to walk
+ * into this function does not fail politely -- it moves the ring on someone's
+ * device, and with the wrong control focused it can activate something. That is
+ * not a hypothetical: adding a default-on focus-acquire to walkTo made its unit
+ * test send a live DOWN press before anyone noticed.
+ *
+ * The npm test script sets DPS_NO_BRIDGE=1, so the suite refuses at this line
+ * instead of spawning anything. Anyone can set it by hand to be sure a run
+ * cannot touch hardware.
+ */
+export function bridgeDisabled(): string | null {
+  const v = process.env.DPS_NO_BRIDGE;
+  if (v && v !== "0" && v.toLowerCase() !== "false") {
+    return (
+      "The controller bridge is disabled by DPS_NO_BRIDGE, so no press was sent. " +
+      "This guard exists so an automated suite cannot move the ring on a real Deck. " +
+      "Unset it to drive hardware."
+    );
+  }
+  return null;
+}
+
 export async function pressButton(opts: PressOptions): Promise<PressResult> {
   const holdMs = opts.holdMs ?? 80;
   const timeoutMs = opts.timeoutMs ?? 15_000;
@@ -113,6 +139,11 @@ export async function pressButton(opts: PressOptions): Promise<PressResult> {
       reason: `Unknown button(s): ${unknown.join(", ")}. Known: ${BRIDGE_BUTTONS.join(", ")}.`,
     };
   }
+
+  // After validation, before anything is spawned. An unknown button is a caller
+  // error whether or not a board is attached; only the spawn touches hardware.
+  const disabled = bridgeDisabled();
+  if (disabled) return { ...base, reason: disabled };
 
   const pad = findPadTool();
   if (!pad) {
@@ -204,6 +235,9 @@ export async function pressChord(
   if (unknown.length > 0) {
     return { ...base, reason: `Unknown button(s): ${unknown.join(", ")}. Known: ${BRIDGE_BUTTONS.join(", ")}.` };
   }
+
+  const chordDisabled = bridgeDisabled();
+  if (chordDisabled) return { ...base, reason: chordDisabled };
 
   const tool = findBridgeTool("chord.py");
   if (!tool) {
