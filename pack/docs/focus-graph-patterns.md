@@ -64,6 +64,22 @@ NEVER implement Decky D-pad sibling or column hops by discovering targets with `
 - Skill: `.cursor/skills/decky-ui-change-focus-gate/SKILL.md` — mandatory gate before shipping UI changes
 - Skill: `.cursor/skills/decky-focus-audit/SKILL.md` — static + preview audit pass
 
+## Nothing owns focus when your plugin opens
+
+Measured on a live Deck, 2026-08-26, and confirmed against a second unrelated plugin, so this
+is Decky/Steam behaviour rather than any one plugin's bug.
+
+When a plugin is opened from the Decky list, it mounts and renders — and **no element owns
+gamepad focus**. In one measurement: 67 `.Focusable` elements present, zero carrying
+`gpfocus`, and `document.activeElement` on `<body>`. The next D-pad press re-acquires focus
+instead of moving it, so the user's first press is swallowed. Leaving a plugin with B lands in
+the same state.
+
+**What to do:** if you care where the ring starts, **take focus explicitly on mount** rather
+than assuming Decky or Steam will place it for you. Register your first stop and focus it.
+
+Full measurement and the control experiment: `docs/planning/03-plugin-open-leaves-focus-unowned.md`.
+
 ## The `activeElement` trap
 
 **Steam's gamepad focus and the browser's `document.activeElement` are two different things,
