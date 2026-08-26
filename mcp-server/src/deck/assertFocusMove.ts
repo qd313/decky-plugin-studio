@@ -23,6 +23,7 @@
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
+import { focusKey, describe } from "./focusKey.js";
 
 export interface AssertFocusMoveResult {
   ok: boolean;
@@ -50,28 +51,6 @@ export interface AssertFocusMoveOptions {
   cdpUrl?: string;
   /** How long to wait for focus to stop changing. */
   settleTimeoutMs?: number;
-}
-
-/**
- * Identity of a focused element across two reads.
- *
- * A verified selector is the strongest handle available. Without one, fall back
- * to tag + text + position -- deliberately NOT the element's own id, which on
- * Steam's React tree is regenerated per render and would make every read look
- * like a move.
- */
-function focusKey(r: ReadFocusResult | null): string | null {
-  const el = r?.gpfocus;
-  if (!el) return null;
-  if (el.selector && el.selectorVerified) return `sel:${el.selector}`;
-  const rect = el.rect ? `${el.rect.x},${el.rect.y},${el.rect.w},${el.rect.h}` : "no-rect";
-  return `id:${el.tag}|${el.text}|${rect}`;
-}
-
-function describe(r: ReadFocusResult | null): string {
-  const el = r?.gpfocus;
-  if (!el) return "nothing";
-  return el.text ? `<${el.tag}> "${el.text}"` : `<${el.tag}>`;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));

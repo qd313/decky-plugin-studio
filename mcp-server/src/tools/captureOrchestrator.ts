@@ -283,7 +283,7 @@ export function installCaptureHelperOnDeck(
   }
 }
 
-export function getWorkspaceArtifactsDir(subdir: "recordings" | "screenshots"): string {
+export function getWorkspaceArtifactsDir(subdir: "recordings" | "screenshots" | "runs"): string {
   const dir = path.join(getWorkspaceRoot(), subdir);
   fs.mkdirSync(dir, { recursive: true });
   return dir;

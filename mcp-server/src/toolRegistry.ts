@@ -190,8 +190,75 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_openPlugin",
     description:
-      "Open the plugin in the Deck UI. NOTE: this does not automate Steam — it returns a manual checklist for a human to follow on the device.",
-    inputSchema: noArgs,
+      "Open this plugin's panel on the Deck by driving Steam through the bridge board, verifying every stage against a live focus read rather than replaying a fixed button sequence. It only uses the D-pad while searching, and only presses A once a read confirms the ring is on a control labelled with the plugin's name, so it cannot activate something in an unrelated menu. If it runs out of budget it refuses and returns the manual checklist plus the list of controls it actually saw. Pass drive:false for the old checklist-only behaviour.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        pluginName: {
+          type: "string",
+          description: "Label to look for in the Decky list. Defaults to the workspace plugin's name.",
+        },
+        drive: {
+          type: "boolean",
+          default: true,
+          description: "false returns the manual checklist without pressing anything.",
+        },
+        tabBudget: { type: "number", default: 10, description: "Max D-pad presses to find the Decky tab." },
+        listBudget: { type: "number", default: 25, description: "Max D-pad presses to find the plugin's row." },
+        port: { type: "string", description: "Serial port of the bridge's COM side." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_runSequence",
+    description:
+      "Run a list of button presses on the Deck unattended, asserting where focus lands at each one, over a single SSH tunnel. Use this instead of calling deck_assertFocusMove in a loop: it is much faster (one tunnel, not one per press), it writes an evidence file, and it detects cycles — a focus ring that returns to somewhere it has already been. That last one matters because a focus graph can trap the ring in a region with no way out while every individual press still reports moved:true and matched:true; no per-step assertion can see it, because the defect is a property of the path rather than of any one edge. The cycle report is a measurement, not a verdict — a tab bar that wraps is a legitimate cycle.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        steps: {
+          type: "array",
+          description: "Ordered steps. Each is one press plus an optional assertion.",
+          items: {
+            type: "object",
+            properties: {
+              press: {
+                oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+                description: "Button(s) for this step, as for deck_pressButton. A list is a chord.",
+              },
+              expect: {
+                type: "string",
+                description: "CSS selector focus should match after this press. Omit to just record where it went.",
+              },
+              label: { type: "string", description: "Human name for this step, used in the log." },
+              holdMs: { type: "number", default: 80 },
+              settleTimeoutMs: { type: "number", default: 2500 },
+            },
+            required: ["press"],
+            additionalProperties: false,
+          },
+        },
+        stopOnFailure: {
+          type: "boolean",
+          default: true,
+          description: "Stop at the first failed assertion. A run that has gone off the rails produces noise afterwards.",
+        },
+        mustReachText: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Labels that must show up somewhere during the run, matched case-insensitively against each visited element's text and aria-label. The cheap way to express 'Retry must stay reachable'.",
+        },
+        runName: { type: "string", description: "Name for the evidence file. Defaults to a timestamp." },
+        writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        port: { type: "string", description: "Serial port of the bridge's COM side." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
+      required: ["steps"],
+      additionalProperties: false,
+    },
   },
   {
     name: "deck_pressButton",

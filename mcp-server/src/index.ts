@@ -18,6 +18,8 @@ import { lintFocus } from "./lint/index.js";
 import { readFocus } from "./deck/readFocus.js";
 import { pressButton } from "./deck/pressButton.js";
 import { assertFocusMove } from "./deck/assertFocusMove.js";
+import { runSequence, SequenceStep } from "./deck/runSequence.js";
+import { openPluginDriven } from "./deck/openPlugin.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -84,8 +86,30 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
     case "tools/deck_reloadPlugin":
       return deckAutonomy.reloadPlugin((params.mode as "auto" | "local" | "remote") ?? "auto");
 
-    case "tools/deck_openPlugin":
-      return deckAutonomy.openPlugin();
+    case "tools/deck_openPlugin": {
+      // `drive: false` keeps the old checklist-only behaviour for anyone who
+      // wants the steps without the board plugged in.
+      if (params.drive === false) return deckAutonomy.openPlugin();
+      const info = deckAutonomy.openPlugin();
+      return openPluginDriven({
+        pluginName: params.pluginName != null ? String(params.pluginName) : info.pluginName,
+        port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        tabBudget: params.tabBudget != null ? Number(params.tabBudget) : undefined,
+        listBudget: params.listBudget != null ? Number(params.listBudget) : undefined,
+      });
+    }
+
+    case "tools/deck_runSequence":
+      return runSequence({
+        steps: (params.steps as SequenceStep[]) ?? [],
+        stopOnFailure: params.stopOnFailure != null ? Boolean(params.stopOnFailure) : undefined,
+        mustReachText: (params.mustReachText as string[]) ?? undefined,
+        port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        runName: params.runName != null ? String(params.runName) : undefined,
+        writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
+      });
 
     case "tools/deck_pressButton":
       return pressButton({
