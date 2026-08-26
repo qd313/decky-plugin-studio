@@ -42,7 +42,23 @@ export function startIngestServer(listenPort = 7682): void {
     res.writeHead(404);
     res.end();
   });
+  // A second MCP server instance (VS Code extension + a CLI client, or two
+  // workspaces) would otherwise die here: an unhandled 'error' event on the
+  // http.Server takes the whole process down with EADDRINUSE, so the MCP
+  // handshake never completes. Ingest is optional; the rest of the server is not.
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    const detail =
+      err.code === "EADDRINUSE"
+        ? `ingest port ${port} is already in use; debug ingest is disabled for this instance. Set DEBUG_INGEST_PORT to a free port to enable it.`
+        : `ingest server error: ${err.message}`;
+    console.error(`[decky-plugin-studio] ${detail}`);
+    server = null;
+  });
   server.listen(port, "127.0.0.1");
+}
+
+export function isIngestRunning(): boolean {
+  return server !== null;
 }
 
 export function stopIngestServer(): void {

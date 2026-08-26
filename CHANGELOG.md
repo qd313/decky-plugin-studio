@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- **A second VS Code window no longer kills its own MCP server.** The debug-ingest listener binds a fixed `127.0.0.1:7682` and had no handler on the `http.Server` `'error'` event, so a port already held by another window's server arrived as an unhandled `'error'` and took the process down with exit code 1 -- before the MCP handshake, leaving the window looping `MCP server exited (code 1) before replying` with the real cause visible only as a raw Node stack in the output channel. `EADDRINUSE` is now caught, reported on stderr with the `deckyPluginStudio.ingestPort` / `DEBUG_INGEST_PORT` remedy, and disables **only** debug ingest; the server continues to serve every tool. `isIngestRunning()` reports the state, and a failed start leaves the singleton clear so a later start on a free port still works.
 - Server no longer replies with an error to JSON-RPC notifications. Answering `notifications/initialized` violated the spec and broke the handshake for strict MCP clients.
 - Preview start waits for Vite and the Python sidecar to actually respond instead of sleeping a fixed 1500ms, and reports which one failed.
 - Preview port is bind-tested instead of a blind `5173 + random(1000)`, which could silently collide.
