@@ -1,10 +1,11 @@
 # 03 — Opening a Decky plugin leaves gamepad focus unowned
 
 Measured 2026-08-26 with `deck_readFocus` and the ESP32 bridge, on a live Deck, with nobody
-touching the device. This is the first bug the rig found on its own.
+touching the device. The first thing the rig characterised on its own.
 
-**It is a platform behaviour, not a plugin bug.** That conclusion is the useful part, and it
-was one control experiment away from being the opposite.
+**It is a platform behaviour, not a plugin bug, and on review it is not worth fixing either.**
+Both conclusions took a correction to reach — see § 4. What is worth keeping is the
+measurement, because tooling has to account for it.
 
 ---
 
@@ -26,9 +27,14 @@ Measured inside bonsAI immediately after opening it:
 So the UI is fully rendered and 67 controls are focusable, and Steam's nav graph owns none of
 them. The focus ring is simply absent.
 
-**It recovers on the next D-pad press.** The first press does not move focus — it re-acquires
-it. So this is not a permanent freeze; it is one swallowed press every time a plugin opens,
-plus a moment where the ring is nowhere.
+**It resolves on the next D-pad press**, which places the ring on the plugin's topmost control
+— the Back button. Confirmed independently by the maintainer from the device: first Down lands
+on Back, second Down reaches the tab bar. That matches the reading here exactly (the first
+press produced `<BUTTON>` with no text, which is the unlabelled Back icon).
+
+So the press is **not** lost. It puts focus at the top of the plugin, which is a reasonable
+place to start. An earlier draft of this document called it a "swallowed press"; that was
+overstated and is corrected here.
 
 The same thing happens on **exit**: pressing B to leave a plugin also lands in the unowned
 state until the next press.
@@ -72,27 +78,44 @@ rather than a silence. Two ways it could still have been wrong, both checked:
 
 ---
 
-## 4. What a plugin author should do about it
+## 4. Why this is not worth "fixing", and the correction that got here
 
-Nothing here is fixable from inside a plugin — but it is compensable. If you want the ring to
-land somewhere specific when your plugin opens, **take focus explicitly on mount** rather than
-assuming Decky or Steam will place it. Otherwise your user's first D-pad press after opening
-your plugin is spent re-acquiring focus rather than navigating.
+The first version of this document recommended that plugins compensate by taking focus on
+mount. The maintainer pushed back, correctly, and the recommendation is withdrawn.
 
-This is now noted in `pack/docs/focus-graph-patterns.md`.
+The argument against compensating is stronger than the argument for it:
+
+- **Every plugin behaves this way.** A plugin that grabs focus on open becomes the odd one out.
+  Users build muscle memory across plugins, and being the only one that behaves differently is
+  a worse experience than costing one press.
+- **The press is not wasted.** It lands on Back, at the top of the plugin. That is a defensible
+  default, not a broken state.
+- **It is a permanent workaround for someone else's default**, which has to be carried forever
+  and removed if Decky ever changes the behaviour.
+- **Nobody has complained.** The maintainer has used this plugin daily for months without once
+  filing it, which is real evidence about how much it matters.
+
+**The one case where a plugin should act:** if you need the ring to start somewhere specific —
+an ask bar, a primary action — nothing will place it there for you, so place it yourself. That
+is an "if you need it" note, not a recommendation for every plugin.
 
 ---
 
 ## 5. Status
 
-**Reported, not fixed.** The fix, if there is one, belongs in Decky Loader rather than here or
-in any plugin. Worth raising upstream with this measurement attached — it is a small, concrete,
-reproducible report, which is the kind most likely to get acted on.
+**Characterised, deliberately not fixed.** Any change belongs in Decky Loader, and per § 4 it
+is not clearly worth making there either — the current behaviour is consistent and lands focus
+somewhere sensible.
+
+**The part that matters is for tooling.** A macro that opens a plugin must not assume its first
+D-pad press moves anything; it should read focus first and acquire it if unowned. That is one
+accommodation in the runner, and it is the reason this measurement is worth keeping at all.
 
 **Not usable for bonsAI milestone M4** ("a D-pad bug is reproduced by script, fixed, and locked
 by a check that fails without the fix"). The reproduce half is done and was cheap. The fix half
 is not bonsAI's to make, so M4 needs a different candidate.
 
-**What it does demonstrate:** the rig found a real, previously unrecorded D-pad defect on its
+**What it does demonstrate:** the rig characterised an undocumented platform behaviour on its
 own, distinguished it from a plugin bug by experiment, and produced a measurement rather than
-an opinion — with nobody at the device.
+an opinion — with nobody at the device. It did not, on its own, judge whether the behaviour was
+worth changing. That took a human, and the human was right.

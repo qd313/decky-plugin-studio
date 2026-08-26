@@ -75,8 +75,16 @@ gamepad focus**. In one measurement: 67 `.Focusable` elements present, zero carr
 instead of moving it, so the user's first press is swallowed. Leaving a plugin with B lands in
 the same state.
 
-**What to do:** if you care where the ring starts, **take focus explicitly on mount** rather
-than assuming Decky or Steam will place it for you. Register your first stop and focus it.
+The next press lands on the plugin's topmost control (the Back button), so nothing is broken
+and no press is wasted — this is simply where every Decky plugin starts.
+
+**You usually want to leave this alone.** Grabbing focus on mount makes your plugin behave
+differently from every other one, and users navigate across plugins by habit. Only place focus
+yourself if the ring genuinely needs to start somewhere specific — an ask bar, a primary
+action — because nothing else will put it there.
+
+**If you write tooling** that drives the D-pad, do account for it: read focus before the first
+press rather than assuming it moves something.
 
 Full measurement and the control experiment: `docs/planning/03-plugin-open-leaves-focus-unowned.md`.
 
