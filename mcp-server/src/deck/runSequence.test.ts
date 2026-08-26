@@ -37,6 +37,7 @@ function visits(...spec: Array<string | [string, string | null]>): Visit[] {
             classes: [],
             ariaLabel: null,
             text: label,
+            ownerText: label,
             rect: null,
           }
         : null,
@@ -111,6 +112,53 @@ test("the same label at a different position is a different element", () => {
   // Two distinct chips can both render the text "Retry"; identity is the key,
   // not the label.
   assert.equal(findCycle(visits(["Retry", "sel:#one"], ["Retry", "sel:#two"])), null);
+});
+
+// --------------------------------------------------------------------------
+// Labelling of Decky controls
+// --------------------------------------------------------------------------
+
+test("a Decky toggle is matched and named by its ancestor's label", async () => {
+  // Found on hardware 2026-08-26 running FOCUS-GRAPH-DEV-KB-01. Decky's
+  // ToggleField puts the ring on an inner div with no text of its own; the
+  // label sits four parents up. Matching only the focused element's own text
+  // reported "never reached" for two controls the ring was demonstrably on,
+  // which is a false negative on the most common control type in a Decky
+  // settings page.
+  const togglePage = {
+    hasGpfocus: true,
+    elementCount: 300,
+    gpfocus: {
+      selector: null,
+      selectorVerified: false,
+      tag: "DIV",
+      id: null,
+      classes: ["Focusable"],
+      ariaLabel: null,
+      text: "",
+      ownerText: "Hybrid retrieval (meaning search)On, the knowledge base ranks",
+      rect: null,
+    },
+    gpfocusWithin: [],
+    activeElement: null,
+    agree: false,
+    quickAccessTab: "999",
+    deckyPluginRoot: true,
+  };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => togglePage);
+  try {
+    const r = await runSequence({
+      steps: [{ press: "NOT_A_BUTTON" }],
+      mustReachText: ["Hybrid retrieval", "Nonexistent control"],
+      cdpUrl: fake.base,
+      writeEvidence: false,
+    });
+    assert.deepEqual(r.neverReached, ["Nonexistent control"]);
+    // And the run log names the control instead of showing an anonymous <DIV>.
+    assert.match(r.visited[0], /^<DIV> in "Hybrid retrieval/);
+  } finally {
+    await fake.close();
+  }
 });
 
 // --------------------------------------------------------------------------

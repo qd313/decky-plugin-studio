@@ -176,9 +176,16 @@ function findCycle(visits: Visit[]): CycleReport | null {
   return null;
 }
 
+/**
+ * ownerText is included deliberately. On a Deck the ring lands *inside* a
+ * ToggleField, on a div with no text of its own, so matching only the focused
+ * element's own text reports "never reached" for a control the ring is
+ * demonstrably sitting on. Measured against FOCUS-GRAPH-DEV-KB-01 on
+ * 2026-08-26, where both targets were reached and both were reported missed.
+ */
 function matchesText(el: FocusElement | null, needle: string): boolean {
   if (!el) return false;
-  const hay = `${el.text ?? ""} ${el.ariaLabel ?? ""}`.toLowerCase();
+  const hay = `${el.text ?? ""} ${el.ariaLabel ?? ""} ${el.ownerText ?? ""}`.toLowerCase();
   return hay.includes(needle.toLowerCase());
 }
 

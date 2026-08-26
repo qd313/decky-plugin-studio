@@ -36,6 +36,17 @@ export interface FocusElement {
   classes: string[];
   ariaLabel: string | null;
   text: string;
+  /**
+   * Text of the nearest ancestor that has any, when the element itself has none.
+   *
+   * Decky's ToggleField, SliderField and friends put the gamepad ring on an
+   * unlabelled inner div and keep the label several levels up. Measured on a
+   * live Deck 2026-08-26: the ring inside the "On-screen debug HUD" toggle is
+   * four parents below the element carrying that text. Without this, every
+   * settings toggle reads as an anonymous <DIV> and any text assertion against
+   * one is a false negative.
+   */
+  ownerText: string;
   rect: { x: number; y: number; w: number; h: number } | null;
 }
 
@@ -57,6 +68,17 @@ export interface ReadFocusResult {
   deckyPluginRoot: boolean;
   /** e.g. "999" for Decky; Steam's own tabs are 0 and 3-7. */
   quickAccessTab: string | null;
+  /**
+   * Which Quick Access pane is actually on screen, which is NOT the same
+   * question as `quickAccessTab`.
+   *
+   * `quickAccessTab` says which pane contains the ring, and it is null whenever
+   * the ring sits on the QAM's own tab rail -- which is exactly where it lands
+   * when the menu first opens. Measured 2026-08-26: openPlugin read a null tab,
+   * concluded the QAM was shut, and fired the open chord at an already-open
+   * menu, which closed it again.
+   */
+  visibleQuickAccessTab: string | null;
   targetsScanned: string[];
   /** Did the focused element match the caller's `expect` selector? null = not asked, or the selector was invalid. */
   matchesExpect?: boolean | null;
@@ -117,6 +139,18 @@ function pageExpression(expect?: string): string {
     return parts.length ? parts.join(' > ') : null;
   }
 
+  function ownerTextOf(el) {
+    var own = (el.textContent || '').trim();
+    if (own) return own.slice(0, 120);
+    var n = el.parentElement, guard = 0;
+    while (n && guard++ < 6) {
+      var t = (n.textContent || '').trim();
+      if (t) return t.slice(0, 120);
+      n = n.parentElement;
+    }
+    return '';
+  }
+
   function describe(el) {
     if (!el) return null;
     var sel = null, verified = false;
@@ -137,6 +171,7 @@ function pageExpression(expect?: string): string {
       classes: (el.className || '').toString().split(/\\s+/).filter(Boolean),
       ariaLabel: el.getAttribute ? el.getAttribute('aria-label') : null,
       text: (el.textContent || '').trim().slice(0, 120),
+      ownerText: ownerTextOf(el),
       rect: r
     };
   }
@@ -165,6 +200,14 @@ function pageExpression(expect?: string): string {
     try { matchesExpect = gp.matches(EXPECT); } catch (e) { matchesExpect = null; }
   }
 
+  // The pane with a real box is the one on screen. Steam keeps the others mounted.
+  var visibleTab = null;
+  var panes = document.querySelectorAll('[id^="quickaccess_content_"]');
+  for (var pi = 0; pi < panes.length; pi++) {
+    var pr = panes[pi].getBoundingClientRect();
+    if (pr.width > 0 && pr.height > 0) { visibleTab = panes[pi].id.replace('quickaccess_content_', ''); break; }
+  }
+
   return {
     hasGpfocus: !!gp,
     elementCount: document.querySelectorAll('*').length,
@@ -173,6 +216,7 @@ function pageExpression(expect?: string): string {
     activeElement: describe(active),
     agree: !!gp && gp === active,
     quickAccessTab: tab,
+    visibleQuickAccessTab: visibleTab,
     deckyPluginRoot: tab === '999',
     matchesExpect: matchesExpect
   };
@@ -187,6 +231,7 @@ interface PageResult {
   activeElement: FocusElement | null;
   agree: boolean;
   quickAccessTab: string | null;
+  visibleQuickAccessTab: string | null;
   deckyPluginRoot: boolean;
   matchesExpect: boolean | null;
 }
@@ -216,6 +261,7 @@ function emptyResult(method: string): ReadFocusResult {
     agree: false,
     deckyPluginRoot: false,
     quickAccessTab: null,
+    visibleQuickAccessTab: null,
     targetsScanned: [],
   };
 }
@@ -284,6 +330,7 @@ export async function readFocusAt(
       agree: page.agree,
       deckyPluginRoot: page.deckyPluginRoot,
       quickAccessTab: page.quickAccessTab,
+      visibleQuickAccessTab: page.visibleQuickAccessTab ?? null,
       targetsScanned: scanned,
       matchesExpect: page.matchesExpect ?? null,
     };

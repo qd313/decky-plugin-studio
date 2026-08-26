@@ -159,6 +159,7 @@ export const focusedPage = {
     classes: ["DialogButton", "Focusable", "gpfocus"],
     ariaLabel: null,
     text: "bonsAI",
+    ownerText: "bonsAI",
     rect: { x: 64, y: 74, w: 268, h: 46 },
   },
   gpfocusWithin: [],
@@ -170,10 +171,12 @@ export const focusedPage = {
     classes: [],
     ariaLabel: null,
     text: "something else",
+    ownerText: "something else",
     rect: null,
   },
   agree: false,
   quickAccessTab: "999",
+  visibleQuickAccessTab: "999",
   deckyPluginRoot: true,
 };
 
@@ -186,5 +189,6 @@ export const unfocusedPage = {
   activeElement: null,
   agree: false,
   quickAccessTab: null,
+  visibleQuickAccessTab: null,
   deckyPluginRoot: false,
 };

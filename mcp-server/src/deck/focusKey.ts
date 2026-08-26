@@ -28,6 +28,11 @@ export function describe(r: ReadFocusResult | null): string {
 
 export function describeElement(el: FocusElement | null): string {
   if (!el) return "nothing";
-  const name = el.text || el.ariaLabel || "";
-  return name ? `<${el.tag}> "${name}"` : `<${el.tag}>`;
+  // ownerText last: it belongs to an ancestor, so it is the weakest of the three
+  // and only worth using when the element itself is anonymous -- which every
+  // Decky ToggleField's focus target is.
+  const own = el.text || el.ariaLabel || "";
+  if (own) return `<${el.tag}> "${own}"`;
+  const owner = el.ownerText ?? "";
+  return owner ? `<${el.tag}> in "${owner}"` : `<${el.tag}>`;
 }

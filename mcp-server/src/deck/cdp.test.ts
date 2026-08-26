@@ -13,8 +13,9 @@ import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp
 
 import { evaluate, listTargets, getVersion, rewriteWsHost } from "./cdp.js";
 import { readFocusAt } from "./readFocus.js";
-import { pressButton, findPadTool } from "./pressButton.js";
+import { pressButton, pressChord, findPadTool, findBridgeTool } from "./pressButton.js";
 import { assertFocusMove } from "./assertFocusMove.js";
+import { openPluginDriven } from "./openPlugin.js";
 
 test("lists targets and reads the browser version", async () => {
   const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);
@@ -164,6 +165,70 @@ test("assertFocusMove refuses when no real press can be delivered", async () => 
     assert.ok(r.before?.ok, "focus before the press was read successfully");
     assert.match(r.diagnosis, /no press was delivered/);
     assert.match(r.reason ?? "", /Unknown button/);
+  } finally {
+    await fake.close();
+  }
+});
+
+// --------------------------------------------------------------------------
+// Chords. Separate from presses because they are not interchangeable, and
+// treating them as if they were cost real time on hardware.
+// --------------------------------------------------------------------------
+
+test("chord.py is findable from the built server", () => {
+  // Without this every QAM open refuses with a confusing "not found".
+  assert.ok(findBridgeTool("chord.py"), "bridge/tools/chord.py should be locatable by walking up");
+});
+
+test("pressChord refuses an unknown button instead of guessing", async () => {
+  const r = await pressChord("GUIDE", "DIAGONAL");
+  assert.equal(r.ok, false);
+  assert.equal(r.fidelity, null);
+  assert.match(r.reason ?? "", /Unknown button/);
+});
+
+test("pressChord reports the chord method, not the press method", async () => {
+  // A post-mortem has to be able to tell which of the two was actually sent:
+  // GUIDE+A as one press opens the Steam main menu, as a chord it opens the QAM.
+  const r = await pressChord("GUIDE", "NOPE");
+  assert.equal(r.method, "usb-hid:bridge:chord");
+  const p = await pressButton({ buttons: ["GUIDE", "A"], timeoutMs: 1 });
+  assert.equal(p.method, "usb-hid:bridge");
+});
+
+test("openPlugin refuses when the Deck cannot be reached, and still hands back the checklist", async () => {
+  const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: "http://127.0.0.1:1" });
+  assert.equal(r.ok, false);
+  assert.equal(r.verified, false);
+  assert.ok(r.checklist && r.checklist.length > 0, "a human must still be able to do it by hand");
+  assert.match(r.summary, /could not read the Deck/);
+});
+
+test("openPlugin treats a visible pane as an open QAM even when the ring is on the rail", async () => {
+  // The 2026-08-26 mistake: quickAccessTab is null on the rail, which read as
+  // "QAM closed" and fired the open chord at an already-open menu. Here the ring
+  // is on the rail (tab null) with the Decky pane showing, so the tool must skip
+  // straight past opening and go looking for the plugin row.
+  const onRail = {
+    hasGpfocus: true,
+    elementCount: 300,
+    gpfocus: {
+      selector: null, selectorVerified: false, tag: "DIV", id: null,
+      classes: ["Focusable"], ariaLabel: null, text: "", ownerText: "", rect: null,
+    },
+    gpfocusWithin: [],
+    activeElement: null,
+    agree: false,
+    quickAccessTab: null,
+    visibleQuickAccessTab: "999",
+    deckyPluginRoot: false,
+  };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => onRail);
+  try {
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, listBudget: 1 });
+    const names = r.stages.map((s) => s.stage);
+    assert.ok(!names.includes("open-qam"), `must not try to open an open QAM: ${names.join(",")}`);
+    assert.ok(!names.includes("find-decky-tab"), "the Decky pane is already showing");
   } finally {
     await fake.close();
   }

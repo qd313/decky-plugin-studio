@@ -25,7 +25,7 @@
  * and none of them were called bonsAI" tells you something.
  */
 import { openCdpTunnel } from "./cdpTunnel.js";
-import { pressButton } from "./pressButton.js";
+import { pressButton, pressChord } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
 import { focusKey, describe } from "./focusKey.js";
 
@@ -151,26 +151,41 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
       presses: 0,
     });
 
-    // ---- Stage 2: reach the Decky tab -------------------------------------
-    if (focus.quickAccessTab !== DECKY_TAB) {
-      if (focus.quickAccessTab === null) {
-        // Not in the Quick Access Menu at all. Opening it is a chord, not a
-        // D-pad move, so it is the one exception to rule 1 -- and it is safe
-        // because GUIDE+A does the same thing from anywhere.
-        const p = await pressButton({ buttons: ["GUIDE", "A"], port: opts.port });
+    // ---- Stage 2: reach the Decky pane ------------------------------------
+    //
+    // Rewritten 2026-08-26 after three separate mistakes showed up on hardware
+    // within ten minutes of each other. All three came from reasoning about the
+    // QAM instead of measuring it:
+    //
+    //   1. The open chord was sent as GUIDE and A pressed together. Steam wants
+    //      hold-GUIDE-then-tap-A; the simultaneous version reads as a bare GUIDE
+    //      press, opens the Steam main menu, and drops the A into whatever that
+    //      menu is showing.
+    //   2. "Is the QAM open?" was answered with `quickAccessTab !== null`. That
+    //      is null whenever the ring sits on the QAM's own tab rail -- which is
+    //      where it lands when the menu opens -- so an open menu read as closed
+    //      and got the chord fired at it, closing it again.
+    //   3. Tabs were walked with RIGHT. RIGHT does not change QAM tabs; on the
+    //      Quick Settings pane it lands on the Brightness slider and drags it.
+    //      LB/RB do not switch them either. The rail is reached with LEFT and
+    //      walked with DOWN.
+    if (focus.visibleQuickAccessTab !== DECKY_TAB) {
+      if (focus.visibleQuickAccessTab === null) {
+        // No pane on screen at all: the menu is genuinely shut.
+        const p = await pressChord("GUIDE", "A", { port: opts.port });
         if (!p.ok) {
           stages.push({ stage: "open-qam", ok: false, detail: p.reason ?? "", presses: 0 });
-          return fail(p.reason ?? "press failed", focus, "the QAM chord could not be delivered");
+          return fail(p.reason ?? "chord failed", focus, "the QAM chord could not be delivered");
         }
-        await sleep(600);
+        await sleep(900);
         focus = await readFocusAt(cdpBase, 10_000);
-        const opened = focus.ok && focus.quickAccessTab !== null;
+        const opened = focus.ok && focus.visibleQuickAccessTab !== null;
         stages.push({
           stage: "open-qam",
           ok: opened,
           detail: opened
-            ? `QAM open on tab ${focus.quickAccessTab}`
-            : "QAM did not report a quickaccess pane after the chord",
+            ? `QAM open, pane ${focus.visibleQuickAccessTab} on screen`
+            : "no quickaccess pane became visible after the chord",
           presses: 1,
         });
         if (!opened) {
@@ -182,30 +197,74 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         }
       }
 
-      // Walk toward the Decky tab, checking the tab id after every single press.
-      // Nothing here assumes how many presses it takes or which way it is.
-      let presses = 0;
-      let reached = focus.quickAccessTab === DECKY_TAB;
-      const before = focus.quickAccessTab;
-      while (!reached && presses < tabBudget) {
-        focus = await nudge("RIGHT");
-        presses++;
-        if (focus.ok && focus.quickAccessTab === DECKY_TAB) reached = true;
+      // Step out to the rail if the ring is inside a pane. One press, verified:
+      // on the rail the ring belongs to no pane, so quickAccessTab goes null
+      // while a pane stays on screen.
+      if (focus.quickAccessTab !== null) {
+        focus = await nudge("LEFT");
+        const onRail = focus.ok && focus.quickAccessTab === null && focus.visibleQuickAccessTab !== null;
+        stages.push({
+          stage: "reach-rail",
+          ok: onRail,
+          detail: onRail
+            ? `on the tab rail, pane ${focus.visibleQuickAccessTab} showing`
+            : `expected the rail; tab=${focus.quickAccessTab ?? "none"}, visible=${focus.visibleQuickAccessTab ?? "none"}`,
+          presses: 1,
+        });
+        if (!onRail) {
+          return fail(
+            "could not step out to the Quick Access tab rail",
+            focus,
+            "one Left press did not land on the tab rail - open the Decky tab by hand",
+          );
+        }
       }
+
+      // Walk the rail. The pane on screen changes as the ring moves, so that is
+      // the thing to check -- nothing here assumes rail order or entry count.
+      let presses = 0;
+      const from = focus.visibleQuickAccessTab;
+      while (focus.visibleQuickAccessTab !== DECKY_TAB && presses < tabBudget) {
+        focus = await nudge("DOWN");
+        presses++;
+        if (!focus.ok) break;
+      }
+      const reached = focus.visibleQuickAccessTab === DECKY_TAB;
       stages.push({
         stage: "find-decky-tab",
         ok: reached,
         detail: reached
-          ? `reached tab ${DECKY_TAB} after ${presses} press(es)`
-          : `started on tab ${before}, ended on tab ${focus.quickAccessTab ?? "none"} after ${presses} press(es)`,
+          ? `pane ${DECKY_TAB} on screen after ${presses} rail press(es)`
+          : `started on pane ${from}, ended on ${focus.visibleQuickAccessTab ?? "none"} after ${presses} press(es)`,
         presses,
       });
       if (!reached) {
         return fail(
-          `could not reach the Decky tab (${DECKY_TAB}) within ${tabBudget} presses`,
+          `could not reach the Decky pane (${DECKY_TAB}) within ${tabBudget} rail presses`,
           focus,
-          `walked ${presses} controls without the Decky tab appearing - open it by hand`,
+          `walked ${presses} rail entries without the Decky pane appearing - open it by hand`,
         );
+      }
+
+      // Enter the pane so the ring is on a plugin row rather than the rail.
+      if (focus.quickAccessTab !== DECKY_TAB) {
+        focus = await nudge("RIGHT");
+        const entered = focus.ok && focus.quickAccessTab === DECKY_TAB;
+        stages.push({
+          stage: "enter-decky-pane",
+          ok: entered,
+          detail: entered
+            ? "ring is inside the Decky pane"
+            : `expected tab ${DECKY_TAB}; ring reports ${focus.quickAccessTab ?? "none"}`,
+          presses: 1,
+        });
+        if (!entered) {
+          return fail(
+            "could not move the ring into the Decky pane",
+            focus,
+            "the Decky pane is on screen but one Right press did not enter it",
+          );
+        }
       }
     }
 

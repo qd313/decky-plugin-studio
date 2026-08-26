@@ -68,16 +68,20 @@ export interface PressOptions {
  * from dist/ in the repo and from resources/ inside the VSIX, so a fixed
  * relative path would be right in exactly one of those.
  */
-export function findPadTool(): string | null {
+export function findBridgeTool(name: string): string | null {
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 8; i++) {
-    const candidate = path.join(dir, "bridge", "tools", "pad.py");
+    const candidate = path.join(dir, "bridge", "tools", name);
     if (fs.existsSync(candidate)) return candidate;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
   return null;
+}
+
+export function findPadTool(): string | null {
+  return findBridgeTool("pad.py");
 }
 
 const REFUSAL =
@@ -164,6 +168,81 @@ export async function pressButton(opts: PressOptions): Promise<PressResult> {
         return finish({ ...base, reason: `${REFUSAL} (unparseable acknowledgement: ${ack})` });
       }
       finish({ ...base, ok: true, fidelity: "steam-routed", ack });
+    });
+  });
+}
+
+/**
+ * Hold one button, tap another, release -- a real chord rather than two buttons
+ * pressed at the same instant.
+ *
+ * These are NOT interchangeable, which cost an hour on 2026-08-26. Steam's
+ * Quick Access Menu opens on hold-GUIDE-then-tap-A. Sending GUIDE and A
+ * together in one 80 ms press is read as a bare GUIDE press: the Steam main
+ * menu opens instead, and the A lands in whatever that menu is showing. When
+ * the ring happened to be on a game's Play button, the same mistake was one
+ * press away from launching a game.
+ *
+ * Delegates to bridge/tools/chord.py, which owns the four-step sequence.
+ */
+export async function pressChord(
+  hold: string,
+  tap: string,
+  opts: { port?: string; timeoutMs?: number } = {},
+): Promise<PressResult> {
+  const H = hold.trim().toUpperCase();
+  const T = tap.trim().toUpperCase();
+  const base: PressResult = {
+    ok: false,
+    fidelity: null,
+    method: "usb-hid:bridge:chord",
+    buttons: [H, T],
+    holdMs: 0,
+  };
+
+  const unknown = [H, T].filter((b) => !(BRIDGE_BUTTONS as readonly string[]).includes(b));
+  if (unknown.length > 0) {
+    return { ...base, reason: `Unknown button(s): ${unknown.join(", ")}. Known: ${BRIDGE_BUTTONS.join(", ")}.` };
+  }
+
+  const tool = findBridgeTool("chord.py");
+  if (!tool) {
+    return { ...base, reason: `${REFUSAL} (bridge/tools/chord.py not found from ${import.meta.url})` };
+  }
+
+  const args = [tool, H, T];
+  if (opts.port) args.push("--port", opts.port);
+  const timeoutMs = opts.timeoutMs ?? 20_000;
+
+  return new Promise<PressResult>((resolve) => {
+    const child = spawn("python", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    let done = false;
+    const finish = (r: PressResult): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ ...base, reason: `${REFUSAL} (chord.py did not answer within ${timeoutMs}ms)` });
+    }, timeoutMs);
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (d: string) => (out += d));
+    child.stderr?.on("data", (d: string) => (err += d));
+    child.on("error", (e) => finish({ ...base, reason: `${REFUSAL} (${e.message})` }));
+    child.on("close", (code) => {
+      // chord.py prints one JSON acknowledgement per step and ends with "chord sent".
+      const refused = /"ok"\s*:\s*false/.test(out);
+      if (code !== 0 || refused || !/chord sent/.test(out)) {
+        const detail = (err.trim() || out.trim() || "no output").slice(0, 300);
+        return finish({ ...base, reason: `${REFUSAL} (chord.py exit ${code}: ${detail})` });
+      }
+      finish({ ...base, ok: true, fidelity: "steam-routed", ack: "chord sent" });
     });
   });
 }

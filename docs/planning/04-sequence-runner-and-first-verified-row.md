@@ -129,15 +129,95 @@ reminder of what happens when the tool makes that call on its own.
 
 ---
 
-## 5. Status
+## 5. Status after the first outing
+
+*(Superseded by § 8 — kept because the intermediate state is the point: the rig settled a row
+without finding a bug, and that was a real outcome rather than a failure.)*
 
 **Runner: done and in the registry** as `deck_runSequence`, with `deck_openPlugin` upgraded to drive
-Steam. 15 tests, no Deck required — the cycle detector is pure and gets the hard coverage, and the
-runner's own refusal paths are pinned against an in-process fake CDP server.
+Steam. 15 tests at this point, no Deck required — the cycle detector is pure and gets the hard
+coverage, and the runner's own refusal paths are pinned against an in-process fake CDP server.
 
 **bonsAI M4: two of three parts.** Reproduced by script ✅. Locked by a check that fails without the
 fix ✅. Not fixed by the rig ✗ — the claim did not reproduce, so there was nothing to fix. A full M4
-still needs a D-pad bug that is broken *now*.
+still needs a D-pad bug that is broken *now*. It got one the same day; see § 6.
 
 **bonsAI M3: the navigation half.** Nine asserted steps ran unattended. Plan 19 § 4 also wants the
 stream start/stop bracket and a live-Ask reply signal; neither is built.
+
+---
+
+## 6. Second outing: two QA rows drained, one real bug found
+
+Same day, after the runner existed. Three bonsAI rows, all driven with nobody at the device.
+
+**FOCUS-GRAPH-DEV-KB-01 and FOCUS-GRAPH-DEV-RAG-01 — both pass.** Mechanical toggle-chain checks
+in a Decky settings page: Down from one control has to reach the new toggle and keep going to the
+next. Two asserted steps each, about a minute of Deck time apiece.
+
+**MICRO-04 — a real bug, and the one M4 had been missing.** bonsAI's reply grid is *Helpful / Not
+really* over *Retry / Show details*. On device, both vertical moves collapsed into the left column:
+Down from *Not really* landed on *Retry*, Up from *Show details* landed on *Helpful*. The right
+column could only be reached sideways.
+
+The cause is the trap this repo already documents. `onMove*` has to sit on the row `Focusable`
+rather than the individual buttons, so one handler serves both columns and asks `focusedStop()`
+which one it was called for — and `focusedStop()` asked using `document.activeElement`. Steam moves
+`gpfocus` without moving `activeElement`, so the scan could not tell the stops apart and both
+column-aware branches had never once run on a Deck.
+
+Worth noting what found it. The linter cannot: `elementHasFocus` is a helper in a different file,
+and the call site reads as an innocuous predicate. Only pressing the buttons and reading the ring
+showed it.
+
+---
+
+## 7. What hardware corrected in the tools themselves
+
+Four separate defects in this repo's own code, all found by running against a Deck and none
+visible to a green unit suite. This is now the pattern worth expecting rather than being surprised
+by.
+
+**The cycle detector called a dead end a loop.** Fixed in § 3.
+
+**`mustReachText` could not see a Decky control's label.** The ring lands on a `ToggleField`'s
+unlabelled inner div, four parents below the element carrying the text. The first
+FOCUS-GRAPH-DEV-KB-01 run reported both targets as *never reached* while the ring was demonstrably
+sitting on them. `FocusElement` now carries `ownerText` — the nearest ancestor's text — and both
+the matcher and the run log use it. Without this the runner is blind to the most common control
+type in a Decky settings page.
+
+**`deck_openPlugin` sent the QAM chord as one press.** Steam wants hold-GUIDE-then-tap-A. Sent
+together in a single 80 ms press it reads as a bare GUIDE, which opens the Steam main menu and
+drops the A into whatever that menu is showing. There is now a separate `pressChord`, and the two
+report different `method` values so a post-mortem can tell which was sent. This one had teeth: with
+the ring on a game's **Play** button, the same mistake was one press from launching a game.
+
+**`deck_openPlugin` asked the wrong question about the QAM.** It used `quickAccessTab !== null` to
+mean "the menu is open". That field is null whenever the ring sits on the QAM's own tab rail —
+which is exactly where it lands when the menu opens — so an open menu read as closed and got the
+chord fired at it, closing it again. The oracle now also reports `visibleQuickAccessTab`, the pane
+actually on screen, which is a different question from where the ring is. Related: QAM tabs are not
+switched by the D-pad or by LB/RB. Walking with Right lands on the Brightness slider and drags it.
+The rail is reached with Left and walked with Down, and the visible pane is the signal to check.
+
+The QAM-detection fix is confirmed on hardware — the tool now skips straight past opening when a
+pane is already showing. The chord and the rail walk are unit-tested but their full end-to-end path
+has not been re-run on device; that is the honest state.
+
+---
+
+## 8. Status after the second outing
+
+**Runner and openPlugin:** 59 tests, none needing a Deck.
+
+**bonsAI M4: reached.** MICRO-04 reproduced by script, root-caused, fixed, locked by tests that go
+red without the fix, and re-verified on device after a deploy.
+
+**bonsAI M6: partial.** Two rows moved Open → Verified on rig evidence alone. Both were mechanical;
+the harder rows still need a human to judge what they saw.
+
+**Not reached: a branch picker.** MICRO-04's *branches* half needs the model to emit a
+`bonsai-strategy-branches` fence, which the local model did not do on a generic Strategy question
+with no game running. That half is unreachable rather than broken, and a QA control that forces
+branches would fix the reachability.
