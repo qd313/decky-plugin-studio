@@ -304,6 +304,33 @@ produces a format nobody validates.
 
 ## § 5 — Week one: the source-only linter
 
+**Status 2026-08-26 — built. All twelve tasks complete**, each verified against its own
+"Done when" check rather than inferred from a green exit. Shipped as MCP tool
+`plugin_lintFocus` (`mcp-server/src/lint/`). Tests went 8 → 25.
+
+Measured against bonsAI, a real 73-file plugin: 202 stops, 852 ms, 211 warnings, 283 not
+analyzed. R5 found 51 real page-search violations, concentrated exactly where they should be
+— `useMainTabAskBarFocus.ts` (10), `answerBubbleNavigation.ts` (9), `focusNavigation.ts` (3).
+R4 found zero, which is consistent with bonsAI having already fixed its `activeElement` usage
+after P1-5, and is evidence the rule is not just firing on everything.
+
+**Two things to decide before this is wired anywhere — see § 7.**
+
+1. **R11 is noisy at 133 warnings on one plugin.** The decision-9 filter is implemented and
+   working; the count is high because bonsAI genuinely has that many conditional regions
+   containing focus stops. Week-one suppression is all-or-nothing: the moment a developer
+   declares any state beyond `default`, all 133 disappear. That is the specified behaviour,
+   but it means the rule is currently either fully on or fully off.
+2. **R2 depends heavily on its own suppression.** It reported 22, not the ~180 a naive reading
+   would predict, because it correctly refuses to run on any file with an unresolved
+   reference. Worth knowing that the honest-gap design is what keeps the rule usable at all —
+   on a plugin that resolves everything in-file and relies on Steam's implicit spatial
+   navigation, R2 would warn on nearly every stop.
+
+**Not done, deliberately:** the § 2.4 rewording of the pack rules. That contradiction only
+appears once a checker renders the plugin, which this build does not do, and it is listed in
+§ 2 rather than in § 5's task list.
+
 **Ship target: the week of 2026-08-17.** Effort ★★.
 
 **Why this is first, given decision 4 said "visual".** Going back through the rules, seven of
