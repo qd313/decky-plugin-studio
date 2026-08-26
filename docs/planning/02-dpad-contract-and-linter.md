@@ -53,6 +53,14 @@ Related roadmap entries, already filed in [../ROADMAP.md](../ROADMAP.md): spam-l
 chain (★★★★★, deferred — Steam owns that press), studio issue intake (★★), pluckable studio
 (★★★), automated issue triage agent (★★★).
 
+**Decision 8 overridden 2026-08-26 by the maintainer.** It conflicted with bonsAI plan 21
+Track B, which requires focus checks wired into CI; plan 21 wins. The row above stays as the
+record of what was originally settled and why. What changes: focus checking may run in CI.
+What does **not** change: decision 7 — it still warns and never blocks a build — and the DPS
+linter itself stays agent-facing, because `@decky-plugin-studio/mcp` is unpublished and lives
+under a different GitHub owner, so bonsAI's CI cannot reach it. The plugin-side rule set
+lives in that plugin's own repo (bonsAI plan 21 § 3, Track B).
+
 ---
 
 ## § 1 — Rules for whoever implements this
