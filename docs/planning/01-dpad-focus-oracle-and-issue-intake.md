@@ -1,6 +1,8 @@
 # 01 — D-pad focus oracle, issue intake, and automated triage
 
-Plan only. Nothing here is implemented. Drafted 2026-08-14 against DPS `284e505` (v0.3.6+),
+Drafted 2026-08-14 against DPS `284e505` (v0.3.6+) as plan-only. **Part A is now partly
+built: A.0 and A.1 shipped 2026-08-26** — see the status blocks in those sections, which
+include a measured correction to A.1's target. Parts B and C remain unimplemented. Written
 in response to bonsAI [`docs/mcp-setup.md`](https://github.com/cantcurecancer/bonsAI) §
 "DPS findings log" and its detail draft `docs/planning/02-dps-upstream-findings.md` § P1-5.
 
