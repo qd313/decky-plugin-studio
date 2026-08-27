@@ -26,6 +26,7 @@ import assert from "node:assert/strict";
 
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
 import { runSequence, findCycle, Visit } from "./runSequence.js";
+import type { PressOptions, PressResult } from "./pressButton.js";
 
 /** Build a visit list from labels; the key is the label unless one is given. */
 function visits(...spec: Array<string | [string, string | null]>): Visit[] {
@@ -191,6 +192,9 @@ test("an unreachable Deck stops before any press", async () => {
 });
 
 test("no gpfocus owner at the start stops the run rather than pressing blind", async () => {
+  // acquireFocus is on by default, so this still tries to place the ring --
+  // but the suite's hardware guard refuses that press too, so the net effect
+  // for this test is unchanged: no readable focus, no steps run.
   const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);
   try {
     const r = await runSequence({
@@ -200,7 +204,67 @@ test("no gpfocus owner at the start stops the run rather than pressing blind", a
     });
     assert.equal(r.ok, false);
     assert.equal(r.ranSteps, 0);
+    assert.equal(r.acquired, false, "the placing press could not be delivered either");
     assert.match(r.reason ?? "", /gpfocus marker not found/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("acquireFocus:false leaves an unowned ring alone and says what to do", async () => {
+  // Mirrors walkTo's own test for this: with acquiring switched off, an
+  // unowned ring must refuse rather than press blind, and the message has to
+  // point at the way forward instead of just restating the oracle's reason.
+  const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);
+  try {
+    const r = await runSequence({
+      steps: [{ press: "DOWN" }],
+      acquireFocus: false,
+      cdpUrl: fake.base,
+      writeEvidence: false,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.ranSteps, 0);
+    assert.equal(r.acquired, false);
+    assert.match(r.summary, /acquireFocus does that automatically/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("an unowned ring is acquired before the run starts, instead of refusing outright", async () => {
+  // The bug this fixes: runSequence used to refuse from the exact state every
+  // run naturally starts in -- right after a plugin opens or an Ask finishes
+  // (doc 03) -- forcing a wasted deck_pressButton before every call. Here the
+  // acquire press is stubbed to succeed (acquirePressFn is a test-only seam;
+  // the suite's hardware guard forbids a real one), which lets the run get
+  // past the old refusal and reach its first real step. That step's own press
+  // is NOT stubbed, so it still hits the hardware guard -- proving this test
+  // exercises the acquire path specifically, not a general bypass of it.
+  const fake = await startFakeCdp(["SharedJSContext"], (_title, idx) =>
+    idx === 0 ? unfocusedPage : focusedPage,
+  );
+  const stubPress = async (opts: PressOptions): Promise<PressResult> => ({
+    ok: true,
+    fidelity: "steam-routed",
+    method: "usb-hid:bridge",
+    buttons: opts.buttons,
+    holdMs: opts.holdMs ?? 80,
+  });
+  try {
+    const r = await runSequence({
+      steps: [{ press: "DOWN", label: "first step" }],
+      cdpUrl: fake.base,
+      writeEvidence: false,
+      acquirePressFn: stubPress,
+    });
+    assert.equal(r.acquired, true, "the unowned ring should have been placed before the run started");
+    assert.equal(r.ranSteps, 1, "the run got past the old refusal and attempted its first step");
+    assert.equal(r.reason, undefined, "the run-level refusal must not fire once acquisition succeeded");
+    // The step itself still refuses -- the bridge board is disabled for this
+    // whole suite -- but that is assertFocusMove's own real press failing, a
+    // different and expected refusal from the acquire press above.
+    assert.match(r.steps[0].reason ?? "", /DPS_NO_BRIDGE/);
   } finally {
     await fake.close();
   }

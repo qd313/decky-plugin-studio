@@ -36,6 +36,8 @@ import { readFocusAt, ReadFocusResult, FocusElement } from "./readFocus.js";
 import { assertFocusMove } from "./assertFocusMove.js";
 import { focusKey, describe, describeElement } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
+import { acquireFocusIfUnowned } from "./walkTo.js";
+import { pressButton } from "./pressButton.js";
 import { getWorkspaceArtifactsDir, timestamp } from "../tools/captureOrchestrator.js";
 
 export interface SequenceStep {
@@ -104,6 +106,23 @@ export interface RunSequenceOptions {
   runName?: string;
   /** Set false to skip writing an evidence file. Default true. */
   writeEvidence?: boolean;
+  /**
+   * When nothing owns the ring, spend one press placing it before the run
+   * starts, exactly like deck_walkTo's option of the same name -- both tools
+   * start from the same platform state (doc 03: unowned right after a plugin
+   * opens, and after an Ask finishes). Default true, for the same reason
+   * walkTo defaults it true: the workaround was a bare deck_pressButton before
+   * every run, which wastes a press and leaves the ring somewhere the caller
+   * did not choose. Set false when the unowned state is itself what you are
+   * testing.
+   */
+  acquireFocus?: boolean;
+  /**
+   * Test-only seam: substitutes the press used to place an unowned ring, so
+   * the acquire path can be exercised without the bridge board. Production
+   * code and the MCP tool never set this -- they always use the real press.
+   */
+  acquirePressFn?: typeof pressButton;
 }
 
 export interface RunSequenceResult {
@@ -128,6 +147,8 @@ export interface RunSequenceResult {
   stopped: boolean;
   evidenceFile: string | null;
   durationMs: number;
+  /** True when a press was spent placing an unowned ring before the run began. */
+  acquired: boolean;
   summary: string;
 }
 
@@ -216,6 +237,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     stopped: false,
     evidenceFile: null,
     durationMs: 0,
+    acquired: false,
     summary: "",
   };
 
@@ -257,17 +279,38 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
   const results: StepResult[] = [];
   const visits: Visit[] = [];
   let stoppedMidRun = false;
+  let acquired = false;
 
   try {
     // Step 0 is the state the run starts from. Without it a loop back to the
     // starting element would look like a fresh visit.
-    const first = await readFocusAt(cdpBase, 10_000);
+    let first = await readFocusAt(cdpBase, 10_000);
+
+    // Unowned ring: one press places it rather than moving it, so spend that
+    // press here and re-read before the run proper begins. Same mechanism and
+    // same default as deck_walkTo -- see acquireFocusIfUnowned.
+    if (opts.acquireFocus !== false) {
+      const outcome = await acquireFocusIfUnowned(first, {
+        cdpBase,
+        direction: "DOWN",
+        port: opts.port,
+        pressFn: opts.acquirePressFn,
+      });
+      first = outcome.focus;
+      acquired = outcome.acquired;
+    }
+
     if (!first.ok) {
       return {
         ...base,
         reason: first.reason,
         durationMs: Date.now() - started,
-        summary: "could not read focus before the run started, so nothing was pressed",
+        acquired,
+        summary: acquired
+          ? `spent one press trying to place an unowned ring and focus is still unreadable: ${first.reason ?? ""}`
+          : "could not read focus before the run started, so nothing was pressed. " +
+            "If the ring is unowned -- which it is right after a plugin opens or an Ask finishes -- " +
+            "one press places it; acquireFocus does that automatically and is on by default.",
       };
     }
     visits.push({ step: 0, key: focusKey(first), label: describe(first), el: first.gpfocus });
@@ -383,6 +426,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     stopped: stoppedMidRun,
     evidenceFile: null,
     durationMs: Date.now() - started,
+    acquired,
     summary: parts.join("; "),
   };
 

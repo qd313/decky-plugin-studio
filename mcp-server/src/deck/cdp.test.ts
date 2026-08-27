@@ -240,3 +240,73 @@ test("openPlugin treats a visible pane as an open QAM even when the ring is on t
     await fake.close();
   }
 });
+
+// --------------------------------------------------------------------------
+// Already-open panels. The list search only ever checks a control's own
+// text, which is exactly what fails right after a plugin opens: doc 03
+// measured the ring landing on an unlabelled Back button. Before this fix
+// openPlugin walked the (nonexistent) list and reported "not found" even
+// though its own read already proved the panel was open.
+// --------------------------------------------------------------------------
+
+/** Ring on the topmost control of an already-open panel -- an unlabelled Back
+ *  button, per doc 03 -- whose ancestor climb names the plugin. */
+const bonsaiPanelOpen = {
+  hasGpfocus: true,
+  elementCount: 350,
+  gpfocus: {
+    selector: null,
+    selectorVerified: false,
+    tag: "BUTTON",
+    id: null,
+    classes: ["Focusable"],
+    ariaLabel: null,
+    text: "",
+    ownerText: "bonsAI Settings",
+    rect: null,
+  },
+  gpfocusWithin: [],
+  activeElement: null,
+  agree: false,
+  quickAccessTab: "999",
+  visibleQuickAccessTab: "999",
+  deckyPluginRoot: true,
+};
+
+test("openPlugin recognises its own panel already open instead of walking the list for nothing", async () => {
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => bonsaiPanelOpen);
+  try {
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, listBudget: 5 });
+    assert.equal(r.ok, true);
+    assert.equal(r.verified, true);
+    assert.equal(r.alreadyOpen, true);
+    assert.match(r.summary, /already open/);
+    const findPlugin = r.stages.find((s) => s.stage === "already-open");
+    assert.ok(findPlugin, "must record the stage that made the call, for post-mortems");
+    assert.equal(findPlugin?.presses, 0, "detecting this must not cost a press");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a different plugin's panel being open still fails rather than being waved through", async () => {
+  // Conservative by design: only the requested plugin's own evidence may
+  // short-circuit the search. TabMaster's panel being open must not be read
+  // as bonsAI being open.
+  const otherPluginOpen = {
+    ...bonsaiPanelOpen,
+    gpfocus: { ...bonsaiPanelOpen.gpfocus, ownerText: "TabMaster Settings" },
+  };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => otherPluginOpen);
+  try {
+    // listBudget:0 so the walk never presses -- the suite's hardware guard
+    // refuses real presses, and the point here is the pre-walk check, not the
+    // walk itself.
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, listBudget: 0 });
+    assert.equal(r.ok, false);
+    assert.equal(r.alreadyOpen, undefined);
+    assert.match(r.summary, /walked \d+ control\(s\) on the Decky tab/);
+  } finally {
+    await fake.close();
+  }
+});

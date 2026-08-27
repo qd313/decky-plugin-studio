@@ -102,6 +102,56 @@ function matches(label: string, needle: string, exact: boolean): boolean {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+export interface AcquireFocusOptions {
+  /** CDP base to re-read from after the placing press. */
+  cdpBase: string;
+  /** Which D-pad direction to press. Placement, not movement -- see below. */
+  direction: WalkDirection;
+  port?: string;
+  /**
+   * Test-only seam: substitutes the press used to place an unowned ring, so
+   * this can be exercised without the bridge board. Production code -- both
+   * walkTo and runSequence -- always leaves this unset and gets the real
+   * bridge press.
+   */
+  pressFn?: typeof pressButton;
+}
+
+export interface AcquireFocusOutcome {
+  focus: ReadFocusResult;
+  acquired: boolean;
+  presses: number;
+}
+
+/**
+ * If `focus` shows nothing owns the ring, spend one D-pad press placing it and
+ * re-read. A no-op otherwise -- including when the ring is unreadable for some
+ * reason other than "nothing owns it yet", e.g. the Deck is unreachable.
+ *
+ * Shared by walkTo and runSequence: both start every run by asking "does
+ * anything own the ring", and both need the identical answer to "no" (doc 03
+ * -- unowned is the normal state after a plugin opens or an Ask finishes, not
+ * an edge case). Any D-pad direction places it -- Decky lands the ring on the
+ * plugin's topmost control regardless of which way was pressed -- so the
+ * direction passed in only matters for the walk that follows, not for this
+ * placement itself.
+ */
+export async function acquireFocusIfUnowned(
+  focus: ReadFocusResult,
+  opts: AcquireFocusOptions,
+): Promise<AcquireFocusOutcome> {
+  const unowned = !focus.ok && (focus.reason ?? "").includes("gpfocus marker not found");
+  if (!unowned) return { focus, acquired: false, presses: 0 };
+
+  const press = opts.pressFn ?? pressButton;
+  const p = await press({ buttons: [opts.direction], port: opts.port });
+  if (!p.ok) return { focus, acquired: false, presses: 0 };
+
+  await sleep(250);
+  const reread = await readFocusAt(opts.cdpBase, 10_000);
+  return { focus: reread, acquired: true, presses: 1 };
+}
+
 export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
   const direction = (opts.direction ?? "").toString().toUpperCase() as WalkDirection;
   const text = opts.text ?? "";
@@ -176,15 +226,11 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
 
     // Unowned ring: one press places it rather than moving it, so spend that
     // press here and re-read before the walk proper begins.
-    const unowned = !focus.ok && (focus.reason ?? "").includes("gpfocus marker not found");
-    if (unowned && opts.acquireFocus !== false) {
-      const p = await pressButton({ buttons: [direction], port: opts.port });
-      if (p.ok) {
-        acquired = true;
-        presses++;
-        await sleep(250);
-        focus = await readFocusAt(cdpBase, 10_000);
-      }
+    if (opts.acquireFocus !== false) {
+      const outcome = await acquireFocusIfUnowned(focus, { cdpBase, direction, port: opts.port });
+      focus = outcome.focus;
+      acquired = outcome.acquired;
+      presses += outcome.presses;
     }
 
     if (!focus.ok) {

@@ -363,6 +363,12 @@ export const TOOLS: ToolDef[] = [
         },
         runName: { type: "string", description: "Name for the evidence file. Defaults to a timestamp." },
         writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        acquireFocus: {
+          type: "boolean",
+          default: true,
+          description:
+            "When nothing owns the ring — which is the state right after a plugin opens, and after an Ask finishes — spend one press placing it before the run starts. Set false only when the unowned state is itself what you are testing.",
+        },
         port: { type: "string", description: "Serial port of the bridge's COM side." },
         cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
       },

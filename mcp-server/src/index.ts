@@ -187,6 +187,7 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
+        acquireFocus: params.acquireFocus != null ? Boolean(params.acquireFocus) : undefined,
       });
 
     case "tools/deck_pressButton":

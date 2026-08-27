@@ -42,6 +42,11 @@ export interface OpenPluginResult {
   pluginName: string;
   /** True only when a read confirmed the plugin's own panel is on screen. */
   verified: boolean;
+  /**
+   * True when the panel was already open and on screen before this call did
+   * anything -- so `ok: true` here means "confirmed open", not "just opened".
+   */
+  alreadyOpen?: boolean;
   fidelity: "steam-routed" | null;
   stages: OpenStage[];
   /** Controls seen while walking the Decky list, for when the plugin was not found. */
@@ -96,6 +101,31 @@ function isPluginRow(r: ReadFocusResult | null, name: string): boolean {
   const label = labelOf(r).toLowerCase();
   const want = name.toLowerCase();
   return label.length > 0 && label.includes(want);
+}
+
+/**
+ * True when the read we already have -- not a fresh one -- shows the ring is
+ * inside `name`'s own rendered content rather than the Decky list.
+ *
+ * The row search above only checks the focused element's OWN text, which is
+ * exactly the check that fails right after opening a plugin: doc 03 measured
+ * the ring landing on the topmost control, an unlabelled Back button, so its
+ * own text is empty. `ownerText` is the same ancestor-climb readFocus already
+ * does for every anonymous control (a plugin's panel commonly names itself
+ * somewhere in that climb even when the focused control does not), so this
+ * costs nothing extra to check.
+ *
+ * Deliberately conservative: requires deckyPluginRoot (we are in Decky's
+ * pane at all) AND the name showing up in the climb. A different plugin's
+ * panel being open must still fail with the normal "not found" message, not
+ * be waved through as this one -- the ancestor text for THAT plugin will not
+ * mention this one's name.
+ */
+function looksLikeOpenPanelFor(r: ReadFocusResult | null, name: string): boolean {
+  if (!r?.ok || !r.deckyPluginRoot || !r.gpfocus) return false;
+  const want = name.toLowerCase();
+  const hay = `${r.gpfocus.text} ${r.gpfocus.ariaLabel ?? ""} ${r.gpfocus.ownerText}`.toLowerCase();
+  return hay.includes(want);
 }
 
 export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPluginResult> {
@@ -308,6 +338,33 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     // ---- Stage 3: find the plugin's row -----------------------------------
     let presses = 0;
     let found = isPluginRow(focus, pluginName);
+
+    // The panel may already be open and the ring already inside it -- the
+    // list search below would never find a "row" in that case, because there
+    // is no list on screen anymore, just the plugin's own controls. Checked
+    // before walking anything, so this costs no presses.
+    if (!found && looksLikeOpenPanelFor(focus, pluginName)) {
+      stages.push({
+        stage: "already-open",
+        ok: true,
+        detail: `ring is already inside "${pluginName}"'s own panel (${describe(focus)}), not the Decky list`,
+        presses: 0,
+      });
+      return {
+        ok: true,
+        pluginName,
+        verified: true,
+        alreadyOpen: true,
+        fidelity: stages.some((s) => s.presses > 0) ? "steam-routed" : null,
+        stages,
+        seen,
+        focus,
+        summary:
+          `"${pluginName}" was already open - ` +
+          stages.map((s) => `${s.stage} ${s.ok ? "ok" : "failed"}`).join(", "),
+      };
+    }
+
     const record = (r: ReadFocusResult): void => {
       const l = labelOf(r);
       if (l && !seen.includes(l)) seen.push(l);
