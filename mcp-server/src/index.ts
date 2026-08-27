@@ -56,6 +56,7 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
     case "tools/deck_status": {
       const tunnel = deck.getTunnelState();
       const automation = automationStatus();
+      const bridge = await deckAutonomy.probeBridge();
       return {
         tunnelRunning: tunnel.running,
         tunnelPid: tunnel.pid,
@@ -70,6 +71,9 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         automationArmed: automation.armed,
         automationStoppedSince: automation.stoppedSince,
         automationStoppedBy: automation.stoppedBy,
+        bridgeReady: bridge.bridgeReady,
+        bridgePort: bridge.port,
+        bridgeReason: bridge.reason,
       };
     }
 

@@ -71,7 +71,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_status",
     description:
-      "Snapshot of the whole dev environment: tunnel running, debug-ingest count and port, whether the Deck answers, whether Ollama is reachable. Cheap — call this first when diagnosing why something is not working.",
+      "Snapshot of the whole dev environment: tunnel running, debug-ingest count and port, whether the Deck answers, whether Ollama is reachable, and whether the ESP32 controller bridge can open its configured COM port (bridgeReady/bridgePort/bridgeReason). Cheap — call this first when diagnosing why something is not working.",
     inputSchema: noArgs,
   },
   {

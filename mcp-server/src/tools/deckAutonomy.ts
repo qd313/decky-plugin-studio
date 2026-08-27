@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import fs from "fs";
 import { getIngestPort } from "../ingest/server.js";
 import { readDeckEnv, getWorkspaceRoot } from "../config.js";
@@ -7,6 +7,7 @@ import { sshRestartLoader } from "../deploy/deployHelpers.js";
 import { detectPlugin } from "./plugin.js";
 import { isDeckLocal } from "./captureOrchestrator.js";
 import { getTunnelState, pingDeck } from "./deck.js";
+import { bridgeDisabled, findPadTool } from "../deck/pressButton.js";
 
 function shellCmd(): string {
   return process.platform === "win32" ? "cmd.exe" : "/bin/sh";
@@ -132,18 +133,69 @@ export function readPluginLog(
   return { source, text: trimmed.join("\n") };
 }
 
-async function probeRemoteDeck(user: string, host: string): Promise<Record<string, string>> {
-  const remote: Record<string, string> = {};
-  const osRelease = execQuiet(`ssh ${user}@${host} "cat /etc/os-release 2>/dev/null | head -5"`);
-  if (osRelease) remote.osRelease = osRelease.replace(/\n/g, "; ");
-  const deckyPath = execQuiet(
-    `ssh ${user}@${host} "test -d ~/homebrew && echo yes || echo no"`
+const DEFAULT_REMOTE_PROBE_TIMEOUT_MS = 4000;
+
+/**
+ * Run one ssh probe command with a hard wall-clock cap. Unlike execQuiet (used
+ * for local log reads, where a slow-but-finite command is fine), an ssh call to
+ * a wrong/unreachable DECK_IP can block on the OS-level TCP connect timeout for
+ * 40s or more with no `timeout` option set. `execSync`'s own `timeout` kills the
+ * child and throws once the cap is hit, so callers never wait past `timeoutMs`.
+ */
+export type Execer = (cmd: string, timeoutMs: number) => { text: string; timedOut: boolean };
+
+export function execWithTimeout(cmd: string, timeoutMs: number): { text: string; timedOut: boolean } {
+  try {
+    const text = execSync(cmd, {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: shellCmd(),
+      timeout: timeoutMs,
+    }).trim();
+    return { text, timedOut: false };
+  } catch (err) {
+    const timedOut = Boolean(err && typeof err === "object" && (err as { killed?: boolean }).killed);
+    return { text: "", timedOut };
+  }
+}
+
+/**
+ * Probe a remote Deck over ssh, bounded by an overall deadline. Each of the
+ * three ssh calls is given whatever's left of the budget; if any of them times
+ * out (or the budget is already spent), the probe stops immediately and reports
+ * `unreachable` rather than pressing on or hanging. This never throws.
+ */
+export async function probeRemoteDeck(
+  user: string,
+  host: string,
+  opts: { timeoutMs?: number; exec?: Execer } = {}
+): Promise<Record<string, string | boolean>> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_REMOTE_PROBE_TIMEOUT_MS;
+  const exec = opts.exec ?? execWithTimeout;
+  const deadline = Date.now() + timeoutMs;
+  const remaining = () => Math.max(250, deadline - Date.now());
+  const timedOutResult = (): Record<string, string | boolean> => ({
+    unreachable: true,
+    reason: `ssh probe timed out after ${timeoutMs}ms`,
+  });
+
+  const remote: Record<string, string | boolean> = {};
+
+  const osResult = exec(`ssh ${user}@${host} "cat /etc/os-release 2>/dev/null | head -5"`, remaining());
+  if (osResult.timedOut || Date.now() >= deadline) return timedOutResult();
+  if (osResult.text) remote.osRelease = osResult.text.replace(/\n/g, "; ");
+
+  const deckyResult = exec(`ssh ${user}@${host} "test -d ~/homebrew && echo yes || echo no"`, remaining());
+  if (deckyResult.timedOut || Date.now() >= deadline) return timedOutResult();
+  remote.homebrewPresent = deckyResult.text || "unknown";
+
+  const loaderResult = exec(
+    `ssh ${user}@${host} "systemctl --user is-active plugin_loader.service 2>/dev/null || echo inactive"`,
+    remaining()
   );
-  remote.homebrewPresent = deckyPath || "unknown";
-  const loaderStatus = execQuiet(
-    `ssh ${user}@${host} "systemctl --user is-active plugin_loader.service 2>/dev/null || echo inactive"`
-  );
-  remote.pluginLoaderActive = loaderStatus || "unknown";
+  if (loaderResult.timedOut) return timedOutResult();
+  remote.pluginLoaderActive = loaderResult.text || "unknown";
+
   return remote;
 }
 
@@ -175,12 +227,112 @@ export async function getEnv(): Promise<Record<string, unknown>> {
   const host = deckEnv.DECK_IP;
   const user = deckEnv.DECK_USER ?? "deck";
   if (host && !isDeckLocal(host)) {
+    // probeRemoteDeck carries its own deadline and never throws or hangs, but
+    // the catch stays as a last line of defense: whatever happens to `remote`,
+    // the rest of the env report above must still be returned to the caller.
     try {
       base.remote = await probeRemoteDeck(user, host);
-    } catch {
-      base.remote = { error: "SSH probe failed" };
+    } catch (err) {
+      base.remote = { unreachable: true, reason: `SSH probe failed: ${(err as Error).message}` };
     }
   }
 
   return base;
+}
+
+const DEFAULT_BRIDGE_PROBE_TIMEOUT_MS = 3000;
+/** Matches pad.py's own `--port` default (see bridge/tools/pad.py), used when
+ * the user hasn't configured one. */
+const DEFAULT_BRIDGE_PORT = "COM7";
+
+export interface BridgeProbeResult {
+  bridgeReady: boolean;
+  port: string;
+  reason?: string;
+}
+
+/** The serial port deck.pressButton would use, absent a per-call override. */
+export function getConfiguredBridgePort(): string {
+  const env = readDeckEnv();
+  return env.DECK_BRIDGE_PORT?.trim() || DEFAULT_BRIDGE_PORT;
+}
+
+export type BridgeStatusRunner = (
+  padTool: string,
+  port: string,
+  timeoutMs: number
+) => { ok: boolean; reason?: string };
+
+/**
+ * Ask pad.py to open the port and answer a `status` query -- never `press` or
+ * `hold`, so this never writes to the board's input state. `--ms`/buttons are
+ * not part of the status command at all, so there is nothing here that could
+ * move the ring even by accident.
+ */
+function runPadStatus(padTool: string, port: string, timeoutMs: number): { ok: boolean; reason?: string } {
+  const result = spawnSync("python", [padTool, "status", "--port", port], {
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMs,
+  });
+
+  if (result.error) {
+    return { ok: false, reason: `pad.py status could not be started: ${result.error.message}` };
+  }
+  if (result.signal || result.status === null) {
+    return { ok: false, reason: `pad.py status did not answer within ${timeoutMs}ms` };
+  }
+  if (result.status !== 0) {
+    const detail = (result.stderr?.toString().trim() || result.stdout?.toString().trim() || "no output").slice(
+      0,
+      300
+    );
+    return { ok: false, reason: `pad.py status exit ${result.status}: ${detail}` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Whether the ESP32 bridge board is actually reachable right now -- the thing
+ * deck_status was silent about while a live session sat unplugged with nothing
+ * surfacing it until the first press was attempted.
+ *
+ * Absence of hardware (no pad.py found, port doesn't open, board unplugged) is
+ * a normal, reportable status here, not a thrown error. This never presses a
+ * button: it only ever runs pad.py's `status` subcommand, which just opens the
+ * port and asks the firmware to report in.
+ */
+export async function probeBridge(
+  opts: {
+    timeoutMs?: number;
+    findPad?: () => string | null;
+    run?: BridgeStatusRunner;
+  } = {}
+): Promise<BridgeProbeResult> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_BRIDGE_PROBE_TIMEOUT_MS;
+  const port = getConfiguredBridgePort();
+  const findPad = opts.findPad ?? findPadTool;
+  const run = opts.run ?? runPadStatus;
+
+  // Same hard stop pressButton uses: a suite (or a caller) that sets
+  // DPS_NO_BRIDGE must never reach a real spawn, even for a read-only status
+  // query, so this probe can be unit-tested and CI-run with zero hardware risk.
+  const disabledReason = bridgeDisabled();
+  if (disabledReason) {
+    return { bridgeReady: false, port, reason: disabledReason };
+  }
+
+  const pad = findPad();
+  if (!pad) {
+    return { bridgeReady: false, port, reason: `bridge/tools/pad.py not found from ${import.meta.url}` };
+  }
+
+  try {
+    const result = run(pad, port, timeoutMs);
+    if (!result.ok) {
+      return { bridgeReady: false, port, reason: result.reason ?? "bridge status probe failed" };
+    }
+    return { bridgeReady: true, port };
+  } catch (err) {
+    return { bridgeReady: false, port, reason: `bridge status probe threw: ${(err as Error).message}` };
+  }
 }
