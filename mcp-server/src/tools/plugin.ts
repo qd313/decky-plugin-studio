@@ -87,8 +87,41 @@ export function localPluginDirName(name: unknown): string {
  * normalized (lowercased) name here silently deploys to a sibling directory
  * the loader never reads. This must match the manifest exactly, case intact.
  */
+export const REMOTE_PLUGIN_NAME_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Names that are legal characters but still resolve to something other than a
+ * child directory. `.` and `..` matter because the deploy builds
+ * `~/homebrew/plugins/<name>` and then hands it to `sudo rm -rf`, where
+ * `plugins/.` is the plugins directory itself and `plugins/..` is its parent.
+ */
+const REMOTE_PLUGIN_NAME_RESERVED = new Set([".", ".."]);
+
+/**
+ * Directory name for the *remote* Deck target. decky loader names
+ * homebrew/plugins/<name> from plugin.json's `name` field verbatim, so a
+ * normalized (lowercased) name here silently deploys to a sibling directory
+ * the loader never reads. This must match the manifest exactly, case intact.
+ *
+ * It is also VALIDATED, which the local path does not need to be. The remote
+ * deploy interpolates this into `sudo rm -rf ~/homebrew/plugins/<name>` on the
+ * Deck -- an unchecked value there is a root-level delete (or worse, a command
+ * injection) driven by whatever a plugin.json happens to contain. detectPlugin()
+ * reads that field with no validation of its own: `valid` only means the file
+ * parsed. Anything outside a plain directory name refuses here, before a single
+ * remote command is built.
+ */
 export function remotePluginDirName(name: unknown): string {
-  return String(name).trim();
+  const trimmed = String(name).trim();
+  if (!REMOTE_PLUGIN_NAME_RE.test(trimmed) || REMOTE_PLUGIN_NAME_RESERVED.has(trimmed)) {
+    throw new Error(
+      `Cannot deploy: plugin.json's "name" is ${JSON.stringify(trimmed)}, which is not a usable ` +
+        `directory name on the Deck. The remote deploy replaces ~/homebrew/plugins/<name> with an ` +
+        `elevated command, so the name must be a plain directory name -- letters, digits, dot, dash ` +
+        `and underscore only, and not "." or "..". Rename it in plugin.json and redeploy.`
+    );
+  }
+  return trimmed;
 }
 
 export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto") {

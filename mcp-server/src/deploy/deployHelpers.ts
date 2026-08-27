@@ -91,9 +91,28 @@ export function remoteDeployTempDir(pluginName: string): string {
   return `/tmp/decky-studio-deploy-${Date.now()}-${pluginName}`;
 }
 
+/**
+ * Quote a remote path for the shell on the far side of ssh.
+ *
+ * A leading `~/` must stay OUTSIDE the quotes or the remote shell takes the
+ * tilde literally and never expands it to the home directory. Everything after
+ * it is single-quoted, so a space or a shell metacharacter in the name is one
+ * literal path segment rather than extra arguments to `rm -rf`.
+ *
+ * remotePluginDirName() already refuses anything but a plain directory name,
+ * so this should never have work to do. It is here because the command it
+ * feeds runs `sudo rm -rf` on someone's Deck, and one guard in front of that
+ * is not enough.
+ */
+export function quoteRemotePath(p: string): string {
+  // POSIX single-quote escape: close, emit a literal quote, reopen.
+  const esc = (seg: string) => "'" + seg.split("'").join("'\\''") + "'";
+  return p.startsWith("~/") ? `~/${esc(p.slice(2))}` : esc(p);
+}
+
 export function ensureRemoteDir(user: string, host: string, remoteDir: string): void {
   const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
-  proc.execSync(`ssh ${user}@${host} "mkdir -p ${remoteDir}"`, { stdio: "pipe", encoding: "utf8", shell });
+  proc.execSync(`ssh ${user}@${host} "mkdir -p ${quoteRemotePath(remoteDir)}"`, { stdio: "pipe", encoding: "utf8", shell });
 }
 
 const PERMISSION_SIGNS =
@@ -119,7 +138,16 @@ export function moveDeployedPluginIntoPlace(
   pluginName: string
 ): void {
   const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
-  const remoteCmd = `sudo rm -rf ${targetDir} && sudo mkdir -p "$(dirname ${targetDir})" && sudo mv ${tempDir} ${targetDir} && sudo chown -R root:root ${targetDir}`;
+  // The parent is spelled out rather than computed with `$(dirname ...)`: this
+  // whole string is interpolated into a double-quoted local ssh argument, and a
+  // POSIX login shell on the *local* side would run that substitution itself
+  // before ssh ever saw it.
+  const target = quoteRemotePath(targetDir);
+  const temp = quoteRemotePath(tempDir);
+  const parent = quoteRemotePath(targetDir.replace(/\/[^/]+$/, ""));
+  const remoteCmd =
+    `sudo rm -rf ${target} && sudo mkdir -p ${parent} && ` +
+    `sudo mv ${temp} ${target} && sudo chown -R root:root ${target}`;
   try {
     proc.execSync(`ssh ${user}@${host} "${remoteCmd}"`, { stdio: "pipe", encoding: "utf8", shell });
   } catch (err: unknown) {

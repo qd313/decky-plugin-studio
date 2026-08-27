@@ -30,7 +30,7 @@ import path from "node:path";
 
 import { deployPlugin, localPluginDirName, remotePluginDirName } from "./plugin.js";
 import { deployRemote } from "./deck.js";
-import { proc } from "../deploy/deployHelpers.js";
+import { proc, quoteRemotePath, moveDeployedPluginIntoPlace } from "../deploy/deployHelpers.js";
 
 function makeFixturePlugin(name: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dps-deploy-plugin-"));
@@ -161,7 +161,9 @@ test("deployRemote stages through a deck-writable temp dir, then moves into plac
 
     const moveCall = calls.find((c) => c.includes("sudo mv"));
     assert.ok(moveCall, `expected one elevated move command among: ${JSON.stringify(calls)}`);
-    assert.match(moveCall!, /sudo mv \S+ ~\/homebrew\/plugins\/bonsAI\b/);
+    // Quoted since the safety pass: the tilde stays outside so the remote
+  // shell still expands it, the rest is one literal segment.
+  assert.match(moveCall!, /sudo mv \S+ ~\/'homebrew\/plugins\/bonsAI'/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -205,4 +207,93 @@ test("a root-owned destination produces a diagnostic naming the target and the f
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+/*
+ * The guard in front of `sudo rm -rf`.
+ *
+ * The remote deploy replaces ~/homebrew/plugins/<name> with an elevated
+ * command, and <name> is plugin.json's `name` field verbatim -- detectPlugin()
+ * validates nothing, so `valid: true` only means the file parsed. Without a
+ * check here, a blank name deletes the whole plugins directory, a name with a
+ * space deletes two wrong paths, and a name with shell punctuation runs as
+ * root on the Deck. These tests assert the refusal happens in the name
+ * function itself, before any command string is built.
+ */
+const REFUSED_NAMES: Array<[string, string]> = [
+  ["", "blank -- would target the plugins directory itself"],
+  ["   ", "whitespace only -- trims to blank"],
+  [".", "would target the plugins directory itself"],
+  ["..", "would target the plugins directory's parent"],
+  ["My Plugin", "a space word-splits an unquoted rm -rf into two paths"],
+  ["foo; rm -rf ~", "command separator"],
+  ["$(id)", "command substitution"],
+  ["`id`", "backtick substitution"],
+  ["foo/../bar", "path traversal"],
+  ["foo/bar", "escapes the single directory level it is allowed"],
+  ["*", "a glob would match every installed plugin"],
+];
+
+for (const [name, why] of REFUSED_NAMES) {
+  test(`remotePluginDirName refuses ${JSON.stringify(name)} (${why})`, () => {
+    assert.throws(
+      () => remotePluginDirName(name),
+      /not a usable directory name/,
+      `${JSON.stringify(name)} must not reach the elevated command`
+    );
+  });
+}
+
+test("remotePluginDirName still accepts the ordinary names people actually use", () => {
+  for (const ok of ["bonsAI", "decky-plugin-studio", "my_plugin", "Plugin.2", "a"]) {
+    assert.equal(remotePluginDirName(ok), ok);
+  }
+});
+
+test("a refused name never reaches ssh -- no remote command is emitted at all", () => {
+  const calls: string[] = [];
+  const realExec = proc.execSync;
+  proc.execSync = ((cmd: string) => {
+    calls.push(cmd);
+    return "";
+  }) as typeof proc.execSync;
+  try {
+    assert.throws(() => remotePluginDirName(""), /not a usable directory name/);
+  } finally {
+    proc.execSync = realExec;
+  }
+  assert.deepEqual(calls, [], "the guard must refuse before anything is executed");
+});
+
+test("quoteRemotePath keeps ~ expandable but makes the rest one literal segment", () => {
+  // The tilde has to stay outside the quotes or the remote shell never expands
+  // it; everything after it is quoted so a space cannot split the argument.
+  assert.equal(quoteRemotePath("~/homebrew/plugins/bonsAI"), "~/'homebrew/plugins/bonsAI'");
+  assert.equal(quoteRemotePath("/tmp/decky-studio-deploy-1-x"), "'/tmp/decky-studio-deploy-1-x'");
+  assert.equal(quoteRemotePath("~/a b"), "~/'a b'");
+  // POSIX escape for a quote inside single quotes: close, literal, reopen.
+  const q = String.fromCharCode(39);
+  assert.equal(quoteRemotePath(`~/it${q}s`), `~/${q}it${q}\\${q}${q}s${q}`);
+});
+
+test("the elevated move quotes every path and never uses local command substitution", () => {
+  const calls: string[] = [];
+  const realExec = proc.execSync;
+  proc.execSync = ((cmd: string) => {
+    calls.push(cmd);
+    return "";
+  }) as typeof proc.execSync;
+  try {
+    moveDeployedPluginIntoPlace("deck", "1.2.3.4", "/tmp/stage-1", "~/homebrew/plugins/bonsAI", "bonsAI");
+  } finally {
+    proc.execSync = realExec;
+  }
+  assert.equal(calls.length, 1);
+  const cmd = calls[0];
+  assert.match(cmd, /sudo rm -rf ~\/'homebrew\/plugins\/bonsAI'/);
+  assert.match(cmd, /sudo mkdir -p ~\/'homebrew\/plugins'/);
+  assert.match(cmd, /sudo mv '\/tmp\/stage-1' ~\/'homebrew\/plugins\/bonsAI'/);
+  // `$(dirname ...)` here would be run by a POSIX shell on the LOCAL side,
+  // before ssh ever saw the string.
+  assert.ok(!cmd.includes("$("), "no command substitution in the ssh argument");
 });
