@@ -159,11 +159,11 @@ test("deployRemote stages through a deck-writable temp dir, then moves into plac
       `expected every scp call to stage into a temp dir named after the plugin: ${JSON.stringify(scpCalls)}`
     );
 
-    const moveCall = calls.find((c) => c.includes("sudo mv"));
+    const moveCall = calls.find((c) => c.includes("sudo cp -a"));
     assert.ok(moveCall, `expected one elevated move command among: ${JSON.stringify(calls)}`);
     // Quoted since the safety pass: the tilde stays outside so the remote
   // shell still expands it, the rest is one literal segment.
-  assert.match(moveCall!, /sudo mv \S+ ~\/'homebrew\/plugins\/bonsAI'/);
+  assert.match(moveCall!, /sudo cp -a \S+ ~\/'homebrew\/plugins\/bonsAI'/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -179,7 +179,7 @@ test("a root-owned destination produces a diagnostic naming the target and the f
       () =>
         withFakeExec(
           (cmd) => {
-            if (cmd.includes("sudo mv")) {
+            if (cmd.includes("sudo cp -a")) {
               throw Object.assign(new Error(`Command failed: ${cmd}`), {
                 status: 1,
                 stdout: "",
@@ -290,9 +290,12 @@ test("the elevated move quotes every path and never uses local command substitut
   }
   assert.equal(calls.length, 1);
   const cmd = calls[0];
-  assert.match(cmd, /sudo rm -rf ~\/'homebrew\/plugins\/bonsAI'/);
-  assert.match(cmd, /sudo mkdir -p ~\/'homebrew\/plugins'/);
-  assert.match(cmd, /sudo mv '\/tmp\/stage-1' ~\/'homebrew\/plugins\/bonsAI'/);
+  // Merge, not replace: the deploy set does not include everything the
+  // installed directory holds (bonsAI keeps its seed data in data/), so a
+  // deploy must not delete what it cannot put back.
+  assert.match(cmd, /sudo cp -a '\/tmp\/stage-1'\/\. ~\/'homebrew\/plugins\/bonsAI'\//);
+  assert.ok(!/rm -rf ~/.test(cmd), 'the target directory must never be removed');
+  assert.match(cmd, /sudo rm -rf '\/tmp\/stage-1'/);
   // `$(dirname ...)` here would be run by a POSIX shell on the LOCAL side,
   // before ssh ever saw the string.
   assert.ok(!cmd.includes("$("), "no command substitution in the ssh argument");

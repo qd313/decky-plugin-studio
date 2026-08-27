@@ -144,10 +144,29 @@ export function moveDeployedPluginIntoPlace(
   // before ssh ever saw it.
   const target = quoteRemotePath(targetDir);
   const temp = quoteRemotePath(tempDir);
-  const parent = quoteRemotePath(targetDir.replace(/\/[^/]+$/, ""));
+  /*
+   * MERGE INTO THE TARGET -- do not replace it.
+   *
+   * The first version of this ran `sudo rm -rf <target>` and moved the staged
+   * upload into its place. That deletes everything the deploy does not itself
+   * put back, and listDeploySources() copies a fixed set (dist, main.py,
+   * plugin.json, package.json, assets, py_modules, defaults, bin, locales) that
+   * does NOT include `data`. The installed bonsAI on the live rig keeps its
+   * seed data there -- intent packs, kb seeds, rag_seed -- so a deploy would
+   * have silently destroyed 152K of content it had no way to restore.
+   *
+   * `cp -a <temp>/. <target>/` overwrites what the deploy ships and leaves
+   * everything else alone, which is what plain `scp -r` into the live
+   * directory did before any of this. The reason for the elevated command was
+   * never "replace the directory", it was "write into a directory root owns".
+   *
+   * The trade is that a file dropped from the plugin is not cleaned up by a
+   * deploy. That was already true of the scp path, and it is much the better
+   * failure: a stale file is visible and removable, deleted user data is not.
+   */
   const remoteCmd =
-    `sudo rm -rf ${target} && sudo mkdir -p ${parent} && ` +
-    `sudo mv ${temp} ${target} && sudo chown -R root:root ${target}`;
+    `sudo mkdir -p ${target} && sudo cp -a ${temp}/. ${target}/ && ` +
+    `sudo rm -rf ${temp} && sudo chown -R root:root ${target}`;
   try {
     proc.execSync(`ssh ${user}@${host} "${remoteCmd}"`, { stdio: "pipe", encoding: "utf8", shell });
   } catch (err: unknown) {
