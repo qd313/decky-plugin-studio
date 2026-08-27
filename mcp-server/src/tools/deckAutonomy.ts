@@ -240,7 +240,19 @@ export async function getEnv(): Promise<Record<string, unknown>> {
   return base;
 }
 
-const DEFAULT_BRIDGE_PROBE_TIMEOUT_MS = 3000;
+/*
+ * Measured, not guessed. On the live rig (2026-08-27) a healthy board answers
+ * `pad.py status` in ~3.3s: python startup, then opening the COM port pulls DTR
+ * and auto-resets the ESP32, and only then does the 0.5s drain run. The first
+ * value here was 3000ms, which timed out roughly 300ms short and reported a
+ * board that was plugged in, alive, and answering as `bridgeReady: false` --
+ * the exact false-negative deck_status exists to prevent.
+ *
+ * A missing board does NOT spend this: opening an absent port fails
+ * immediately, so the generous deadline only applies when there is real
+ * hardware taking real time to wake up.
+ */
+const DEFAULT_BRIDGE_PROBE_TIMEOUT_MS = 10_000;
 /** Matches pad.py's own `--port` default (see bridge/tools/pad.py), used when
  * the user hasn't configured one. */
 const DEFAULT_BRIDGE_PORT = "COM7";
