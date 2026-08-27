@@ -16,6 +16,7 @@ __pycache__/
 coverage/
 screenshots/preview/
 !tests/preview-baselines/
+screenshots/
 
 # deck_runSequence evidence files -- per-run focus logs, not source
 runs/
