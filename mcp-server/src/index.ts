@@ -31,7 +31,7 @@ import {
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.6" };
+const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.8" };
 
 startIngestServer(Number(process.env.DEBUG_INGEST_PORT ?? 7682));
 

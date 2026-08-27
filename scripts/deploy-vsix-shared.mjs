@@ -70,10 +70,25 @@ function resolveEditorClis(prefer) {
   const codeClis = ["code", ...codeCandidates.filter((p) => fs.existsSync(p))];
   const cursorClis = ["cursor", ...cursorCandidates.filter((p) => fs.existsSync(p))];
 
-  if (prefer === "cursor") {
-    return [...cursorClis, ...codeClis];
-  }
-  return [...codeClis, ...cursorClis];
+  /*
+   * ONE editor's CLIs, never the other's.
+   *
+   * This used to return `[...codeClis, ...cursorClis]` for a VS Code deploy and
+   * the reverse for Cursor -- so a failure in the requested editor silently fell
+   * through and installed into the OTHER one, then printed "Installed via:
+   * cursor" and exited 0. That is not a fallback between ways of reaching one
+   * editor, it is a fallback between editors, and it turns a failed deploy into
+   * a successful-looking deploy of the wrong thing.
+   *
+   * It happened on 2026-08-27: `pnpm deploy:vscode` could not replace a
+   * same-version directory that a running VS Code held open (EBUSY), fell
+   * through to a not-running Cursor, and reported success. VS Code kept the old
+   * build and nothing said so.
+   *
+   * The candidates below are still a list, because a single editor's CLI can
+   * live in several places. They are all the same editor.
+   */
+  return prefer === "cursor" ? cursorClis : codeClis;
 }
 
 export function installVsix(vsixPath, { prefer = "vscode" } = {}) {
@@ -96,7 +111,23 @@ export function installVsix(vsixPath, { prefer = "vscode" } = {}) {
     }
   }
 
-  console.error(`\nFailed to install VSIX. Tried: ${clis.join(", ")}`);
+  console.error(`\nFailed to install the VSIX into ${editorLabel}. Tried: ${clis.join(", ")}`);
+  console.error(`It was NOT installed anywhere else -- this script only targets ${editorLabel}.`);
+
+  /*
+   * The failure that actually happens, and its actual cause.
+   *
+   * Installing a version over ITSELF makes the editor rename the existing
+   * extension directory, which it cannot do while it holds those files open.
+   * A different version number installs into a fresh directory and needs no
+   * restart at all -- so the fix is usually a version bump, not a restart.
+   */
+  console.error("");
+  console.error(`If the output above says EBUSY or "Please restart", ${editorLabel} is running`);
+  console.error("and already holds this exact version's extension directory. Either:");
+  console.error("  - bump the version (a new version installs alongside, no restart needed), or");
+  console.error(`  - close ${editorLabel} and run this again.`);
+  console.error("");
   console.error(`Manual install: ${editorLabel} → Extensions → … → Install from VSIX`);
   console.error(`VSIX path: ${vsixPath}`);
   process.exit(1);

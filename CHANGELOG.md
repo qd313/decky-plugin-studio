@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+> Package versions were bumped to **0.3.8** to deploy the killswitch into a running VS Code:
+> installing the same version over itself fails with `EBUSY` because the editor holds the
+> extension directory open, while a new version number installs alongside it. The entries
+> below are still unreleased -- fold them into a `## [0.3.8]` section when cutting the
+> release. `mcp-server` was on 0.3.6 while the extension was on 0.3.7 and the server
+> reported that stale number over MCP `serverInfo`; all four are now pinned together.
+
 ### Added
 
 - **Deck automation killswitch.** The rig presses real buttons on a real Deck, and until now nothing a human could hit stopped it on purpose -- the only backstop was the board's own neutral-on-silence watchdog, which covers the host dying and nothing else. A stop now: latches automation off, tells the board to release whatever it is holding, aborts any in-flight `deck_runSequence` / `deck_walkTo` / `deck_openPlugin`, and tears down the SSH tunnels (CDP forwards and the ingest reverse tunnel, reported separately). Reachable from a dedicated status bar item, the **Decky: Stop All Deck Automation** command, <kbd>ctrl+alt+.</kbd>, `pnpm stop`, and the `deck_stopAutomation` tool.
