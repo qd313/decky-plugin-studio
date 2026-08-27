@@ -28,9 +28,54 @@ export type CaptureResult = {
   method: string;
 };
 
-export function getScriptsDir(): string {
+/**
+ * Where the capture scripts might live, tried in order.
+ *
+ * `getScriptsDir()` resolves relative to *this module's own file*, and that
+ * file lives in a different place depending on how the server is running:
+ *
+ *  - compiled `dist/tools/captureOrchestrator.js` (a normal build, and the
+ *    VSIX bundle, which mirrors the same shape) -- scripts are copied next
+ *    to it at `dist/scripts` by `scripts/copy-scripts.mjs`.
+ *  - source-tree `src/tools/captureOrchestrator.ts` under `tsx` (`npm run
+ *    dev`, which this repo's own `mcp.json` points consumers at) -- there is
+ *    no `src/scripts`; it was never created by any build step. The nearest
+ *    real copy is `mcp-server/dist/scripts`, if a build has been run.
+ *  - the same source tree with no build at all -- fall back to the
+ *    monorepo's original `templates/scripts` at the repo root, which is what
+ *    every copy is made from.
+ */
+function scriptsDirCandidates(): string[] {
   const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"));
-  return path.join(here, "..", "scripts");
+  return [
+    path.join(here, "..", "scripts"),
+    path.join(here, "..", "..", "dist", "scripts"),
+    path.join(here, "..", "..", "..", "templates", "scripts"),
+  ];
+}
+
+/**
+ * Pick the first candidate that actually contains a `deck` subdirectory, or
+ * throw naming every location that was tried. Exported (separately from
+ * {@link getScriptsDir}) so tests can exercise the search-and-report logic
+ * against fabricated paths without needing to fake this module's own file
+ * location.
+ */
+export function resolveScriptsDir(candidates: string[]): string {
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, "deck"))) {
+      return dir;
+    }
+  }
+  throw new Error(
+    `Could not find the capture scripts directory. Tried:\n${candidates
+      .map((d) => `  - ${d}`)
+      .join("\n")}`
+  );
+}
+
+export function getScriptsDir(): string {
+  return resolveScriptsDir(scriptsDirCandidates());
 }
 
 export function isLocalSteamOS(): boolean {
