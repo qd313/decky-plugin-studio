@@ -5,7 +5,11 @@ import { readDeckEnv } from "../config.js";
 import { registerTunnel, unregisterTunnel } from "../deck/killswitch.js";
 import { listDeploySources } from "../deploy/copyManifest.js";
 import {
+  ensureRemoteDir,
   execScpRecursive,
+  moveDeployedPluginIntoPlace,
+  proc,
+  remoteDeployTempDir,
   runPreDeployHook,
   runWithRetry,
   sshRestartLoader,
@@ -315,7 +319,7 @@ export async function deployRemote(
   runPreDeployHook(pluginRoot);
 
   runWithRetry("plugin build", () => {
-    execSync("pnpm run build || npm run build", {
+    proc.execSync("pnpm run build || npm run build", {
       cwd: pluginRoot,
       stdio: "inherit",
       shell: shellCmd(),
@@ -323,12 +327,22 @@ export async function deployRemote(
   });
 
   const sources = listDeploySources(pluginRoot);
-  const remote = `${user}@${host}:~/homebrew/plugins/${pluginName}`;
+  // The Deck names ~/homebrew/plugins/<pluginName> from plugin.json, case
+  // intact, and once decky loader has installed a plugin there once it owns
+  // that directory as root. A plain scp as the deploy user cannot overwrite
+  // it, so stage the upload somewhere the deploy user can always write, then
+  // let a single elevated command move it into place.
+  const targetDir = `~/homebrew/plugins/${pluginName}`;
+  const tempDir = remoteDeployTempDir(pluginName);
+
+  ensureRemoteDir(user, host, tempDir);
 
   runWithRetry("scp deploy", () => {
-    execScpRecursive(pluginRoot, sources, remote);
+    execScpRecursive(pluginRoot, sources, `${user}@${host}:${tempDir}`);
   });
 
+  moveDeployedPluginIntoPlace(user, host, tempDir, targetDir, pluginName);
+
   sshRestartLoader(user, host);
-  return { target: remote, copied: sources };
+  return { target: targetDir, copied: sources };
 }

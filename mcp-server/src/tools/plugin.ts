@@ -72,6 +72,25 @@ export function verifyZip(): { ok: boolean; issues: string[] } {
   return { ok: issues.length === 0, issues };
 }
 
+/**
+ * Filesystem-safe directory name for a *local* homebrew/plugins copy. Local
+ * installs are free to normalize, since this process also owns the directory
+ * it creates.
+ */
+export function localPluginDirName(name: unknown): string {
+  return String(name).replace(/\s+/g, "-").toLowerCase();
+}
+
+/**
+ * Directory name for the *remote* Deck target. decky loader names
+ * homebrew/plugins/<name> from plugin.json's `name` field verbatim, so a
+ * normalized (lowercased) name here silently deploys to a sibling directory
+ * the loader never reads. This must match the manifest exactly, case intact.
+ */
+export function remotePluginDirName(name: unknown): string {
+  return String(name).trim();
+}
+
 export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto") {
   const info = detectPlugin();
   if (!info.valid) throw new Error(info.reason);
@@ -80,7 +99,6 @@ export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto") {
 
   runPreDeployHook(info.root!);
 
-  const pluginName = String(info.name).replace(/\s+/g, "-").toLowerCase();
   const localInfo = detectLocalSteamOs();
   const homebrew = getHomebrewPluginsDir();
   const canLocal =
@@ -91,11 +109,11 @@ export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto") {
   if (mode === "auto") deployMode = canLocal ? "local" : "remote";
 
   if (deployMode === "local") {
-    const target = copyPluginToLocal(info.root!, pluginName);
+    const target = copyPluginToLocal(info.root!, localPluginDirName(info.name));
     const restartMethod = await restartLoaderLocal();
     return { mode: "local", target, restartMethod };
   }
 
-  const remote = await deployRemote(info.root!, pluginName);
+  const remote = await deployRemote(info.root!, remotePluginDirName(info.name));
   return { mode: "remote", ...remote };
 }
