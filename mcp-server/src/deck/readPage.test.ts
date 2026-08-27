@@ -112,6 +112,127 @@ test("a timeout is a finding, not an error, and hands back the last value", asyn
   }
 });
 
+// index.ts's deck_waitFor handler always builds the options object with an
+// `equals` key present -- valued `undefined` when the caller did not ask for
+// exact-match semantics -- because it reads:
+//   equals: Object.prototype.hasOwnProperty.call(params, "equals") ? params.equals : undefined
+// That is the shape every real call actually takes, and it is what exposed
+// the bug: `waitFor` must treat "equals key present but undefined" the same
+// as "no equals given at all," not as "equals: null".
+
+test("waitFor keeps polling on null even when `equals` is explicitly undefined", async () => {
+  // Real bug: this used to satisfy on the very first poll, because
+  // JSON.stringify(null) === JSON.stringify(undefined ?? null).
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => null);
+  try {
+    const r = await waitFor<unknown>({
+      expression: "1",
+      equals: undefined,
+      waitMs: 300,
+      intervalMs: 100,
+      cdpUrl: fake.base,
+    });
+    assert.equal(r.satisfied, false);
+    assert.equal(r.value, null);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("waitFor keeps polling on undefined and false even when `equals` is explicitly undefined", async () => {
+  const fake = await startFakeCdp(["QuickAccess_uid2"], (_t, i) => (i === 0 ? undefined : false));
+  try {
+    const r = await waitFor<unknown>({
+      expression: "1",
+      equals: undefined,
+      waitMs: 300,
+      intervalMs: 100,
+      cdpUrl: fake.base,
+    });
+    assert.equal(r.satisfied, false);
+    assert.equal(r.value, false);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("waitFor is satisfied by a truthy object even when `equals` is explicitly undefined", async () => {
+  // Real bug: this used to run to full timeout, because a populated object's
+  // JSON never equals "null".
+  const fake = await startFakeCdp(["QuickAccess_uid2"], (_t, i) =>
+    i >= 2 ? { done: true, fences: 1 } : null,
+  );
+  try {
+    const r = await waitFor<{ done: boolean; fences: number }>({
+      expression: "1",
+      equals: undefined,
+      intervalMs: 100,
+      cdpUrl: fake.base,
+    });
+    assert.equal(r.satisfied, true);
+    assert.deepEqual(r.value, { done: true, fences: 1 });
+    assert.equal(r.polls, 3);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("waitFor is satisfied by boolean true even when `equals` is explicitly undefined", async () => {
+  // Real bug: same as above, but with "return only a boolean" -- which the
+  // bug reports show is not a workaround either.
+  const fake = await startFakeCdp(["QuickAccess_uid2"], (_t, i) => i >= 1);
+  try {
+    const r = await waitFor<boolean>({
+      expression: "1",
+      equals: undefined,
+      intervalMs: 100,
+      cdpUrl: fake.base,
+    });
+    assert.equal(r.satisfied, true);
+    assert.equal(r.value, true);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("waitFor equals matches objects by JSON value, not just primitives", async () => {
+  const fake = await startFakeCdp(["QuickAccess_uid2"], (_t, i) =>
+    i >= 1 ? { done: true } : { done: false },
+  );
+  try {
+    const r = await waitFor<{ done: boolean }>({
+      expression: "1",
+      equals: { done: true },
+      intervalMs: 100,
+      cdpUrl: fake.base,
+    });
+    assert.equal(r.satisfied, true);
+    assert.deepEqual(r.value, { done: true });
+  } finally {
+    await fake.close();
+  }
+});
+
+test("waitFor equals: null is a real target, distinct from equals being omitted", async () => {
+  // Guards the fix itself: `opts.equals !== undefined` must still treat an
+  // intentional `equals: null` as exact-match mode, not fall back to
+  // truthiness (where the earlier "still going" string would already pass).
+  const fake = await startFakeCdp(["QuickAccess_uid2"], (_t, i) => (i >= 1 ? null : "still going"));
+  try {
+    const r = await waitFor<unknown>({
+      expression: "1",
+      equals: null,
+      intervalMs: 100,
+      cdpUrl: fake.base,
+    });
+    assert.equal(r.satisfied, true);
+    assert.equal(r.value, null);
+    assert.equal(r.polls, 2);
+  } finally {
+    await fake.close();
+  }
+});
+
 test("waitFor stops immediately when the read itself cannot run", async () => {
   // Polling a broken tunnel until the timeout just delays the same error.
   const r = await waitFor({

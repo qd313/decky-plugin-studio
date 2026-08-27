@@ -206,7 +206,14 @@ export async function waitFor<T = unknown>(opts: WaitForOptions): Promise<WaitFo
   const waitMs = opts.waitMs ?? 30_000;
   const intervalMs = Math.max(100, opts.intervalMs ?? 500);
   const started = Date.now();
-  const hasExpected = Object.prototype.hasOwnProperty.call(opts, "equals");
+  // NOT `hasOwnProperty` -- the tool handler in index.ts always builds this
+  // options object with an `equals` key present (valued `undefined` when the
+  // caller did not ask for exact-match semantics), so key presence alone is
+  // `true` on every real call and pins waitFor to comparing against
+  // `JSON.stringify(undefined ?? null)` forever. Testing the value itself is
+  // what actually distinguishes "no equals given" from a genuine
+  // `equals: null` target (`null !== undefined`, so that still works).
+  const hasExpected = opts.equals !== undefined;
   const expected = JSON.stringify(opts.equals ?? null);
 
   const satisfiedBy = (v: unknown): boolean =>
