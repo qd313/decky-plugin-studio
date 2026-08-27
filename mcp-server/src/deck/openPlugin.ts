@@ -29,6 +29,7 @@ import { pressButton, pressChord } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
 import { focusKey, describe } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
+import { acquireFocusIfUnowned } from "./walkTo.js";
 
 export interface OpenStage {
   stage: string;
@@ -121,11 +122,28 @@ function isPluginRow(r: ReadFocusResult | null, name: string): boolean {
  * be waved through as this one -- the ancestor text for THAT plugin will not
  * mention this one's name.
  */
+/**
+ * Is the ring sitting inside the REQUESTED plugin's own panel?
+ *
+ * The first version of this asked whether the focused control's text mentioned
+ * the plugin's name. On the live rig (2026-08-27) that was wrong in both
+ * directions at once. It missed the real case, because the ring lands on
+ * controls called "ask" or "Show diagnostics" that say nothing about the plugin
+ * they belong to -- so openPlugin walked the list and pressed A on a suggestion
+ * chip instead of reporting the panel it was already in. And it would have
+ * matched a chip reading "...how bonsai trees are pruned", which mentions
+ * "bonsai" while telling you nothing about which panel is open.
+ *
+ * The panel header is the honest signal: Decky renders the open plugin's name
+ * as a label of its own inside the pane. Match a WHOLE label, case-insensitively
+ * -- prose that merely contains the name is not a label, and a different
+ * plugin's panel carries a different one, so it still fails as it should.
+ */
 function looksLikeOpenPanelFor(r: ReadFocusResult | null, name: string): boolean {
-  if (!r?.ok || !r.deckyPluginRoot || !r.gpfocus) return false;
-  const want = name.toLowerCase();
-  const hay = `${r.gpfocus.text} ${r.gpfocus.ariaLabel ?? ""} ${r.gpfocus.ownerText}`.toLowerCase();
-  return hay.includes(want);
+  if (!r?.ok || !r.deckyPluginRoot) return false;
+  const want = name.trim().toLowerCase();
+  if (!want) return false;
+  return (r.deckyPanelLabels ?? []).some((label) => label.trim().toLowerCase() === want);
 }
 
 export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPluginResult> {
@@ -202,12 +220,46 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
   try {
     // ---- Stage 1: where are we? -------------------------------------------
     let focus = await readFocusAt(cdpBase, 10_000);
+
+    /*
+     * An unowned ring is where this tool is normally CALLED FROM, not an edge
+     * case: nothing owns gamepad focus after a plugin opens or an Ask finishes,
+     * which is exactly when someone reaches for deck_openPlugin. Refusing here
+     * meant the already-open detection further down (stage 3) could never run
+     * in the one situation it was written for -- the live pass on 2026-08-27
+     * hit precisely that, with the panel plainly open on screen.
+     *
+     * Same mechanism walkTo and runSequence use, one D-pad press, which places
+     * an unowned ring without activating anything.
+     */
+    let acquired = false;
+    if (!focus.ok) {
+      abortIfStopped();
+      const outcome = await acquireFocusIfUnowned(focus, {
+        cdpBase,
+        direction: "DOWN",
+        port: opts.port,
+      });
+      focus = outcome.focus;
+      acquired = outcome.acquired;
+      if (acquired) {
+        stages.push({
+          stage: "acquire-focus",
+          ok: focus.ok,
+          detail: "nothing owned the ring, so one DOWN press placed it",
+          presses: outcome.presses,
+        });
+      }
+    }
+
     if (!focus.ok) {
       stages.push({ stage: "read-initial", ok: false, detail: focus.reason ?? "", presses: 0 });
       return fail(
         focus.reason ?? "could not read focus",
         focus,
-        "could not read the Deck's focus state, so nothing was pressed",
+        acquired
+          ? "could not read the Deck's focus state even after placing the ring"
+          : "could not read the Deck's focus state, so nothing was pressed",
       );
     }
     stages.push({
@@ -337,13 +389,24 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
 
     // ---- Stage 3: find the plugin's row -----------------------------------
     let presses = 0;
-    let found = isPluginRow(focus, pluginName);
 
-    // The panel may already be open and the ring already inside it -- the
-    // list search below would never find a "row" in that case, because there
-    // is no list on screen anymore, just the plugin's own controls. Checked
-    // before walking anything, so this costs no presses.
-    if (!found && looksLikeOpenPanelFor(focus, pluginName)) {
+    /*
+     * ALREADY-OPEN IS CHECKED FIRST, BEFORE isPluginRow.
+     *
+     * It used to be guarded by `!found`, and on the live rig that guard was
+     * what defeated it. isPluginRow() asks whether the focused control's text
+     * CONTAINS the plugin's name, which is a fine question about a row in the
+     * Decky list and a bad one about anything else: inside the bonsAI panel the
+     * ring sat on a suggestion chip reading "write a long detailed explanation
+     * of how bonsai trees are pruned", isPluginRow said "that is the row", and
+     * the tool pressed A on it. `found` was true, so the already-open check
+     * never ran, in the exact state it was written for.
+     *
+     * Being inside the plugin's own panel is the stronger fact -- it is decided
+     * by the panel header, not by whatever prose a control happens to carry --
+     * so it is asked first and settles the question with no presses at all.
+     */
+    if (looksLikeOpenPanelFor(focus, pluginName)) {
       stages.push({
         stage: "already-open",
         ok: true,
@@ -367,6 +430,8 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
           stages.map((s) => `${s.stage} ${s.ok ? "ok" : "failed"}`).join(", "),
       };
     }
+
+    let found = isPluginRow(focus, pluginName);
 
     const record = (r: ReadFocusResult): void => {
       const l = labelOf(r);

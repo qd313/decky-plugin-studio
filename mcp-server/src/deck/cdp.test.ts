@@ -249,8 +249,18 @@ test("openPlugin treats a visible pane as an open QAM even when the ring is on t
 // though its own read already proved the panel was open.
 // --------------------------------------------------------------------------
 
-/** Ring on the topmost control of an already-open panel -- an unlabelled Back
- *  button, per doc 03 -- whose ancestor climb names the plugin. */
+/*
+ * Ring on a control inside an already-open panel.
+ *
+ * The identifying evidence is `deckyPanelLabels`: Decky renders the open
+ * plugin's name as a discrete label in the panel header, and that is the only
+ * thing on the page saying WHICH plugin is open (deckyPluginRoot is just
+ * "tab 999", true of every plugin alike). Measured on the live rig 2026-08-27.
+ *
+ * The focused control here deliberately carries prose that MENTIONS the plugin
+ * name without being its label -- the real suggestion chip that made the first
+ * version of this misfire.
+ */
 const bonsaiPanelOpen = {
   hasGpfocus: true,
   elementCount: 350,
@@ -261,8 +271,8 @@ const bonsaiPanelOpen = {
     id: null,
     classes: ["Focusable"],
     ariaLabel: null,
-    text: "",
-    ownerText: "bonsAI Settings",
+    text: "write a long detailed explanation of how bonsai trees are pruned",
+    ownerText: "write a long detailed explanation of how bonsai trees are pruned",
     rect: null,
   },
   gpfocusWithin: [],
@@ -271,6 +281,7 @@ const bonsaiPanelOpen = {
   quickAccessTab: "999",
   visibleQuickAccessTab: "999",
   deckyPluginRoot: true,
+  deckyPanelLabels: ["bonsAI", "v0.5.0", "ask", "Show diagnostics"],
 };
 
 test("openPlugin recognises its own panel already open instead of walking the list for nothing", async () => {
@@ -295,7 +306,11 @@ test("a different plugin's panel being open still fails rather than being waved 
   // as bonsAI being open.
   const otherPluginOpen = {
     ...bonsaiPanelOpen,
-    gpfocus: { ...bonsaiPanelOpen.gpfocus, ownerText: "TabMaster Settings" },
+    // Neutral control text: this case is about the PANEL being someone else's,
+    // so the focused control must not itself mention bonsAI -- that is a
+    // separate defect, covered by its own test below.
+    gpfocus: { ...bonsaiPanelOpen.gpfocus, text: "Enable overlay", ownerText: "Enable overlay" },
+    deckyPanelLabels: ["TabMaster", "v1.2.0", "Settings"],
   };
   const fake = await startFakeCdp(["QuickAccess_uid2"], () => otherPluginOpen);
   try {
@@ -306,6 +321,42 @@ test("a different plugin's panel being open still fails rather than being waved 
     assert.equal(r.ok, false);
     assert.equal(r.alreadyOpen, undefined);
     assert.match(r.summary, /walked \d+ control\(s\) on the Decky tab/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("prose that merely mentions the plugin's name is not the plugin's panel", async () => {
+  /*
+   * The regression the live rig taught, 2026-08-27. The first detector asked
+   * whether the focused control's text CONTAINED the plugin name, and the ring
+   * was sitting on a chip reading "...how bonsai trees are pruned". That made
+   * isPluginRow claim it had found the plugin's list row, so openPlugin pressed
+   * A on a suggestion chip. Here the panel header label is absent, so nothing
+   * identifies this as bonsAI's panel and the tool must not claim it is.
+   */
+  const proseOnly = {
+    ...bonsaiPanelOpen,
+    deckyPanelLabels: ["TabMaster", "Settings"],
+  };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => proseOnly);
+  try {
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, listBudget: 2 });
+    assert.notEqual(r.alreadyOpen, true, "a chip mentioning the name is not the panel header");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("the panel label match is whole-label, not a substring of a longer label", async () => {
+  const nearMiss = {
+    ...bonsaiPanelOpen,
+    deckyPanelLabels: ["bonsAI Helper", "v0.5.0"],
+  };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => nearMiss);
+  try {
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, listBudget: 2 });
+    assert.notEqual(r.alreadyOpen, true, '"bonsAI Helper" is a different plugin from "bonsAI"');
   } finally {
     await fake.close();
   }

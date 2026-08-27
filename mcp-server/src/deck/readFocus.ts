@@ -66,6 +66,12 @@ export interface ReadFocusResult {
   agree: boolean;
   /** Focus is inside a Decky plugin's pane rather than Steam's own chrome. */
   deckyPluginRoot: boolean;
+  /**
+   * Discrete short text labels inside that pane, innermost pane only. Decky
+   * puts the open plugin's name here as a label of its own; nothing else on the
+   * page identifies WHICH plugin is open.
+   */
+  deckyPanelLabels: string[];
   /** e.g. "999" for Decky; Steam's own tabs are 0 and 3-7. */
   quickAccessTab: string | null;
   /**
@@ -194,6 +200,39 @@ function pageExpression(expect?: string): string {
     if (pane) tab = pane.id.replace('quickaccess_content_', '');
   }
 
+  /*
+   * Discrete text labels inside the Decky pane the ring is in.
+   *
+   * Decky renders the open plugin's name as its own text node in the panel
+   * header ("bonsAI"), inside the same subtree as the ring. That is the only
+   * thing on the page that says WHICH plugin is open -- deckyPluginRoot is just
+   * a test for tab 999, which is true for every plugin alike.
+   *
+   * Own text only (child text nodes, not descendants' text) and short strings
+   * only, so this is a list of labels rather than a bag of prose. Callers match
+   * a whole label exactly; a paragraph that merely mentions a plugin's name --
+   * a suggestion chip reading "...how bonsai trees are pruned", say -- is not a
+   * label and must not read as "that plugin's panel is open".
+   */
+  var deckyPanelLabels = [];
+  if (gp) {
+    var pane999 = gp.closest('[id^="quickaccess_content_"]');
+    if (pane999) {
+      var els = pane999.querySelectorAll('*');
+      for (var li = 0; li < els.length && deckyPanelLabels.length < 60; li++) {
+        var own = '';
+        var kids = els[li].childNodes;
+        for (var ki = 0; ki < kids.length; ki++) {
+          if (kids[ki].nodeType === 3) own += kids[ki].textContent;
+        }
+        own = own.trim();
+        if (own && own.length <= 40 && deckyPanelLabels.indexOf(own) === -1) {
+          deckyPanelLabels.push(own);
+        }
+      }
+    }
+  }
+
   // A selector we cannot parse is "unknown", not "did not match".
   var matchesExpect = null;
   if (EXPECT && gp) {
@@ -218,6 +257,7 @@ function pageExpression(expect?: string): string {
     quickAccessTab: tab,
     visibleQuickAccessTab: visibleTab,
     deckyPluginRoot: tab === '999',
+    deckyPanelLabels: deckyPanelLabels,
     matchesExpect: matchesExpect
   };
 })()`;
@@ -233,6 +273,7 @@ interface PageResult {
   quickAccessTab: string | null;
   visibleQuickAccessTab: string | null;
   deckyPluginRoot: boolean;
+  deckyPanelLabels: string[];
   matchesExpect: boolean | null;
 }
 
@@ -260,6 +301,7 @@ function emptyResult(method: string): ReadFocusResult {
     activeElement: null,
     agree: false,
     deckyPluginRoot: false,
+    deckyPanelLabels: [],
     quickAccessTab: null,
     visibleQuickAccessTab: null,
     targetsScanned: [],
@@ -329,6 +371,7 @@ export async function readFocusAt(
       activeElement: page.activeElement,
       agree: page.agree,
       deckyPluginRoot: page.deckyPluginRoot,
+      deckyPanelLabels: page.deckyPanelLabels ?? [],
       quickAccessTab: page.quickAccessTab,
       visibleQuickAccessTab: page.visibleQuickAccessTab ?? null,
       targetsScanned: scanned,
