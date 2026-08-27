@@ -33,6 +33,7 @@ import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
 import { focusKey, describe } from "./focusKey.js";
+import { automationStopped, stoppedMessage } from "./killswitch.js";
 
 export type WalkDirection = "UP" | "DOWN" | "LEFT" | "RIGHT";
 
@@ -78,6 +79,8 @@ export interface WalkToResult {
   stalled: boolean;
   /** True when a press was spent placing an unowned ring before the walk began. */
   acquired: boolean;
+  /** True when the walk ended because the killswitch was thrown. */
+  stopped: boolean;
   summary: string;
 }
 
@@ -118,6 +121,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
     focus: null,
     stalled: false,
     acquired: false,
+    stopped: false,
     summary: "",
   };
 
@@ -131,6 +135,18 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
   }
   if (!text.trim()) {
     return { ...base, reason: "No text to look for.", summary: "refused: nothing to look for" };
+  }
+
+  // Before the tunnel, not just before the first press: a stopped rig should not
+  // spend SSH setup on a walk that cannot take a single step.
+  const latched = automationStopped();
+  if (latched) {
+    return {
+      ...base,
+      stopped: true,
+      reason: stoppedMessage(latched),
+      summary: "refused: Deck automation is stopped, so nothing was pressed",
+    };
   }
 
   let cdpBase = opts.cdpUrl;
@@ -187,6 +203,25 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
     }
 
     for (;;) {
+      // The press refuses on the latch too, so nothing can escape. Checking here
+      // is what makes a stopped walk report itself as stopped instead of as
+      // "no press could be delivered", which reads like a broken bridge.
+      const midWalk = automationStopped();
+      if (midWalk) {
+        return {
+          ...base,
+          presses,
+          seen,
+          focus,
+          acquired,
+          stopped: true,
+          reason: stoppedMessage(midWalk),
+          summary:
+            `KILLSWITCH: the walk was stopped by hand after ${presses} press(es), ` +
+            `without finding "${text}". Seen: ${seen.join(" | ") || "nothing labelled"}`,
+        };
+      }
+
       const label = labelOf(focus);
       if (label && !seen.includes(label)) seen.push(label);
 
@@ -203,6 +238,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           focus,
           stalled: false,
           acquired,
+          stopped: false,
           summary:
             `found after ${presses} press(es): ${describe(focus)}` +
             (exact || label.toLowerCase() === text.toLowerCase()

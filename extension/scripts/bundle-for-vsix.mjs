@@ -78,6 +78,36 @@ if (!fs.existsSync(reactDomClient)) {
 cpFiltered(path.join(repoRoot, "pack"), path.join(resources, "pack"));
 
 /*
+ * The bridge board's helper scripts.
+ *
+ * Bundled for the killswitch. findBridgeTool() walks up from the running server
+ * looking for `bridge/tools/<name>`, and from resources/mcp-server/dist/deck it
+ * reaches resources/ -- so putting them here is what makes them findable in an
+ * installed extension. Without this the killswitch's release step reports
+ * "pad.py not found" every time it runs from a VSIX, which is honest but means
+ * the board is only ever neutralised by the firmware watchdog rather than being
+ * told to let go.
+ *
+ * That case is real and not rare: the agent driving the Deck runs the server
+ * from a source checkout (see mcp.json), while the status bar the human clicks
+ * belongs to the installed extension. The latch crosses that gap on its own --
+ * it is a file -- but the release has to be able to run on the side the human
+ * pressed the button.
+ *
+ * tools/ only. The firmware sources are not needed at runtime, and __pycache__
+ * is already filtered.
+ */
+fs.mkdirSync(path.join(resources, "bridge"), { recursive: true });
+cpFiltered(path.join(repoRoot, "bridge", "tools"), path.join(resources, "bridge", "tools"));
+
+const padTool = path.join(resources, "bridge", "tools", "pad.py");
+if (!fs.existsSync(padTool)) {
+  console.error(`Missing bundled bridge tool: ${padTool}`);
+  console.error("The killswitch could not release the board from an installed extension.");
+  process.exit(1);
+}
+
+/*
  * Prove the bundled server actually starts.
  *
  * A dependency check would have caught the pngjs omission, but only that one.
@@ -97,4 +127,4 @@ if (smoke.status !== 0) {
   process.exit(1);
 }
 
-console.log("Bundled MCP server, preview-server, and pack into extension/resources/");
+console.log("Bundled MCP server, preview-server, pack, and bridge tools into extension/resources/");

@@ -203,6 +203,25 @@ export async function callMcpTool(
   return sendRequest(`tools/${tool}`, args);
 }
 
+/**
+ * Call something on the server's `control/` surface, which is NOT a tool.
+ *
+ * The server serves two dialects on one pipe: real MCP for external agents, and
+ * this one for the extension. Anything under `control/` exists only in the
+ * second, so an MCP client cannot reach it -- `tools/list` does not mention it
+ * and `tools/call` routes only names in the tool registry.
+ *
+ * That is currently how re-arming the killswitch stays human-only. A human's
+ * status bar click travels this way; an agent has no route here at all.
+ */
+export async function callMcpControl(
+  method: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  await spawnMcpProcess();
+  return sendRequest(`control/${method}`, args);
+}
+
 export function stopMcpProcess(): void {
   mcpProcess?.kill();
   mcpProcess = null;

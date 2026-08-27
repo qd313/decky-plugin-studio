@@ -8,21 +8,41 @@ import {
   startTunnel,
   stopTunnel,
 } from "./commands/deployToDeck";
+import { stopAutomation, armAutomation } from "./commands/stopAutomation";
 import { DeckyTreeProvider } from "./ui/treeProvider";
 import { DeckyStatusBar } from "./ui/statusBar";
+import { AutomationStatusBar } from "./ui/automationStatusBar";
 import { getPreviewManager } from "./commands/openPreview";
 import { spawnMcpProcess, stopMcpProcess, updateMcpState, showMcpOutput } from "./mcp/client";
 
 let treeProvider: DeckyTreeProvider;
 let statusBar: DeckyStatusBar;
+let automationBar: AutomationStatusBar;
 
 export function activate(context: vscode.ExtensionContext): void {
   treeProvider = new DeckyTreeProvider();
   statusBar = new DeckyStatusBar(context);
+  // Constructed before anything is spawned, and it watches the latch file
+  // directly, so the killswitch is visible and clickable from the first frame
+  // of the session -- including when the server never comes up.
+  automationBar = new AutomationStatusBar();
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("deckyStudioTree", treeProvider),
     statusBar,
+    automationBar,
+    /*
+     * Two commands, deliberately asymmetric.
+     *
+     * Stopping is bound to a key, sits in the palette, and is one click in the
+     * status bar, because the person reaching for it may not know what is
+     * running and should not have to. Arming is the palette and a status bar
+     * click only -- no keybinding, and a modal confirmation that repeats why
+     * the stop was set. Undoing a safety latch should take more deliberation
+     * than setting one.
+     */
+    vscode.commands.registerCommand("decky.stopAutomation", () => stopAutomation("command")),
+    vscode.commands.registerCommand("decky.armAutomation", () => armAutomation()),
     vscode.commands.registerCommand("decky.initPack", () => initPack()),
     vscode.commands.registerCommand("decky.createPlugin", () => createPlugin()),
     vscode.commands.registerCommand("decky.openPreview", () => openPreview()),
@@ -45,6 +65,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("decky.refreshTree", () => {
       treeProvider.refresh();
       statusBar.refresh();
+      automationBar.refresh();
     })
   );
 
@@ -74,6 +95,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     treeProvider.refresh();
     statusBar.refresh();
+    automationBar.refresh();
   };
 
   void spawnMcpProcess().then(pollStatus, pollStatus);

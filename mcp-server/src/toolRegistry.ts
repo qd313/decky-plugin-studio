@@ -83,6 +83,32 @@ export const TOOLS: ToolDef[] = [
 
   // ---- Deck: tunnel & ingest -------------------------------------------
   {
+    name: "deck_stopAutomation",
+    description:
+      "KILLSWITCH. Stop all Deck automation immediately and latch it off: release every button the bridge board is holding, abort any in-flight deck_runSequence / deck_walkTo / deck_openPlugin, tear down the SSH tunnels, and refuse every further press until a HUMAN re-arms it. Call this the moment something looks wrong \u2014 the ring on a control you did not expect, a sequence going somewhere you did not intend, a press that activated something. It is always safe to call: it presses nothing, it is idempotent, and stopping a run that was fine costs one re-arm. You CANNOT undo this yourself; there is deliberately no arming tool, because an agent that can clear its own killswitch does not have one. Re-arming is a status bar click or the 'Decky: Arm Deck Automation' command in the user's editor.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reason: {
+          type: "string",
+          description:
+            "Why you are stopping, in one line. Recorded in the latch file and shown to the user when they go to re-arm, so write it for the person who has to decide whether it is safe to continue.",
+        },
+        port: {
+          type: "string",
+          description: "Serial port of the bridge's COM side, if not the default.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_automationStatus",
+    description:
+      "Whether the Deck automation killswitch is armed or latched off, when and by whom it was stopped, and which SSH tunnels are currently live across every studio process. Check this first when a press refuses and you are not sure whether the bridge is broken or a human stopped you \u2014 the two look identical from a single failed press and have opposite responses.",
+    inputSchema: noArgs,
+  },
+  {
     name: "deck_startTunnel",
     description:
       "Start the reverse SSH tunnel so the Deck can push debug logs back to this machine's ingest server. Required before deck_tailIngest returns on-device logs.",

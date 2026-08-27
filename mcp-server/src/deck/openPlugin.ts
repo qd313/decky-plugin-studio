@@ -28,6 +28,7 @@ import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton, pressChord } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
 import { focusKey, describe } from "./focusKey.js";
+import { automationStopped, stoppedMessage } from "./killswitch.js";
 
 export interface OpenStage {
   stage: string;
@@ -47,10 +48,20 @@ export interface OpenPluginResult {
   seen: string[];
   focus: ReadFocusResult | null;
   reason?: string;
+  /** True when the run ended because the killswitch was thrown. */
+  stopped: boolean;
   /** Present only when the tool could not do it, so a human still can. */
   checklist?: string[];
   summary: string;
 }
+
+/**
+ * Thrown from the one helper every press in this file goes through, so a stop
+ * unwinds the whole staged sequence at once rather than needing a check bolted
+ * onto each of the four stages -- which is the version that grows a fifth stage
+ * without one.
+ */
+class AutomationStoppedError extends Error {}
 
 export interface OpenPluginOptions {
   pluginName: string;
@@ -95,7 +106,12 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
   const stages: OpenStage[] = [];
   const seen: string[] = [];
 
-  const fail = (reason: string, focus: ReadFocusResult | null, summary: string): OpenPluginResult => ({
+  const fail = (
+    reason: string,
+    focus: ReadFocusResult | null,
+    summary: string,
+    stopped = false,
+  ): OpenPluginResult => ({
     ok: false,
     pluginName,
     verified: false,
@@ -104,9 +120,22 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     seen,
     focus,
     reason,
+    stopped,
     checklist: CHECKLIST(pluginName),
     summary,
   });
+
+  // Before the tunnel: a stopped rig should not spend SSH setup on a sequence
+  // that cannot deliver its first press.
+  const latched = automationStopped();
+  if (latched) {
+    return fail(
+      stoppedMessage(latched),
+      null,
+      "refused: Deck automation is stopped, so nothing was pressed",
+      true,
+    );
+  }
 
   let cdpBase = opts.cdpUrl;
   let closeTunnel: (() => void) | null = null;
@@ -125,8 +154,15 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     }
   }
 
+  /** Every press in this file, D-pad or otherwise, passes through this first. */
+  const abortIfStopped = (): void => {
+    const rec = automationStopped();
+    if (rec) throw new AutomationStoppedError(stoppedMessage(rec));
+  };
+
   /** A D-pad press followed by a settle and a fresh read. Never A, never B. */
   const nudge = async (dir: "UP" | "DOWN" | "LEFT" | "RIGHT"): Promise<ReadFocusResult> => {
+    abortIfStopped();
     const p = await pressButton({ buttons: [dir], port: opts.port });
     if (!p.ok) throw new Error(p.reason ?? "press failed");
     await sleep(180);
@@ -172,6 +208,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     if (focus.visibleQuickAccessTab !== DECKY_TAB) {
       if (focus.visibleQuickAccessTab === null) {
         // No pane on screen at all: the menu is genuinely shut.
+        abortIfStopped();
         const p = await pressChord("GUIDE", "A", { port: opts.port });
         if (!p.ok) {
           stages.push({ stage: "open-qam", ok: false, detail: p.reason ?? "", presses: 0 });
@@ -312,6 +349,11 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     // ---- Stage 4: activate, with rule 2 satisfied -------------------------
     // The read that authorises this A press is the one taken inside the loop
     // above, on this same element. Nothing has been pressed since.
+    //
+    // This is the most consequential press the studio makes -- the one that
+    // activates a control rather than moving the ring -- so the latch is
+    // re-checked on the line before it, after the walk that got here.
+    abortIfStopped();
     const activate = await pressButton({ buttons: ["A"], port: opts.port });
     if (!activate.ok) {
       stages.push({ stage: "activate", ok: false, detail: activate.reason ?? "", presses: 0 });
@@ -342,11 +384,21 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
       stages,
       seen,
       focus: after,
+      stopped: false,
       summary:
         `opened "${pluginName}" - ${stages.map((s) => `${s.stage} ${s.ok ? "ok" : "failed"}`).join(", ")}` +
         (after.ok ? "" : "; the ring is unowned, so the first D-pad press will place it rather than move it"),
     };
   } catch (err) {
+    if (err instanceof AutomationStoppedError) {
+      return fail(
+        err.message,
+        null,
+        `KILLSWITCH: stopped by hand after ${stages.length} stage(s) ` +
+          `(${stages.map((s) => s.stage).join(", ") || "none"}); the plugin was not opened`,
+        true,
+      );
+    }
     return fail(
       (err as Error).message,
       null,

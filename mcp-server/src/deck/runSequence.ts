@@ -35,6 +35,7 @@ import { openCdpTunnel } from "./cdpTunnel.js";
 import { readFocusAt, ReadFocusResult, FocusElement } from "./readFocus.js";
 import { assertFocusMove } from "./assertFocusMove.js";
 import { focusKey, describe, describeElement } from "./focusKey.js";
+import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { getWorkspaceArtifactsDir, timestamp } from "../tools/captureOrchestrator.js";
 
 export interface SequenceStep {
@@ -119,6 +120,12 @@ export interface RunSequenceResult {
   cycle: CycleReport | null;
   /** Entries of `mustReachText` that never appeared. */
   neverReached: string[];
+  /**
+   * True when the run ended because the killswitch was thrown, not because it
+   * finished or failed. A stopped run is not a failed run: the steps that ran
+   * are still evidence, and the ones that did not were never attempted.
+   */
+  stopped: boolean;
   evidenceFile: string | null;
   durationMs: number;
   summary: string;
@@ -206,6 +213,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     visited: [],
     cycle: null,
     neverReached: mustReach,
+    stopped: false,
     evidenceFile: null,
     durationMs: 0,
     summary: "",
@@ -213,6 +221,20 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
 
   if (steps.length === 0) {
     return { ...base, reason: "No steps given.", summary: "nothing to run" };
+  }
+
+  // Checked before the tunnel is opened, not just before the first press: a
+  // stopped rig should not be spending 350 ms of SSH setup on a run that cannot
+  // deliver a single step.
+  const latchedBefore = automationStopped();
+  if (latchedBefore) {
+    return {
+      ...base,
+      stopped: true,
+      reason: stoppedMessage(latchedBefore),
+      durationMs: Date.now() - started,
+      summary: "refused: Deck automation is stopped, so nothing was pressed",
+    };
   }
 
   let cdpBase = opts.cdpUrl;
@@ -234,6 +256,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
 
   const results: StepResult[] = [];
   const visits: Visit[] = [];
+  let stoppedMidRun = false;
 
   try {
     // Step 0 is the state the run starts from. Without it a loop back to the
@@ -250,6 +273,16 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     visits.push({ step: 0, key: focusKey(first), label: describe(first), el: first.gpfocus });
 
     for (let i = 0; i < steps.length; i++) {
+      // The press itself refuses on the latch too, so no press can escape this.
+      // Checking here as well is what turns "every remaining step failed" into
+      // "the run was stopped after step N", which is the difference between a
+      // report that reads as a broken focus graph and one that reads as a human
+      // deciding to take over.
+      if (automationStopped()) {
+        stoppedMidRun = true;
+        break;
+      }
+
       const step = steps[i];
       const label = step.label ?? `step ${i + 1}`;
 
@@ -312,11 +345,17 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
   const neverReached = mustReach.filter((t) => !visits.some((v) => matchesText(v.el, t)));
 
   const ranAll = results.length === steps.length;
-  const ok = failed === 0 && ranAll;
+  // A stopped run is never "ok" -- it did not do what it was asked -- but the
+  // reason is a person, not the plugin.
+  const ok = failed === 0 && ranAll && !stoppedMidRun;
 
   const parts = [
+    stoppedMidRun
+      ? `KILLSWITCH: the run was stopped by hand after ${results.length}/${steps.length} step(s); ` +
+        `the remaining ${steps.length - results.length} were never attempted`
+      : null,
     `${passed}/${steps.length} steps passed`,
-    ranAll ? null : `stopped after ${results.length}`,
+    ranAll || stoppedMidRun ? null : `stopped after ${results.length}`,
     cycle
       ? `focus returned to ${cycle.key.startsWith("sel:") ? cycle.loop[0] : cycle.loop[0]} ` +
         `at steps ${cycle.seenAt.join(" and ")}` +
@@ -331,6 +370,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
 
   const result: RunSequenceResult = {
     ok,
+    reason: stoppedMidRun ? stoppedMessage(automationStopped() ?? latchedBefore!) : undefined,
     fidelity: results.some((r) => r.ok) ? "steam-routed" : null,
     steps: results,
     ranSteps: results.length,
@@ -340,6 +380,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     visited: seenLabels,
     cycle,
     neverReached,
+    stopped: stoppedMidRun,
     evidenceFile: null,
     durationMs: Date.now() - started,
     summary: parts.join("; "),

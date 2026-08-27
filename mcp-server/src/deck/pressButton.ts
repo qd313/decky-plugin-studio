@@ -20,9 +20,9 @@
  * occasionally, silently wrong.
  */
 import { spawn } from "child_process";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+
+import { findBridgeTool, findPadTool } from "./bridgeTools.js";
+import { automationStopped, stoppedMessage } from "./killswitch.js";
 
 /** Names the firmware accepts. Anything else is refused rather than guessed at. */
 export const BRIDGE_BUTTONS = [
@@ -64,25 +64,11 @@ export interface PressOptions {
 }
 
 /**
- * Find bridge/tools/pad.py by walking up from this module. The MCP server runs
- * from dist/ in the repo and from resources/ inside the VSIX, so a fixed
- * relative path would be right in exactly one of those.
+ * Re-exported so every existing importer keeps working. The implementation
+ * moved to bridgeTools.js when the killswitch needed to find pad.py without
+ * importing the module whose presses it exists to stop.
  */
-export function findBridgeTool(name: string): string | null {
-  let dir = path.dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 8; i++) {
-    const candidate = path.join(dir, "bridge", "tools", name);
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-export function findPadTool(): string | null {
-  return findBridgeTool("pad.py");
-}
+export { findBridgeTool, findPadTool };
 
 const REFUSAL =
   "The controller bridge is not available, so no press can be delivered that Steam would " +
@@ -91,18 +77,27 @@ const REFUSAL =
   "side) and into the Deck (its USB side), and that python with pyserial is on PATH.";
 
 /**
- * Hard stop for automated suites.
+ * The one gate every press passes through. Two ways to be forbidden.
  *
- * Every press here reaches a real controller wired to a real Deck. The board is
- * plugged into the machine that runs the tests, so a test that happens to walk
- * into this function does not fail politely -- it moves the ring on someone's
- * device, and with the wrong control focused it can activate something. That is
- * not a hypothetical: adding a default-on focus-acquire to walkTo made its unit
- * test send a live DOWN press before anyone noticed.
+ * DPS_NO_BRIDGE -- a hard stop for automated suites. Every press here reaches a
+ * real controller wired to a real Deck. The board is plugged into the machine
+ * that runs the tests, so a test that happens to walk into this function does
+ * not fail politely: it moves the ring on someone's device, and with the wrong
+ * control focused it can activate something. That is not a hypothetical --
+ * adding a default-on focus-acquire to walkTo made its unit test send a live
+ * DOWN press before anyone noticed. The npm test script sets DPS_NO_BRIDGE=1 so
+ * the suite refuses at this line instead of spawning anything, and anyone can
+ * set it by hand to be certain a run cannot touch hardware.
  *
- * The npm test script sets DPS_NO_BRIDGE=1, so the suite refuses at this line
- * instead of spawning anything. Anyone can set it by hand to be sure a run
- * cannot touch hardware.
+ * THE KILLSWITCH LATCH -- a human said stop. Checked here, on the last line
+ * before a press is spawned, rather than only at the top of whatever loop is
+ * running: that is what makes the guarantee "no press goes out after the latch
+ * is set" true regardless of where any process happened to be. The loops check
+ * it too, but only so they can abort promptly and report honestly; this check
+ * is the one that is load-bearing.
+ *
+ * The env var is checked first because it is the cheaper of the two and because
+ * a suite run should say it is a suite run, not blame the killswitch.
  */
 export function bridgeDisabled(): string | null {
   const v = process.env.DPS_NO_BRIDGE;
@@ -113,6 +108,8 @@ export function bridgeDisabled(): string | null {
       "Unset it to drive hardware."
     );
   }
+  const stopped = automationStopped();
+  if (stopped) return stoppedMessage(stopped);
   return null;
 }
 

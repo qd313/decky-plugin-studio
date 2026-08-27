@@ -5,6 +5,9 @@
   "description": "VS Code extension for Decky plugin development (also works in Cursor)",
   "license": "Apache-2.0",
   "scripts": {
+    "stop": "node scripts/stop-deck-automation.mjs",
+    "stop:status": "node scripts/stop-deck-automation.mjs --status",
+    "arm": "node scripts/stop-deck-automation.mjs --arm",
     "build": "pnpm -r run build",
     "build:extension": "pnpm --filter decky-plugin-studio-extension run build",
     "build:mcp": "pnpm --filter @decky-plugin-studio/mcp run build",

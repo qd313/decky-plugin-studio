@@ -19,6 +19,18 @@
   "contributes": {
     "commands": [
       {
+        "command": "decky.stopAutomation",
+        "title": "Stop All Deck Automation",
+        "category": "Decky",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "decky.armAutomation",
+        "title": "Arm Deck Automation",
+        "category": "Decky",
+        "icon": "$(zap)"
+      },
+      {
         "command": "decky.initPack",
         "title": "Init Pack",
         "category": "Decky"
@@ -109,7 +121,14 @@
           "default": 7682
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "decky.stopAutomation",
+        "key": "ctrl+alt+.",
+        "mac": "cmd+alt+."
+      }
+    ]
   },
   "scripts": {
     "build": "tsc -p .",

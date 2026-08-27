@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Deck automation killswitch.** The rig presses real buttons on a real Deck, and until now nothing a human could hit stopped it on purpose -- the only backstop was the board's own neutral-on-silence watchdog, which covers the host dying and nothing else. A stop now: latches automation off, tells the board to release whatever it is holding, aborts any in-flight `deck_runSequence` / `deck_walkTo` / `deck_openPlugin`, and tears down the SSH tunnels (CDP forwards and the ingest reverse tunnel, reported separately). Reachable from a dedicated status bar item, the **Decky: Stop All Deck Automation** command, <kbd>ctrl+alt+.</kbd>, `pnpm stop`, and the `deck_stopAutomation` tool.
+  - **The latch is a file** (`~/.config/decky-plugin-studio/automation-stop.json`), not a flag. There are always at least two server processes -- the extension's and the one an agent spawns from `mcp.json` -- and the process a human can reach is usually not the one driving the Deck. It also survives a server restart, which an in-memory latch does not.
+  - **The latch is set first**, before the release, not last. Releasing first leaves a window in which an in-flight run presses again while the release is still opening the serial port.
+  - **Re-arming is not a tool and cannot become one by accident.** It lives on the extension's private `control/` dialect, which the MCP surface has no route to; an MCP client asking for it gets `Unknown method`. An agent that can clear its own killswitch does not have one.
+  - The status bar indicator reads the latch file directly rather than asking the server, so a dead server cannot render a stopped rig as armed, and it shows a warning background while a run has a live path to the Deck. `scripts/stop-deck-automation.mjs` writes the latch with nothing but `fs`, so the killswitch works in a checkout that was never built.
+- `deck_stopAutomation` and `deck_automationStatus` MCP tools. `deck_status` now also reports `automationArmed`.
 - **Real MCP protocol support.** `mcp-server` now serves a compliant `initialize`, `tools/list` and `tools/call`, exposing all 34 tools to any MCP client (Claude Code, Cursor, Copilot). Previously it spoke only a private JSON-RPC dialect, so external agents saw zero tools and the handshake failed. The extension's own dialect is detected per-connection and continues to work unchanged.
 - `mcp-server/src/toolRegistry.ts` — tool names, descriptions and JSON Schemas, with `toolRegistry.test.ts` diffing the registry against the dispatch switch so a new tool cannot silently become undiscoverable.
 - **Claude Code target for Init Pack** — `pack/.claude/` (3 agents, 8 skills, hooks in `settings.json`), `pack/CLAUDE.md`, `pack/.mcp.json`. Init Pack now asks whether to install Cursor, Claude Code, or both; editor-neutral files are copied either way.
@@ -31,6 +37,7 @@
 - `ProgressBar` used the VS Code teal `#4ec9b0`; it now uses the Steam accent.
 - Root `mcp.json` pointed at a hardcoded `...-extension-0.1.0/...` install path at v0.3.6; it now targets the local build.
 - Removed dead `extension/src/preview/viewportFrame.html` and the unused `frameUri` computed from it.
+- **The VSIX never bundled `bridge/tools/`.** `findPadTool()` walks up from the running server looking for `bridge/tools/pad.py`, and in an installed extension there was none to find -- so `deck_pressButton`, `deck_openPlugin` and the killswitch's release step could never work from a VSIX, only from a source checkout. Found while wiring the killswitch, since a status bar stop runs in the installed extension while the agent driving the Deck runs from source. Now bundled, with a packaging check that fails the build if `pad.py` is missing.
 
 ## [0.3.6]
 

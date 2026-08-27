@@ -17,6 +17,7 @@ import { spawn, ChildProcess } from "child_process";
 import net from "net";
 import { readDeckEnv } from "../config.js";
 import { getVersion } from "./cdp.js";
+import { registerTunnel, unregisterTunnel } from "./killswitch.js";
 
 export interface CdpTunnel {
   base: string;
@@ -81,7 +82,18 @@ export async function openCdpTunnel(readyTimeoutMs = 12_000): Promise<CdpTunnel>
   child.on("exit", () => (exited = true));
 
   const base = `http://127.0.0.1:${port}`;
+
+  // Register before the readiness poll, not after. This forward is live from
+  // the moment ssh is spawned, and the poll below can sit here for twelve
+  // seconds -- registering afterwards would leave a real tunnel invisible to
+  // the killswitch for the whole of that window, and every throw in the poll
+  // needs the entry to exist so its close() can clean it up.
+  const tunnelId = registerTunnel("cdp", child.pid, `${user}@${host} -> 127.0.0.1:${port}`, () => {
+    if (!child.killed) child.kill();
+  });
+
   const close = (): void => {
+    unregisterTunnel(tunnelId);
     if (!child.killed) child.kill();
   };
 

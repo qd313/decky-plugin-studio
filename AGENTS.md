@@ -12,6 +12,8 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 
 | Tool | Purpose |
 |------|---------|
+| `deck.stopAutomation` | **KILLSWITCH.** Stop every press now and latch it off until a human re-arms |
+| `deck.automationStatus` | Is the rig armed, or did somebody stop it? |
 | `deck.configure` | Set DECK_IP, DECK_USER, ingest port |
 | `deck.startTunnel` / `deck.stopTunnel` | Reverse SSH tunnel for NDJSON ingest |
 | `deck.probeIngest` / `deck.tailIngest` | Debug log capture from Deck |
@@ -36,6 +38,27 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 | `preview.setHttpAllow` | Extend HTTP passthrough allowlist |
 | `preview.setPermissions` | Deny capabilities in preview |
 | `preview.callTestHook` | Drive `window.__deckyPreviewTestHooks` |
+
+## Stopping the rig
+
+`deck.pressButton` and everything built on it drive a **real controller wired to a
+real Deck**. If anything looks wrong -- the ring somewhere you did not expect, a
+sequence heading somewhere you did not intend, a press that activated something --
+call **`deck.stopAutomation`** immediately. It presses nothing, it is idempotent,
+and stopping a run that turned out to be fine costs one re-arm.
+
+You cannot undo it. There is no arming tool, on purpose: an agent that can clear
+its own killswitch does not have one. Re-arming is the user's job -- their status
+bar click, the **Decky: Arm Deck Automation** command, or `pnpm run arm`. The
+stop itself is theirs too: the status bar, <kbd>ctrl+alt+.</kbd>, or `pnpm stop`.
+
+When a press refuses, read *why* before reacting. "Deck automation is STOPPED"
+means a human stopped you and you should stop too -- say so and wait, do not look
+for another route to the same press. That is different from a bridge that is
+unplugged, and the two have opposite correct responses.
+
+A human can also stop you from outside this session entirely, so a refusal you
+did not expect is not necessarily a bug.
 
 ## Preview test suite
 

@@ -2,6 +2,7 @@ import { execSync, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { readDeckEnv } from "../config.js";
+import { registerTunnel, unregisterTunnel } from "../deck/killswitch.js";
 import { listDeploySources } from "../deploy/copyManifest.js";
 import {
   execScpRecursive,
@@ -28,6 +29,8 @@ import {
 } from "./captureOrchestrator.js";
 
 let tunnelProcess: ReturnType<typeof spawn> | null = null;
+/** Registry id of the live ingest tunnel, so the killswitch can reach it. */
+let tunnelRegistrationId: string | null = null;
 
 function shellCmd(): string {
   return process.platform === "win32" ? "cmd.exe" : "/bin/sh";
@@ -71,10 +74,34 @@ export function startTunnel(): { pid?: number; skipped?: boolean; reason?: strin
     detached: true,
   });
   tunnelProcess.unref();
+
+  // The killswitch takes down every SSH tunnel, this one included. It runs in a
+  // different process from the one that usually starts this, so the handle
+  // above is not enough on its own -- the registry is what makes it reachable.
+  // The closer nulls the local handle too, so getTunnelState() does not go on
+  // reporting a tunnel that the killswitch has already killed.
+  //
+  // CAVEAT, the same one stopTunnel() has always had: this pid is the powershell
+  // or bash wrapper, not ssh itself, so killing it does not reliably take the
+  // ssh child with it on Windows. That is why the two tunnel kinds are counted
+  // separately in the stop report -- do not read "1 ingest closed" as a promise
+  // that the ssh process is gone. The CDP forwards are the ones that matter for
+  // a stop, and those are spawned as ssh directly (cdpTunnel.ts), so their pid
+  // is the real one and killing it ends the tunnel.
+  tunnelRegistrationId = registerTunnel("ingest", tunnelProcess.pid, "deck ingest reverse tunnel", () => {
+    if (tunnelProcess && !tunnelProcess.killed) tunnelProcess.kill();
+    tunnelProcess = null;
+    tunnelRegistrationId = null;
+  });
+
   return { pid: tunnelProcess.pid };
 }
 
 export function stopTunnel(): { stopped: boolean } {
+  if (tunnelRegistrationId) {
+    unregisterTunnel(tunnelRegistrationId);
+    tunnelRegistrationId = null;
+  }
   if (tunnelProcess && !tunnelProcess.killed) {
     tunnelProcess.kill();
     tunnelProcess = null;

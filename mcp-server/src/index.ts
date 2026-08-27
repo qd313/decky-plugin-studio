@@ -22,6 +22,12 @@ import { runSequence, SequenceStep } from "./deck/runSequence.js";
 import { openPluginDriven } from "./deck/openPlugin.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { readPage, waitFor } from "./deck/readPage.js";
+import {
+  stopAutomation,
+  armAutomation,
+  automationStatus,
+  StopSource,
+} from "./deck/killswitch.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -49,6 +55,7 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
 
     case "tools/deck_status": {
       const tunnel = deck.getTunnelState();
+      const automation = automationStatus();
       return {
         tunnelRunning: tunnel.running,
         tunnelPid: tunnel.pid,
@@ -56,8 +63,43 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         ingestPort: getIngestPort(),
         deckReachable: await deck.pingDeck(),
         ollamaReachable: await deck.probeOllama(),
+        // Carried here so anything already polling status learns the rig is
+        // armed without a second round trip. The extension's indicator does not
+        // depend on this -- it reads the latch file directly, because a dead
+        // server must not be able to make a stopped rig look armed.
+        automationArmed: automation.armed,
+        automationStoppedSince: automation.stoppedSince,
+        automationStoppedBy: automation.stoppedBy,
       };
     }
+
+    case "tools/deck_stopAutomation":
+      return stopAutomation({
+        by: (params.by as StopSource) ?? "tool",
+        reason: params.reason != null ? String(params.reason) : undefined,
+        port: params.port != null ? String(params.port) : undefined,
+      });
+
+    case "tools/deck_automationStatus":
+      return automationStatus();
+
+    /*
+     * Re-arming is NOT a tool, and the name is not `tools/...` for a reason.
+     *
+     * handleMcp() routes `tools/call` only through TOOL_NAMES and has no case
+     * of its own for anything else, so once a peer speaks MCP this method is
+     * unreachable -- it does not appear in tools/list and calling it by name
+     * throws "Unknown method". Only the extension's dialect, which is what a
+     * human's status bar click travels over, can get here.
+     *
+     * That is the whole point. An agent that hits the killswitch and can clear
+     * it will clear it and carry on, and then there was never a killswitch.
+     */
+    case "control/armAutomation":
+      return armAutomation();
+
+    case "control/automationStatus":
+      return automationStatus();
 
     case "tools/deck_startTunnel":
       return deck.startTunnel();
