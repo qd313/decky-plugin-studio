@@ -355,6 +355,9 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         pluginName,
         verified: true,
         alreadyOpen: true,
+        // Reached without the latch tripping -- the killswitch check above
+        // returns early, so getting here means the rig was never stopped.
+        stopped: false,
         fidelity: stages.some((s) => s.presses > 0) ? "steam-routed" : null,
         stages,
         seen,
