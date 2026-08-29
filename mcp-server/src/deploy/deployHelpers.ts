@@ -164,7 +164,34 @@ export function moveDeployedPluginIntoPlace(
    * deploy. That was already true of the scp path, and it is much the better
    * failure: a stale file is visible and removable, deleted user data is not.
    */
+  /*
+   * NORMALISE THE MODES BEFORE THE COPY, NOT AFTER.
+   *
+   * scp -r sends the LOCAL directory's mode on the wire, and the receiver
+   * applies its umask to files but not to directories -- so a directory mode
+   * arrives verbatim even without -p. Win32 OpenSSH derives st_mode from the
+   * NTFS ACL and reports a user-profile directory as 0700, so every directory
+   * uploaded from a Windows host lands `drwx------`. `cp -a` then preserves
+   * that faithfully and `chown -R root:root` below makes it fatal: Decky runs
+   * plugin backends unprivileged, and an unprivileged process cannot traverse a
+   * root-owned 0700 directory. Measured on the rig 2026-08-28 -- py_modules,
+   * dist, assets, bin and defaults all 0700, backend dead at import with
+   * `ModuleNotFoundError: No module named 'backend'`, on every start.
+   *
+   * That failure wears a disguise, which is why it is worth a comment this
+   * long: the loader serves the FRONTEND as root, so the panel renders normally
+   * while its every RPC fails. It reads as a settings bug, and the session that
+   * found it burned three loader restarts before reading the plugin log.
+   *
+   * The chmod is on the STAGING dir, not the target, and deliberately so: the
+   * target holds content this deploy did not ship (bonsAI keeps seed data in
+   * `data/`), and re-permissioning that is not this command's business. No
+   * sudo -- the staging dir is owned by the deploy user. `go+rX` is capital X
+   * on purpose: +x for directories and already-executable files, never for a
+   * plain .py.
+   */
   const remoteCmd =
+    `chmod -R u+rwX,go+rX ${temp} && ` +
     `sudo mkdir -p ${target} && sudo cp -a ${temp}/. ${target}/ && ` +
     `sudo rm -rf ${temp} && sudo chown -R root:root ${target}`;
   try {

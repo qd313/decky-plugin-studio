@@ -300,3 +300,51 @@ test("the elevated move quotes every path and never uses local command substitut
   // before ssh ever saw the string.
   assert.ok(!cmd.includes("$("), "no command substitution in the ssh argument");
 });
+
+test("the elevated move normalises the staged modes before copying them into place", () => {
+  /*
+   * P1-8, found on the rig 2026-08-28 and reproduced on every remote deploy from
+   * this Windows host.
+   *
+   * scp -r sends the LOCAL directory's mode, and the receiver applies its umask
+   * to files but not to directories, so the mode arrives verbatim. Win32 OpenSSH
+   * derives st_mode from the NTFS ACL and calls a user-profile directory 0700.
+   * `cp -a` preserved that, `chown -R root:root` made it fatal, and the plugin
+   * backend -- which Decky runs unprivileged -- died at import with
+   * `ModuleNotFoundError: No module named 'backend'` on every start.
+   *
+   * The disguise is what made it expensive: the loader serves the FRONTEND as
+   * root, so the panel rendered while its every RPC failed, and it read as a
+   * settings bug for three loader restarts.
+   *
+   * Order is the assertion that matters. A chmod after the copy would fix the
+   * target but not what was copied, and would re-permission pre-existing content
+   * the deploy never shipped (bonsAI keeps seed data in data/).
+   */
+  const calls: string[] = [];
+  const realExec = proc.execSync;
+  proc.execSync = ((cmd: string) => {
+    calls.push(cmd);
+    return "";
+  }) as typeof proc.execSync;
+  try {
+    moveDeployedPluginIntoPlace("deck", "1.2.3.4", "/tmp/stage-1", "~/homebrew/plugins/bonsAI", "bonsAI");
+  } finally {
+    proc.execSync = realExec;
+  }
+  const cmd = calls[0];
+
+  assert.match(
+    cmd,
+    /chmod -R u\+rwX,go\+rX '\/tmp\/stage-1'/,
+    "the staged upload must be made world-readable before it is copied in",
+  );
+  assert.ok(
+    cmd.indexOf("chmod -R u+rwX,go+rX") < cmd.indexOf("sudo cp -a"),
+    `the chmod must run BEFORE the copy, or the copy carries the bad modes: ${cmd}`,
+  );
+  assert.ok(
+    !/chmod[^&]*homebrew/.test(cmd),
+    "the chmod belongs on the staging dir, not on the installed directory's pre-existing content",
+  );
+});

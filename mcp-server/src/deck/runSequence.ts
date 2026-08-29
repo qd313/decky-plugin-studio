@@ -34,7 +34,7 @@ import path from "path";
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { readFocusAt, ReadFocusResult, FocusElement } from "./readFocus.js";
 import { assertFocusMove } from "./assertFocusMove.js";
-import { focusKey, describe, describeElement } from "./focusKey.js";
+import { focusKey, describe, describeElement, labelOfElement } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned } from "./walkTo.js";
 import { pressButton } from "./pressButton.js";
@@ -93,9 +93,10 @@ export interface RunSequenceOptions {
   /** Stop at the first step that fails its assertion. Default true. */
   stopOnFailure?: boolean;
   /**
-   * Labels/text that must show up somewhere in the run. Matched case-insensitively
-   * against each visited element's text and aria-label. This is the cheap way to
-   * express "Retry must stay reachable" without a DOM query per candidate.
+   * Labels that must show up somewhere in the run. Matched case-insensitively
+   * against each visited control's computed name (see FocusElement.label). This
+   * is the cheap way to express "Retry must stay reachable" without a DOM query
+   * per candidate.
    */
   mustReachText?: string[];
   /** Serial port of the bridge's COM side. */
@@ -205,16 +206,25 @@ function findCycle(visits: Visit[]): CycleReport | null {
 }
 
 /**
- * ownerText is included deliberately. On a Deck the ring lands *inside* a
- * ToggleField, on a div with no text of its own, so matching only the focused
- * element's own text reports "never reached" for a control the ring is
- * demonstrably sitting on. Measured against FOCUS-GRAPH-DEV-KB-01 on
- * 2026-08-26, where both targets were reached and both were reported missed.
+ * Match against the control's computed name, not a bag of every string near it.
+ *
+ * An ancestor's text still counts, and it has to: on a Deck the ring lands
+ * *inside* a ToggleField, on a div with no text of its own, so matching only the
+ * focused element's own text reports "never reached" for a control the ring is
+ * demonstrably sitting on (measured against FOCUS-GRAPH-DEV-KB-01, 2026-08-26,
+ * where both targets were reached and both were reported missed).
+ *
+ * What changed on 2026-08-28 is that it is no longer a CONCATENATION. Joining
+ * text + ariaLabel + ownerText into one haystack meant `mustReachText` could be
+ * satisfied by any text anywhere above the ring -- with an icon-only control
+ * that inherited a whole pane, every needle in that pane "was reached". Same
+ * false-success family as P1-10, and `neverReached` is exactly the field a run
+ * is trusted on. labelOfElement resolves one name, with the container guard.
  */
 function matchesText(el: FocusElement | null, needle: string): boolean {
-  if (!el) return false;
-  const hay = `${el.text ?? ""} ${el.ariaLabel ?? ""} ${el.ownerText ?? ""}`.toLowerCase();
-  return hay.includes(needle.toLowerCase());
+  const label = labelOfElement(el);
+  if (!label) return false;
+  return label.toLowerCase().includes(needle.toLowerCase());
 }
 
 export async function runSequence(opts: RunSequenceOptions): Promise<RunSequenceResult> {

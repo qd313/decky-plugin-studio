@@ -22,6 +22,7 @@ import { runSequence, SequenceStep } from "./deck/runSequence.js";
 import { openPluginDriven } from "./deck/openPlugin.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { readPage, waitFor } from "./deck/readPage.js";
+import { loadPreviewConfig } from "./preview/previewConfig.js";
 import {
   stopAutomation,
   armAutomation,
@@ -139,12 +140,17 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
       // wants the steps without the board plugged in.
       if (params.drive === false) return deckAutonomy.openPlugin();
       const info = deckAutonomy.openPlugin();
+      // The workspace's own selector is the default; an explicit argument wins.
+      // Without either, already-open falls back to inferring from Decky's pane
+      // labels, which is what reported an unmounted panel as open (P1-9).
+      const configured = loadPreviewConfig().panelRootSelector;
       return openPluginDriven({
         pluginName: params.pluginName != null ? String(params.pluginName) : info.pluginName,
         port: params.port != null ? String(params.port) : undefined,
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
         tabBudget: params.tabBudget != null ? Number(params.tabBudget) : undefined,
         listBudget: params.listBudget != null ? Number(params.listBudget) : undefined,
+        rootSelector: params.rootSelector != null ? String(params.rootSelector) : configured,
       });
     }
 

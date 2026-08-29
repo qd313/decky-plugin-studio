@@ -152,6 +152,81 @@ test("a control labelled only by its ancestor is still findable", () => {
   assert.equal(labelOf(toggle), "Hybrid retrieval (meaning search)");
 });
 
+test("a control's own aria-label names it, ahead of its subtree text", () => {
+  /*
+   * P1-10, the cheaper half. Walking to "Move gemma4:e2b-it-qat up" landed the
+   * ring exactly on that button and still returned found:false, matched:null --
+   * the element was recorded in `seen` as "Up", because full-subtree text was
+   * ranked ahead of the element's own aria-label. That shape is the norm for a
+   * compact icon button in a repeated row, not an exotic case.
+   */
+  const upButton = {
+    ok: true,
+    gpfocus: {
+      text: "Up",
+      ariaLabel: "Move gemma4:e2b-it-qat up",
+      ownerText: "",
+      label: "Move gemma4:e2b-it-qat up",
+      labelSource: "aria-label",
+    },
+  } as never;
+  assert.equal(labelOf(upButton), "Move gemma4:e2b-it-qat up");
+});
+
+test("P1-10: a container's text cannot satisfy a walk", async () => {
+  /*
+   * THE FALSE SUCCESS, pinned at the level a caller sees.
+   *
+   * On the rig, deck_walkTo({direction:"RIGHT", text:"bonsAI"}) returned found
+   * after ZERO presses without the ring moving, because the focused tab icon had
+   * no name of its own and inherited the whole Quick Access Menu's text --
+   * "NotificationsQuick SettingsPerformanceSoundtracksHelpDeckybonsAITabMaster..."
+   * -- which contains "bonsAI". It did not stall, error or warn; it reported the
+   * ring somewhere it was not, and every assertion after it inherited that.
+   *
+   * The page now refuses to name a container, so the label arrives empty with
+   * labelOverflow set. A miss is the correct answer here; the walk must also not
+   * claim to have seen anything it could not name.
+   */
+  const paneDump =
+    "NotificationsQuick SettingsPerformanceSoundtracksHelpDeckybonsAITabMasterMagicPods";
+  const containerPage = {
+    hasGpfocus: true,
+    elementCount: 300,
+    gpfocus: {
+      selector: null,
+      selectorVerified: false,
+      tag: "DIV",
+      id: null,
+      classes: ["Focusable"],
+      ariaLabel: null,
+      text: paneDump,
+      ownerText: "",
+      label: "",
+      labelSource: null,
+      labelOverflow: true,
+      rect: { x: 8, y: 40, w: 59, h: 56 },
+    },
+    gpfocusWithin: [],
+    activeElement: null,
+    agree: false,
+    quickAccessTab: "999",
+    visibleQuickAccessTab: "999",
+    deckyPluginRoot: true,
+  };
+
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => containerPage);
+  try {
+    const r = await walkTo({ direction: "RIGHT", text: "bonsAI", budget: 1, cdpUrl: fake.base });
+    assert.equal(r.found, false, "a pane dump must never satisfy a walk for a control");
+    assert.equal(r.matched, null);
+    assert.deepEqual(r.seen, [], "an unnameable stop is not reported under a container's text");
+    assert.equal(r.overshot, true, "and the caller is told the ring was on a container");
+  } finally {
+    await fake.close();
+  }
+});
+
 test("a walk that cannot press says so rather than reporting a miss", async () => {
   /*
    * Stall detection -- giving up when the ring stops moving instead of spending

@@ -211,31 +211,72 @@ test("openPlugin refuses when the Deck cannot be reached, and still hands back t
   assert.match(r.summary, /could not read the Deck/);
 });
 
+/** Ring on the QAM's left rail with the Decky pane already on screen. */
+const onRail = {
+  hasGpfocus: true,
+  elementCount: 300,
+  gpfocus: {
+    selector: null, selectorVerified: false, tag: "DIV", id: null,
+    classes: ["Focusable"], ariaLabel: null, text: "", ownerText: "", rect: null,
+  },
+  gpfocusWithin: [],
+  activeElement: null,
+  agree: false,
+  quickAccessTab: null,
+  visibleQuickAccessTab: "999",
+  deckyPluginRoot: false,
+};
+
 test("openPlugin treats a visible pane as an open QAM even when the ring is on the rail", async () => {
   // The 2026-08-26 mistake: quickAccessTab is null on the rail, which read as
   // "QAM closed" and fired the open chord at an already-open menu. Here the ring
-  // is on the rail (tab null) with the Decky pane showing, so the tool must skip
-  // straight past opening and go looking for the plugin row.
-  const onRail = {
-    hasGpfocus: true,
-    elementCount: 300,
-    gpfocus: {
-      selector: null, selectorVerified: false, tag: "DIV", id: null,
-      classes: ["Focusable"], ariaLabel: null, text: "", ownerText: "", rect: null,
-    },
-    gpfocusWithin: [],
-    activeElement: null,
-    agree: false,
-    quickAccessTab: null,
-    visibleQuickAccessTab: "999",
-    deckyPluginRoot: false,
-  };
+  // is on the rail (tab null) with the Decky pane showing, so the tool must
+  // neither re-open the menu nor go hunting for a tab that is already up.
   const fake = await startFakeCdp(["QuickAccess_uid2"], () => onRail);
   try {
     const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, listBudget: 1 });
     const names = r.stages.map((s) => s.stage);
     assert.ok(!names.includes("open-qam"), `must not try to open an open QAM: ${names.join(",")}`);
     assert.ok(!names.includes("find-decky-tab"), "the Decky pane is already showing");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("openPlugin steps INTO the Decky pane when the ring is stranded on the rail", async () => {
+  /*
+   * Found on the rig 2026-08-28, alongside P1-9. The Decky pane was already the
+   * visible one and the ring was on the QAM's left rail -- the normal state
+   * right after a game launches, which is exactly when you reach for this tool.
+   * Every navigation step sat under one `visibleQuickAccessTab !== DECKY_TAB`
+   * guard, so all of them were skipped, including the RIGHT press that enters
+   * the pane. Stage 3 then walked DOWN the RAIL and gave up after 2 presses
+   * ("walked 2 control(s) without finding bonsAI") when one RIGHT was all it
+   * needed.
+   *
+   * The suite's hardware guard refuses real presses, so what is pinned here is
+   * that the tool TRIES to enter the pane -- the failure must be the press not
+   * being deliverable, not a walk that concluded the plugin is not there.
+   */
+  const pressed: string[] = [];
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => onRail);
+  try {
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      listBudget: 25,
+      // The suite refuses real presses, so without this seam every navigation
+      // path collapses to the same "no press could be delivered" and the test
+      // cannot tell RIGHT-into-the-pane from DOWN-along-the-rail.
+      pressFn: async ({ buttons }) => {
+        pressed.push(buttons.join("+"));
+        return { ok: false, reason: "fake press", fidelity: null, method: "test", buttons, holdMs: 0 };
+      },
+    });
+
+    assert.equal(pressed[0], "RIGHT", `the first press must enter the pane, not walk the rail: ${pressed.join(",")}`);
+    assert.ok(!pressed.includes("A"), "and nothing may be activated while the ring is still outside the pane");
+    assert.equal(r.ok, false, "the fake press fails, so the run cannot succeed -- the order is the point");
   } finally {
     await fake.close();
   }
@@ -359,5 +400,92 @@ test("the panel label match is whole-label, not a substring of a longer label", 
     assert.notEqual(r.alreadyOpen, true, '"bonsAI Helper" is a different plugin from "bonsAI"');
   } finally {
     await fake.close();
+  }
+});
+
+/*
+ * P1-9: the mirror image, and a direct cost of the fix above.
+ *
+ * Decky's plugin LIST advertises every installed plugin's name as a label of its
+ * own, so "the requested name is among the pane's labels" is true of the list
+ * exactly as it is of the plugin's open panel. Three times in one session --
+ * each after a plugin_loader restart, which closes the panel -- the tool
+ * returned ok/verified/alreadyOpen with the ring on a 40x28 button in the DECKY
+ * PANE HEADER and no .bonsai-scope anywhere in the document. The caller then
+ * spent three read-and-navigate rounds acting on a panel that was not there.
+ *
+ * The label set in the payload that claimed success is reproduced verbatim.
+ */
+const deckyListShowing = {
+  ...bonsaiPanelOpen,
+  gpfocus: {
+    ...bonsaiPanelOpen.gpfocus,
+    text: "",
+    ownerText: "",
+    label: "",
+    labelSource: null,
+    labelOverflow: false,
+    rect: { x: 320, y: 20, w: 40, h: 28 },
+  },
+  deckyPanelLabels: ["Decky", "bonsAI", "TabMaster", "MagicPods"],
+};
+
+test("P1-9: a plugin's name in the Decky LIST is not that plugin's panel being open", async () => {
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => deckyListShowing);
+  try {
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, listBudget: 0 });
+    assert.notEqual(r.alreadyOpen, true, "the list showing every plugin's name is not any of them being open");
+    assert.ok(
+      !r.stages.some((s) => s.stage === "already-open"),
+      "and it must not record the stage that would have made that claim",
+    );
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a rootSelector settles already-open in both directions, overriding the labels", async () => {
+  /*
+   * The definitive answer, and the one the ROADMAP asks for: the plugin's own
+   * markup rather than an inference about Decky's. Both directions matter --
+   * absent means NOT open however convincing the labels are, present means open.
+   *
+   * The fake CDP answers every evaluate with the same value, so the page read
+   * for the selector gets this boolean too; that is enough to pin which of the
+   * two signals wins.
+   */
+  const rootAbsent = await startFakeCdp(["QuickAccess_uid2"], (_t, i) =>
+    // Read 0 is the focus read, and everything after is the selector probe.
+    i === 0 ? bonsaiPanelOpen : false,
+  );
+  try {
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: rootAbsent.base,
+      listBudget: 0,
+      rootSelector: ".bonsai-scope",
+    });
+    assert.notEqual(r.alreadyOpen, true, "labels said open; the plugin's own root says otherwise and wins");
+    const check = r.stages.find((s) => s.stage === "check-panel-root");
+    assert.ok(check, "the check must be recorded, for post-mortems");
+    assert.match(check!.detail, /not in the document/);
+  } finally {
+    await rootAbsent.close();
+  }
+
+  const rootPresent = await startFakeCdp(["QuickAccess_uid2"], (_t, i) =>
+    i === 0 ? deckyListShowing : true,
+  );
+  try {
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: rootPresent.base,
+      listBudget: 0,
+      rootSelector: ".bonsai-scope",
+    });
+    assert.equal(r.alreadyOpen, true, "the plugin's root is mounted and on screen, so the panel IS open");
+    assert.equal(r.ok, true);
+  } finally {
+    await rootPresent.close();
   }
 });

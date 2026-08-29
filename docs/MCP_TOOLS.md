@@ -15,6 +15,7 @@ Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json):
 | `rpcDenylist` | Always blocked (`_main`, `_unload`, …) |
 | `ipcTimeoutMs` | IPC wait for snapshot/RPC (default 120000) |
 | `preDeployCommand` | Shell command before `deck.deploy` |
+| `panelRootSelector` | CSS selector your panel renders at its root (e.g. `.my-plugin-scope`). Lets `deck.openPlugin` tell "my panel is open" from "my name is a row in Decky's plugin list" |
 | `permissions` | Preview permission simulator map |
 
 ## deck.*
@@ -30,7 +31,7 @@ Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json):
 - **deck.installCaptureHelper** — `{ which?: "record"|"capture"|"both" }` — installs `studio-record` / `studio-capture` on Deck `~/.local/bin` (remote SSH only).
 - **deck.deploy** — `{ mode?: "auto"|"local"|"remote" }` — unified copy manifest + retry
 - **deck.reloadPlugin** — `{ mode?: "auto"|"local"|"remote" }` — restart `plugin_loader` without redeploy
-- **deck.openPlugin** — returns `{ pluginName, checklist[], note }` (manual QAM steps; no UI automation)
+- **deck.openPlugin** — `{ pluginName?, drive?, rootSelector?, tabBudget?, listBudget? }` — drives Steam through the bridge to open the panel, verifying each stage against a live focus read. Set `rootSelector` (or `panelRootSelector` in `.decky/preview.json`) so "already open" is decided by your own markup rather than inferred from Decky's pane labels — the list advertises every installed plugin's name, so without it an unmounted panel can read as open. `drive: false` returns the manual checklist only.
 - **deck.readPluginLog** — `{ lines?, filter? }` — tail `plugin_loader` journal via SSH/local shell; filter applied in-process (not shell)
 - **deck.getEnv** — workspace, deck config, tunnel, plugin detect, optional remote SteamOS probe
 

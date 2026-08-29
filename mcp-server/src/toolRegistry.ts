@@ -216,7 +216,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_openPlugin",
     description:
-      "Open this plugin's panel on the Deck by driving Steam through the bridge board, verifying every stage against a live focus read rather than replaying a fixed button sequence. It only uses the D-pad while searching, and only presses A once a read confirms the ring is on a control labelled with the plugin's name, so it cannot activate something in an unrelated menu. If it runs out of budget it refuses and returns the manual checklist plus the list of controls it actually saw. Pass drive:false for the old checklist-only behaviour.",
+      "Open this plugin's panel on the Deck by driving Steam through the bridge board, verifying every stage against a live focus read rather than replaying a fixed button sequence. It only uses the D-pad while searching, and only presses A once a read confirms the ring is on a control labelled with the plugin's name, so it cannot activate something in an unrelated menu. If it runs out of budget it refuses and returns the manual checklist plus the list of controls it actually saw. Set rootSelector (or panelRootSelector in .decky/preview.json) to a selector your panel renders: without it, 'is the panel already open' is inferred from Decky's pane labels, and Decky's plugin LIST advertises every installed plugin's name, so an unmounted panel can read as open. Pass drive:false for the old checklist-only behaviour.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -231,6 +231,11 @@ export const TOOLS: ToolDef[] = [
         },
         tabBudget: { type: "number", default: 10, description: "Max D-pad presses to find the Decky tab." },
         listBudget: { type: "number", default: 25, description: "Max D-pad presses to find the plugin's row." },
+        rootSelector: {
+          type: "string",
+          description:
+            "CSS selector for an element the plugin's own panel renders, e.g. '.bonsai-scope'. Decides whether the panel is open — both ways — instead of guessing from Decky's pane labels, and confirms the panel mounted after the A press. Defaults to panelRootSelector in .decky/preview.json.",
+        },
         port: { type: "string", description: "Serial port of the bridge's COM side." },
         cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
       },
@@ -284,7 +289,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_walkTo",
     description:
-      "Move the Deck's focus ring one direction until it lands on a control with the given text, reading focus after every single press. This is how you get the ring somewhere before asserting anything, and it is a search rather than a guess: no press count is assumed, and the label that actually matched is reported back. It only ever sends direction presses, never A/B/START, so a walk cannot activate a control or launch anything — acting on what it finds is the caller's job. Matching is substring by default and also considers the nearest labelled ancestor, because Decky's ToggleField puts the ring on an unlabelled inner div. Watch for near-misses: walking to \"ask\" stops on \"Attach screenshot to Ask\"; pass exact:true when the name is a common word. A walk whose ring stops moving reports stalled:true rather than burning its budget on a dead end.",
+      "Move the Deck's focus ring one direction until it lands on a control with the given text, reading focus after every single press. This is how you get the ring somewhere before asserting anything, and it is a search rather than a guess: no press count is assumed, and the label that actually matched is reported back. It only ever sends direction presses, never A/B/START, so a walk cannot activate a control or launch anything — acting on what it finds is the caller's job. Matching is substring by default, against the control's accessible name: its own aria-label first, then its text, and only then a labelled ancestor's — because Decky's ToggleField puts the ring on an unlabelled inner div, while an icon-only tab would otherwise inherit the text of the whole pane it sits in. Text too long to be a name is refused rather than matched, and the walk reports overshot:true when that happened. Watch for near-misses: walking to \"ask\" stops on \"Attach screenshot to Ask\"; pass exact:true when the name is a common word. A walk whose ring stops moving reports stalled:true rather than burning its budget on a dead end.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -295,7 +300,8 @@ export const TOOLS: ToolDef[] = [
         },
         text: {
           type: "string",
-          description: "Text to look for on the focused control or its nearest labelled ancestor.",
+          description:
+            "Text to look for in the focused control's accessible name (own aria-label, then its text, then a labelled ancestor's).",
         },
         exact: {
           type: "boolean",
@@ -359,7 +365,7 @@ export const TOOLS: ToolDef[] = [
           type: "array",
           items: { type: "string" },
           description:
-            "Labels that must show up somewhere during the run, matched case-insensitively against each visited element's text and aria-label. The cheap way to express 'Retry must stay reachable'.",
+            "Labels that must show up somewhere during the run, matched case-insensitively against each visited control's accessible name (own aria-label, then its text, then a labelled ancestor's). The cheap way to express 'Retry must stay reachable'.",
         },
         runName: { type: "string", description: "Name for the evidence file. Defaults to a timestamp." },
         writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },

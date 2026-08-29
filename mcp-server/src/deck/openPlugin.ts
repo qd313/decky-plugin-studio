@@ -27,9 +27,10 @@
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton, pressChord } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
-import { focusKey, describe } from "./focusKey.js";
+import { focusKey, describe, labelIsBorrowed } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned } from "./walkTo.js";
+import { readPage } from "./readPage.js";
 
 export interface OpenStage {
   stage: string;
@@ -77,6 +78,30 @@ export interface OpenPluginOptions {
   tabBudget?: number;
   /** Max D-pad presses when hunting the plugin's row. */
   listBudget?: number;
+  /**
+   * CSS selector for an element the plugin's own panel renders, e.g.
+   * ".bonsai-scope". When given, this decides whether the panel is open --
+   * both ways -- instead of the label heuristic, and it is also what confirms
+   * the panel actually mounted after the A press.
+   *
+   * Worth setting. Without it the tool infers from Decky's pane labels, which
+   * is inference about someone else's markup; with it the plugin answers for
+   * itself. Defaults to `panelRootSelector` in the workspace's
+   * `.decky/preview.json`.
+   */
+  rootSelector?: string;
+  /**
+   * Test-only seam: substitutes every D-pad press, so the navigation ORDER can
+   * be exercised without the bridge board. Production code never sets this and
+   * always gets the real press.
+   *
+   * It earns its place because the suite's hardware guard refuses real presses,
+   * so without it every navigation test collapses to the same "no press could
+   * be delivered" outcome and cannot tell a tool that pressed RIGHT to enter the
+   * Decky pane from one that pressed DOWN along the rail -- which is exactly the
+   * distinction the 2026-08-28 rail bug turned on.
+   */
+  pressFn?: typeof pressButton;
 }
 
 const CHECKLIST = (name: string): string[] => [
@@ -91,10 +116,21 @@ const DECKY_TAB = "999";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The focused control's OWN name, never a borrowed one.
+ *
+ * A row in the Decky list is identified by what the row itself is called. An
+ * ancestor's text is the wrong evidence here in a way it is not for walkTo: a
+ * control anywhere inside bonsAI's panel inherits "bonsAI" from the pane header
+ * and would read as the plugin's list row, which is how an earlier version of
+ * this tool came to press A on a suggestion chip.
+ */
 function labelOf(r: ReadFocusResult | null): string {
   const el = r?.gpfocus;
   if (!el) return "";
-  return (el.text || el.ariaLabel || "").trim();
+  if (labelIsBorrowed(el)) return "";
+  if (el.label !== undefined) return el.label.trim();
+  return (el.ariaLabel || el.text || "").trim();
 }
 
 /** Loose match so "bonsAI" finds a row rendered as "bonsAI 0.9.1" or "  BonsAI ". */
@@ -105,45 +141,79 @@ function isPluginRow(r: ReadFocusResult | null, name: string): boolean {
 }
 
 /**
- * True when the read we already have -- not a fresh one -- shows the ring is
- * inside `name`'s own rendered content rather than the Decky list.
- *
- * The row search above only checks the focused element's OWN text, which is
- * exactly the check that fails right after opening a plugin: doc 03 measured
- * the ring landing on the topmost control, an unlabelled Back button, so its
- * own text is empty. `ownerText` is the same ancestor-climb readFocus already
- * does for every anonymous control (a plugin's panel commonly names itself
- * somewhere in that climb even when the focused control does not), so this
- * costs nothing extra to check.
- *
- * Deliberately conservative: requires deckyPluginRoot (we are in Decky's
- * pane at all) AND the name showing up in the climb. A different plugin's
- * panel being open must still fail with the normal "not found" message, not
- * be waved through as this one -- the ancestor text for THAT plugin will not
- * mention this one's name.
+ * Decky's own pane title. The plugin LIST carries it; an open plugin's panel
+ * replaces it with the plugin's name.
  */
+const DECKY_LIST_LABEL = "decky";
+
 /**
- * Is the ring sitting inside the REQUESTED plugin's own panel?
+ * Is the ring sitting inside the REQUESTED plugin's own panel? Best effort from
+ * labels alone -- see panelRootMounted() for the answer that does not guess.
  *
- * The first version of this asked whether the focused control's text mentioned
- * the plugin's name. On the live rig (2026-08-27) that was wrong in both
- * directions at once. It missed the real case, because the ring lands on
- * controls called "ask" or "Show diagnostics" that say nothing about the plugin
- * they belong to -- so openPlugin walked the list and pressed A on a suggestion
- * chip instead of reporting the panel it was already in. And it would have
- * matched a chip reading "...how bonsai trees are pruned", which mentions
- * "bonsai" while telling you nothing about which panel is open.
+ * This check has now been wrong in both directions, one bug per direction, and
+ * both are worth keeping in view because they pull against each other.
  *
- * The panel header is the honest signal: Decky renders the open plugin's name
- * as a label of its own inside the pane. Match a WHOLE label, case-insensitively
- * -- prose that merely contains the name is not a label, and a different
- * plugin's panel carries a different one, so it still fails as it should.
+ * FALSE NEGATIVE (fixed 2026-08-27). The first version asked whether the focused
+ * control's text mentioned the plugin's name. That missed the real case -- the
+ * ring lands on controls called "ask" or "Show diagnostics", which say nothing
+ * about the plugin they belong to -- so the tool walked the list while standing
+ * inside the panel, and pressed A on a suggestion chip reading "...how bonsai
+ * trees are pruned", which contains "bonsai" and identifies nothing.
+ *
+ * FALSE POSITIVE (fixed 2026-08-28, P1-9, and it was the cost of that fix).
+ * Matching a whole label in `deckyPanelLabels` looked airtight, on the belief
+ * that the open plugin's name is rendered as a label and nothing else on the
+ * page says which plugin is open. Both halves are true; the missing half is that
+ * the plugin LIST also renders every installed plugin's name as a label of its
+ * own. Three times in one session -- each after a `plugin_loader` restart, which
+ * closes the panel -- the tool answered `alreadyOpen: true` from the label set
+ * `["Decky", "bonsAI", "TabMaster", "MagicPods", ...]`, with the ring on a button
+ * in the Decky pane HEADER and no bonsAI root in the document at all. It could
+ * not tell "bonsAI's panel is open" from "bonsAI is a row in the list", which is
+ * the exact distinction it was added to make.
+ *
+ * So the name being present is necessary and not sufficient: the list's own
+ * title must also be absent. Residual risk, stated rather than hidden -- a
+ * plugin that renders a short label reading exactly "Decky" falls back to
+ * walking the list, which costs presses and ends in an honest checklist. That is
+ * the failure to prefer.
  */
 function looksLikeOpenPanelFor(r: ReadFocusResult | null, name: string): boolean {
   if (!r?.ok || !r.deckyPluginRoot) return false;
   const want = name.trim().toLowerCase();
   if (!want) return false;
-  return (r.deckyPanelLabels ?? []).some((label) => label.trim().toLowerCase() === want);
+
+  const labels = (r.deckyPanelLabels ?? []).map((label) => label.trim().toLowerCase());
+  if (!labels.includes(want)) return false;
+  // A plugin genuinely called "Decky" is named by the same label, so exclude the
+  // requested name from this test rather than refusing that plugin outright.
+  return !labels.some((label) => label === DECKY_LIST_LABEL && label !== want);
+}
+
+/**
+ * Ask the page whether the plugin's own root element is mounted AND has a box.
+ *
+ * This is the signal that does not guess. Labels are inference about what Decky
+ * happens to render; a selector the plugin itself puts on its root is the plugin
+ * saying "I am here". Both directions are definitive, which is why it overrides
+ * the label heuristic when a caller supplies one.
+ *
+ * The box check matters as much as the presence check: Steam keeps every Quick
+ * Access pane mounted and gives the off-screen ones a zero rect, so
+ * `querySelector` alone would report a panel behind another tab as open --
+ * swapping one false positive for a subtler one.
+ *
+ * Returns null when the page could not be asked at all, so an unreachable CDP
+ * endpoint falls back to the labels instead of reading as "not open".
+ */
+async function panelRootMounted(selector: string, cdpBase: string): Promise<boolean | null> {
+  const expr =
+    `(() => { try { var el = document.querySelector(${JSON.stringify(selector)}); ` +
+    "if (!el) return false; var r = el.getBoundingClientRect(); " +
+    "return r.width > 0 && r.height > 0; } catch (e) { return null; } })()";
+  const r = await readPage<boolean | null>({ expression: expr, cdpUrl: cdpBase });
+  if (!r.ok) return null;
+  return typeof r.value === "boolean" ? r.value : null;
 }
 
 export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPluginResult> {
@@ -208,10 +278,12 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     if (rec) throw new AutomationStoppedError(stoppedMessage(rec));
   };
 
+  const press = opts.pressFn ?? pressButton;
+
   /** A D-pad press followed by a settle and a fresh read. Never A, never B. */
   const nudge = async (dir: "UP" | "DOWN" | "LEFT" | "RIGHT"): Promise<ReadFocusResult> => {
     abortIfStopped();
-    const p = await pressButton({ buttons: [dir], port: opts.port });
+    const p = await press({ buttons: [dir], port: opts.port });
     if (!p.ok) throw new Error(p.reason ?? "press failed");
     await sleep(180);
     return readFocusAt(cdpBase!, 10_000);
@@ -239,6 +311,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         cdpBase,
         direction: "DOWN",
         port: opts.port,
+        pressFn: opts.pressFn,
       });
       focus = outcome.focus;
       acquired = outcome.acquired;
@@ -287,35 +360,52 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     //      Quick Settings pane it lands on the Brightness slider and drags it.
     //      LB/RB do not switch them either. The rail is reached with LEFT and
     //      walked with DOWN.
-    if (focus.visibleQuickAccessTab !== DECKY_TAB) {
-      if (focus.visibleQuickAccessTab === null) {
-        // No pane on screen at all: the menu is genuinely shut.
-        abortIfStopped();
-        const p = await pressChord("GUIDE", "A", { port: opts.port });
-        if (!p.ok) {
-          stages.push({ stage: "open-qam", ok: false, detail: p.reason ?? "", presses: 0 });
-          return fail(p.reason ?? "chord failed", focus, "the QAM chord could not be delivered");
-        }
-        await sleep(900);
-        focus = await readFocusAt(cdpBase, 10_000);
-        const opened = focus.ok && focus.visibleQuickAccessTab !== null;
-        stages.push({
-          stage: "open-qam",
-          ok: opened,
-          detail: opened
-            ? `QAM open, pane ${focus.visibleQuickAccessTab} on screen`
-            : "no quickaccess pane became visible after the chord",
-          presses: 1,
-        });
-        if (!opened) {
-          return fail(
-            "the QAM chord was delivered but no quickaccess pane appeared",
-            focus,
-            "could not confirm the Quick Access Menu opened",
-          );
-        }
-      }
+    /*
+     * EACH STEP KEYS ON ITS OWN PRECONDITION.
+     *
+     * All three used to sit under one `if (visibleQuickAccessTab !== DECKY_TAB)`
+     * guard, which conflated "the right pane is showing" with "the ring is in
+     * it". Those come apart in the single most common starting state there is:
+     * right after a game launches, the Decky pane is on screen and the ring is
+     * on the QAM's left rail. The whole block was skipped, the RIGHT press that
+     * enters the pane along with it, and stage 3 then walked DOWN the RAIL --
+     * giving up after 2 presses with "walked 2 control(s) without finding
+     * bonsAI" (2, not the budget of 25, because rail icons repeat a focusKey
+     * almost immediately). One press was all it needed, and it already existed.
+     */
 
+    // The menu is genuinely shut only when no pane has a box at all. Not
+    // `quickAccessTab === null` -- that is also true on the rail, and reading it
+    // as "closed" fired the open chord at an open menu and closed it again.
+    if (focus.visibleQuickAccessTab === null) {
+      abortIfStopped();
+      const p = await pressChord("GUIDE", "A", { port: opts.port });
+      if (!p.ok) {
+        stages.push({ stage: "open-qam", ok: false, detail: p.reason ?? "", presses: 0 });
+        return fail(p.reason ?? "chord failed", focus, "the QAM chord could not be delivered");
+      }
+      await sleep(900);
+      focus = await readFocusAt(cdpBase, 10_000);
+      const opened = focus.ok && focus.visibleQuickAccessTab !== null;
+      stages.push({
+        stage: "open-qam",
+        ok: opened,
+        detail: opened
+          ? `QAM open, pane ${focus.visibleQuickAccessTab} on screen`
+          : "no quickaccess pane became visible after the chord",
+        presses: 1,
+      });
+      if (!opened) {
+        return fail(
+          "the QAM chord was delivered but no quickaccess pane appeared",
+          focus,
+          "could not confirm the Quick Access Menu opened",
+        );
+      }
+    }
+
+    // Wrong pane on screen: get to the rail, then walk it until Decky's shows.
+    if (focus.visibleQuickAccessTab !== DECKY_TAB) {
       // Step out to the rail if the ring is inside a pane. One press, verified:
       // on the rail the ring belongs to no pane, so quickAccessTab goes null
       // while a pane stays on screen.
@@ -341,11 +431,11 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
 
       // Walk the rail. The pane on screen changes as the ring moves, so that is
       // the thing to check -- nothing here assumes rail order or entry count.
-      let presses = 0;
+      let railPresses = 0;
       const from = focus.visibleQuickAccessTab;
-      while (focus.visibleQuickAccessTab !== DECKY_TAB && presses < tabBudget) {
+      while (focus.visibleQuickAccessTab !== DECKY_TAB && railPresses < tabBudget) {
         focus = await nudge("DOWN");
-        presses++;
+        railPresses++;
         if (!focus.ok) break;
       }
       const reached = focus.visibleQuickAccessTab === DECKY_TAB;
@@ -353,37 +443,43 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         stage: "find-decky-tab",
         ok: reached,
         detail: reached
-          ? `pane ${DECKY_TAB} on screen after ${presses} rail press(es)`
-          : `started on pane ${from}, ended on ${focus.visibleQuickAccessTab ?? "none"} after ${presses} press(es)`,
-        presses,
+          ? `pane ${DECKY_TAB} on screen after ${railPresses} rail press(es)`
+          : `started on pane ${from}, ended on ${focus.visibleQuickAccessTab ?? "none"} after ${railPresses} press(es)`,
+        presses: railPresses,
       });
       if (!reached) {
         return fail(
           `could not reach the Decky pane (${DECKY_TAB}) within ${tabBudget} rail presses`,
           focus,
-          `walked ${presses} rail entries without the Decky pane appearing - open it by hand`,
+          `walked ${railPresses} rail entries without the Decky pane appearing - open it by hand`,
         );
       }
+    }
 
-      // Enter the pane so the ring is on a plugin row rather than the rail.
-      if (focus.quickAccessTab !== DECKY_TAB) {
-        focus = await nudge("RIGHT");
-        const entered = focus.ok && focus.quickAccessTab === DECKY_TAB;
-        stages.push({
-          stage: "enter-decky-pane",
-          ok: entered,
-          detail: entered
-            ? "ring is inside the Decky pane"
-            : `expected tab ${DECKY_TAB}; ring reports ${focus.quickAccessTab ?? "none"}`,
-          presses: 1,
-        });
-        if (!entered) {
-          return fail(
-            "could not move the ring into the Decky pane",
-            focus,
-            "the Decky pane is on screen but one Right press did not enter it",
-          );
-        }
+    /*
+     * The Decky pane is showing but the ring is not in it -- the rail case
+     * above, and equally the state after the rail walk. Hoisted out of the
+     * `visibleQuickAccessTab !== DECKY_TAB` guard on 2026-08-28: this press has
+     * to run whenever the ring is outside the pane, not only when we were the
+     * ones who changed the pane.
+     */
+    if (focus.quickAccessTab !== DECKY_TAB) {
+      focus = await nudge("RIGHT");
+      const entered = focus.ok && focus.quickAccessTab === DECKY_TAB;
+      stages.push({
+        stage: "enter-decky-pane",
+        ok: entered,
+        detail: entered
+          ? "ring is inside the Decky pane"
+          : `expected tab ${DECKY_TAB}; ring reports ${focus.quickAccessTab ?? "none"}`,
+        presses: 1,
+      });
+      if (!entered) {
+        return fail(
+          "could not move the ring into the Decky pane",
+          focus,
+          "the Decky pane is on screen but one Right press did not enter it",
+        );
       }
     }
 
@@ -406,11 +502,42 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
      * by the panel header, not by whatever prose a control happens to carry --
      * so it is asked first and settles the question with no presses at all.
      */
-    if (looksLikeOpenPanelFor(focus, pluginName)) {
+    /*
+     * The selector, when there is one, OVERRIDES the labels in both directions.
+     * It is the plugin's own markup rather than an inference about Decky's, and
+     * P1-9 was precisely a confident inference: the tool announced the panel was
+     * open while `.bonsai-scope` was absent from the document, and the caller
+     * then spent three read-and-navigate rounds acting on a panel that was not
+     * there. A null here means the page could not be asked, which is not
+     * evidence either way, so that falls back to the labels.
+     */
+    const rootSelector = (opts.rootSelector ?? "").trim();
+    let rootMounted: boolean | null = null;
+    if (rootSelector) {
+      rootMounted = await panelRootMounted(rootSelector, cdpBase);
+      stages.push({
+        stage: "check-panel-root",
+        ok: rootMounted !== null,
+        detail:
+          rootMounted === true
+            ? `"${rootSelector}" is mounted and on screen, so the panel is genuinely open`
+            : rootMounted === false
+              ? `"${rootSelector}" is not in the document, so the panel is NOT open whatever the pane labels say`
+              : `could not ask the page about "${rootSelector}"; falling back to the pane labels`,
+        presses: 0,
+      });
+    }
+
+    const alreadyOpen =
+      rootMounted !== null ? rootMounted : looksLikeOpenPanelFor(focus, pluginName);
+
+    if (alreadyOpen) {
       stages.push({
         stage: "already-open",
         ok: true,
-        detail: `ring is already inside "${pluginName}"'s own panel (${describe(focus)}), not the Decky list`,
+        detail:
+          `ring is already inside "${pluginName}"'s own panel (${describe(focus)}), not the Decky list` +
+          (rootMounted === true ? `, confirmed by "${rootSelector}"` : ""),
         presses: 0,
       });
       return {
@@ -479,7 +606,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     // activates a control rather than moving the ring -- so the latch is
     // re-checked on the line before it, after the walk that got here.
     abortIfStopped();
-    const activate = await pressButton({ buttons: ["A"], port: opts.port });
+    const activate = await press({ buttons: ["A"], port: opts.port });
     if (!activate.ok) {
       stages.push({ stage: "activate", ok: false, detail: activate.reason ?? "", presses: 0 });
       return fail(activate.reason ?? "press failed", focus, "the A press could not be delivered");
@@ -487,17 +614,42 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     await sleep(700);
     const after = await readFocusAt(cdpBase, 10_000);
 
-    // Opening a Decky plugin leaves the ring unowned -- measured, see
-    // docs/planning/03. So "focus is nowhere" is the EXPECTED success signal
-    // here, not a failure, and the panel is confirmed by the element count
-    // instead.
+    /*
+     * Opening a Decky plugin leaves the ring unowned -- measured, see
+     * docs/planning/03. So "focus is nowhere" is the EXPECTED signal here rather
+     * than a failure, which is also why it is such weak evidence that anything
+     * opened: an unowned ring is what a press into nothing looks like too.
+     *
+     * With a root selector we can stop inferring and ask. That closes the other
+     * half of P1-9: the tool reported success having never asked the Deck
+     * whether the plugin actually came up.
+     */
+    const openedRoot = rootSelector ? await panelRootMounted(rootSelector, cdpBase) : null;
+    if (openedRoot === false) {
+      stages.push({
+        stage: "activate",
+        ok: false,
+        detail: `pressed A on "${pluginName}" but "${rootSelector}" never appeared in the document`,
+        presses: 1,
+      });
+      return fail(
+        `A was pressed on a control labelled "${pluginName}" but the panel did not mount ` +
+          `("${rootSelector}" is absent)`,
+        after,
+        `the A press landed but "${pluginName}"'s panel never rendered - the row may not have been the plugin's`,
+      );
+    }
+
     const grew = after.ok || (after.reason ?? "").includes("gpfocus marker not found");
     stages.push({
       stage: "activate",
-      ok: grew,
-      detail: after.ok
-        ? `panel open, ring on ${describe(after)}`
-        : "panel open, ring unowned (expected on plugin open - see planning doc 03)",
+      ok: openedRoot === true || grew,
+      detail:
+        openedRoot === true
+          ? `panel open, confirmed by "${rootSelector}"`
+          : after.ok
+            ? `panel open, ring on ${describe(after)}`
+            : "panel open, ring unowned (expected on plugin open - see planning doc 03)",
       presses: 1,
     });
 

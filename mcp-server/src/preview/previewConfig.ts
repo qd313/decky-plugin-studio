@@ -10,6 +10,14 @@ export type PreviewConfig = {
   rpcDenylist: string[];
   ipcTimeoutMs: number;
   preDeployCommand?: string;
+  /**
+   * CSS selector for an element this plugin's panel renders at its root, e.g.
+   * ".bonsai-scope". deck_openPlugin uses it to tell "my panel is open" from
+   * "my name appears in Decky's plugin list" -- a distinction it cannot make
+   * from Decky's own markup, and getting it wrong reports an unmounted panel as
+   * open (P1-9).
+   */
+  panelRootSelector?: string;
   permissions: Record<string, boolean>;
 };
 

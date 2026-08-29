@@ -21,9 +21,14 @@
  *   match is always reported back so a caller can check it, and `exact` is there
  *   for when the name is a common word.
  *
- *   LABELS OFTEN LIVE ON AN ANCESTOR. Decky's ToggleField puts the ring on an
- *   unlabelled inner div with the text several parents up, so matching only the
- *   focused element's own text misses every toggle in a settings page.
+ *   LABELS OFTEN LIVE ON AN ANCESTOR, BUT AN ANCESTOR MUST NOT WIN. Decky's
+ *   ToggleField puts the ring on an unlabelled inner div with the text several
+ *   parents up, so matching only the focused element's own text misses every
+ *   toggle in a settings page. Letting that climb run unchecked is worse: an
+ *   icon-only tab has no text either, and its nearest texted ancestor was the
+ *   entire Quick Access Menu, which substring-matched "bonsAI" and reported
+ *   found after ZERO presses (P1-10). The name now resolves aria-label first and
+ *   refuses text too long to be a name -- see FocusElement.label.
  *
  *   DEAD ENDS ARE COMMON AND SHOULD STOP THE WALK. At the bottom of a list the
  *   ring simply stops moving. Sixteen more presses cost sixteen round trips and
@@ -32,7 +37,7 @@
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
-import { focusKey, describe } from "./focusKey.js";
+import { focusKey, describe, labelOfElement } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 
 export type WalkDirection = "UP" | "DOWN" | "LEFT" | "RIGHT";
@@ -77,6 +82,13 @@ export interface WalkToResult {
   focus: ReadFocusResult | null;
   /** True when the walk stopped because the ring stopped moving. */
   stalled: boolean;
+  /**
+   * True when at least one read landed on something too big to be a control --
+   * the ring is on a container, and the rig refused to name it after a pane
+   * dump. Reported because "nothing was labelled" and "the walk overshot onto a
+   * container" send a reader to very different places.
+   */
+  overshot: boolean;
   /** True when a press was spent placing an unowned ring before the walk began. */
   acquired: boolean;
   /** True when the walk ended because the killswitch was thrown. */
@@ -86,11 +98,14 @@ export interface WalkToResult {
 
 const DIRECTIONS: WalkDirection[] = ["UP", "DOWN", "LEFT", "RIGHT"];
 
-/** Own text, then aria-label, then the nearest ancestor that has any. */
+/**
+ * The focused control's name -- computed on the page by readFocus, ranked in one
+ * place by labelOfElement, so walkTo, runSequence and openPlugin cannot drift
+ * apart on what a control is called. See FocusElement.label for why this stopped
+ * being three fields ordered ad hoc at each call site.
+ */
 export function labelOf(r: ReadFocusResult | null): string {
-  const el = r?.gpfocus;
-  if (!el) return "";
-  return (el.text || el.ariaLabel || el.ownerText || "").trim();
+  return labelOfElement(r?.gpfocus ?? null);
 }
 
 function matches(label: string, needle: string, exact: boolean): boolean {
@@ -170,6 +185,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
     seen: [],
     focus: null,
     stalled: false,
+    overshot: false,
     acquired: false,
     stopped: false,
     summary: "",
@@ -219,6 +235,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
   let presses = 0;
   let stalls = 0;
   let stalled = false;
+  let overshot = false;
 
   try {
     let focus = await readFocusAt(cdpBase, 10_000);
@@ -259,6 +276,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           presses,
           seen,
           focus,
+          overshot,
           acquired,
           stopped: true,
           reason: stoppedMessage(midWalk),
@@ -270,6 +288,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
 
       const label = labelOf(focus);
       if (label && !seen.includes(label)) seen.push(label);
+      if (focus.gpfocus?.labelOverflow) overshot = true;
 
       if (matches(label, text, exact)) {
         return {
@@ -283,6 +302,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           seen,
           focus,
           stalled: false,
+          overshot,
           acquired,
           stopped: false,
           summary:
@@ -303,6 +323,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           presses,
           seen,
           focus,
+          overshot,
           reason: p.reason,
           summary: `no press could be delivered after ${presses} step(s)`,
         };
@@ -316,6 +337,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           presses,
           seen,
           focus,
+          overshot,
           reason: focus.reason,
           summary: `focus became unreadable after ${presses} press(es)`,
         };
@@ -343,12 +365,18 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       seen,
       focus,
       stalled,
+      overshot,
       acquired,
-      summary: stalled
-        ? `the ring stopped moving after ${presses} press(es) without finding "${text}" - ` +
-          `this is the end of the line going ${direction}. Seen: ${seen.join(" | ") || "nothing labelled"}`
-        : `walked ${presses} control(s) without finding "${text}". ` +
-          `Seen: ${seen.join(" | ") || "nothing labelled"}`,
+      summary:
+        (stalled
+          ? `the ring stopped moving after ${presses} press(es) without finding "${text}" - ` +
+            `this is the end of the line going ${direction}. Seen: ${seen.join(" | ") || "nothing labelled"}`
+          : `walked ${presses} control(s) without finding "${text}". ` +
+            `Seen: ${seen.join(" | ") || "nothing labelled"}`) +
+        (overshot
+          ? " - at least one stop had no name of its own and the only text around it was a whole " +
+            "container's, so it was left unnamed rather than reported under a pane's text"
+          : ""),
     };
   } finally {
     closeTunnel?.();

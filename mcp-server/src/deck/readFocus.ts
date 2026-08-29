@@ -26,6 +26,20 @@
 import { CdpTarget, evaluate, getVersion, listTargets, rewriteWsHost } from "./cdp.js";
 import { withCdpTunnel } from "./cdpTunnel.js";
 
+/**
+ * Where a control's computed `label` came from. The `ancestor-*` sources are
+ * borrowed text -- the label belongs to something the ring is INSIDE, not to
+ * the ring's own element -- and a caller that must not act on a borrowed name
+ * (openPlugin's list-row test, say) checks for that prefix.
+ */
+export type LabelSource =
+  | "aria-label"
+  | "aria-labelledby"
+  | "descendant-aria-label"
+  | "text"
+  | "ancestor-aria-label"
+  | "ancestor-text";
+
 export interface FocusElement {
   /** Best-effort CSS path. Null when one could not be built. */
   selector: string | null;
@@ -45,8 +59,49 @@ export interface FocusElement {
    * four parents below the element carrying that text. Without this, every
    * settings toggle reads as an anonymous <DIV> and any text assertion against
    * one is a false negative.
+   *
+   * Capped at LABEL_MAX characters since 2026-08-28: an ancestor whose text runs
+   * to hundreds of characters is a whole pane, not a label, and reporting it as
+   * one is what made substring matching a false success. See `label`.
    */
   ownerText: string;
+  /**
+   * THE control's name, computed the way an accessibility tree computes one.
+   * This is what every matcher should use -- walkTo, runSequence, openPlugin.
+   *
+   * Priority, first non-empty wins: the element's own `aria-label`, its
+   * `aria-labelledby` targets, an `aria-label` on a descendant, its own text,
+   * then an ancestor's `aria-label` or text. `labelSource` says which fired.
+   *
+   * WHY THIS EXISTS (P1-10, 2026-08-28). The old scheme reported three raw
+   * fields and let each caller rank them, and every caller ranked them
+   * differently and at least one ranked them wrongly. Two failures came out of
+   * it on the rig, both false rather than merely missing:
+   *
+   *   A button whose only name is its own `aria-label` ("Move gemma4:e2b-it-qat
+   *   up") could not be walked to by that name, because full-subtree text
+   *   ("Up") was consulted first.
+   *
+   *   An icon-only tab, having no text of its own, borrowed the first ancestor
+   *   with any -- the entire Quick Access Menu. `walkTo({text: "bonsAI"})` then
+   *   substring-matched that dump and reported `found` after ZERO presses, with
+   *   the ring nowhere near bonsAI. A false success is the worst shape this rig
+   *   can produce: it does not stall, does not error, and every assertion built
+   *   on it inherits the lie.
+   *
+   * Hence LABEL_MAX: text longer than a name plausibly is means the ring is on
+   * a container, so the climb STOPS and the label comes back empty with
+   * `labelOverflow: true`. Empty is honest; the pane dump is not.
+   */
+  label?: string;
+  /** Which rule produced `label`. Null when nothing named the control. */
+  labelSource?: LabelSource | null;
+  /**
+   * True when naming stopped because the only text available was too long to be
+   * a label -- i.e. the walk overshot onto a container. Distinguishes "this
+   * control has no name" from "this thing is not a control".
+   */
+  labelOverflow?: boolean;
   rect: { x: number; y: number; w: number; h: number } | null;
 }
 
@@ -94,6 +149,15 @@ export interface ReadFocusResult {
  * Runs inside the page. Kept as one self-contained expression so it can be sent
  * over Runtime.evaluate with no page-side setup.
  *
+ * EXPORTED FOR TESTS. Everything in here used to be unreachable from the suite
+ * -- it is a string, so nothing type-checks it and nothing runs it without a
+ * Deck. That is not an academic gap: P1-10 (an icon-only control reported under
+ * the text of the entire Quick Access Menu) lived in this string for weeks, and
+ * the unit tests could not have caught it because they build FocusElement
+ * objects host-side and never execute this. readFocus.test.ts now evaluates it
+ * against a small fake DOM.
+ *
+
  * Selector strategy: Steam's class names are a mix of stable semantic ones
  * (DialogButton, Focusable, Panel) and per-build hashes (cXzBZxhPBl7fZs9LODEnc,
  * _2BB6uf--jFaAmdnwLOqMU7). Only letter-only classes are kept, the path is
@@ -102,7 +166,7 @@ export interface ReadFocusResult {
  * does not verify is returned with selectorVerified:false rather than silently
  * handed over as if it were good.
  */
-function pageExpression(expect?: string): string {
+export function pageExpression(expect?: string): string {
   const EXPECT = expect ? JSON.stringify(expect) : "null";
   return `(() => {
   var EXPECT = ${EXPECT};
@@ -145,13 +209,117 @@ function pageExpression(expect?: string): string {
     return parts.length ? parts.join(' > ') : null;
   }
 
-  function ownerTextOf(el) {
-    var own = (el.textContent || '').trim();
-    if (own) return own.slice(0, 120);
+  /*
+   * Longest string still plausibly a control's NAME.
+   *
+   * Above this we are looking at a container's contents, not a label. Measured
+   * on the rig 2026-08-28: bonsAI's icon-only QAM tabs have no text of their
+   * own, and the first ancestor that has any is the whole Quick Access Menu --
+   * "NotificationsQuick SettingsPerformanceSoundtracksHelpDeckybonsAITabMaster..."
+   * Returning that as the focused control's name made walkTo substring-match
+   * "bonsAI" against it and report success without pressing anything.
+   *
+   * 80 is chosen against real labels rather than theory: the longest genuine
+   * ones seen on the rig are Decky setting rows in the fifties ("Hybrid
+   * retrieval (meaning search)", "Move gemma4:e2b-it-qat up"), and the shortest
+   * false positive was several hundred. Nothing sits near the boundary.
+   */
+  var LABEL_MAX = 80;
+
+  function attr(el, name) {
+    try { return (el && el.getAttribute) ? el.getAttribute(name) : null; } catch (e) { return null; }
+  }
+
+  function textOf(el) {
+    return ((el && el.textContent) || '').trim();
+  }
+
+  function labelledByText(el) {
+    var ids = (attr(el, 'aria-labelledby') || '').trim();
+    if (!ids) return '';
+    var parts = ids.split(/\\s+/), out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var ref = null;
+      try { ref = document.getElementById(parts[i]); } catch (e) { ref = null; }
+      var t = textOf(ref);
+      if (t) out.push(t);
+    }
+    return out.join(' ').trim();
+  }
+
+  function named(label, source) {
+    return { label: label.slice(0, 120), labelSource: source, labelOverflow: false };
+  }
+
+  /*
+   * A control's accessible name, in the order an accessibility tree resolves one.
+   *
+   * The ancestor climb at the bottom is the Decky ToggleField case and it stays
+   * -- the ring genuinely lands on an unlabelled inner div with the label four
+   * parents up. What changed on 2026-08-28 is that it no longer WINS: anything
+   * naming the element itself is preferred, and an ancestor whose text is too
+   * long to be a label ends the climb empty-handed instead of handing back a
+   * whole pane. See FocusElement.label.
+   */
+  function accessibleNameOf(el) {
+    var none = { label: '', labelSource: null, labelOverflow: false };
+    if (!el) return none;
+
+    var own = (attr(el, 'aria-label') || '').trim();
+    if (own) return named(own, 'aria-label');
+
+    var by = labelledByText(el);
+    if (by) return named(by, 'aria-labelledby');
+
+    /*
+     * A descendant's aria-label. Steam puts the ring on an outer Focusable
+     * wrapper, so a consumer who labels the control labels a node INSIDE it --
+     * bonsAI added aria-label="Ask bonsAI" to each tab's title node and the rig
+     * still read past it, because only the focus target itself was consulted.
+     */
+    var inner = null;
+    try { inner = el.querySelector ? el.querySelector('[aria-label]') : null; } catch (e) { inner = null; }
+    var innerLabel = inner ? (attr(inner, 'aria-label') || '').trim() : '';
+    if (innerLabel) return named(innerLabel, 'descendant-aria-label');
+
+    var text = textOf(el);
+    if (text) {
+      if (text.length <= LABEL_MAX) return named(text, 'text');
+      // The ring is on a container. Every ancestor's text is a superset of this
+      // one, so climbing can only make it worse -- stop and say so.
+      return { label: '', labelSource: null, labelOverflow: true };
+    }
+
     var n = el.parentElement, guard = 0;
     while (n && guard++ < 6) {
-      var t = (n.textContent || '').trim();
-      if (t) return t.slice(0, 120);
+      var na = (attr(n, 'aria-label') || '').trim();
+      if (na) return named(na, 'ancestor-aria-label');
+      var nt = textOf(n);
+      if (nt) {
+        if (nt.length <= LABEL_MAX) return named(nt, 'ancestor-text');
+        return { label: '', labelSource: null, labelOverflow: true };
+      }
+      n = n.parentElement;
+    }
+    return none;
+  }
+
+  /*
+   * Ancestor text only -- the element's own text is reported as the text field.
+   *
+   * This used to short-circuit to the element's own textContent, which made
+   * ownerText a duplicate of text for every element that had any and meant the
+   * field never described what its name says it describes. Kept as a reported
+   * field for post-mortems; matching goes through the label field instead.
+   *
+   * (No backticks anywhere in this function: it lives inside a template
+   * literal, and one would end the string mid-expression.)
+   */
+  function ownerTextOf(el) {
+    var n = el.parentElement, guard = 0;
+    while (n && guard++ < 6) {
+      var t = textOf(n);
+      if (t) return t.length <= LABEL_MAX ? t : '';
       n = n.parentElement;
     }
     return '';
@@ -169,15 +337,19 @@ function pageExpression(expect?: string): string {
       var b = el.getBoundingClientRect();
       r = { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) };
     } catch (e) { r = null; }
+    var name = accessibleNameOf(el);
     return {
       selector: sel,
       selectorVerified: verified,
       tag: el.tagName,
       id: hasRealId(el) ? el.id : null,
       classes: (el.className || '').toString().split(/\\s+/).filter(Boolean),
-      ariaLabel: el.getAttribute ? el.getAttribute('aria-label') : null,
+      ariaLabel: attr(el, 'aria-label'),
       text: (el.textContent || '').trim().slice(0, 120),
       ownerText: ownerTextOf(el),
+      label: name.label,
+      labelSource: name.labelSource,
+      labelOverflow: name.labelOverflow,
       rect: r
     };
   }

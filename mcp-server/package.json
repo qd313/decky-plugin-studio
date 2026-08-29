@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "tsc -p . && node scripts/copy-scripts.mjs",
-    "test": "tsc -p . && node --import tsx --test src/preview/rpcDiscover.test.ts src/preview/rpcDiff.test.ts src/toolRegistry.test.ts src/lint/lint.test.ts src/deck/cdp.test.ts src/deck/killswitch.test.ts src/deck/runSequence.test.ts src/deck/walkTo.test.ts src/deck/readPage.test.ts src/ingest/server.test.ts src/tools/captureOrchestrator.test.ts src/tools/deckAutonomy.test.ts src/tools/deckDeploy.test.ts",
+    "test": "tsc -p . && node --import tsx --test src/preview/rpcDiscover.test.ts src/preview/rpcDiff.test.ts src/toolRegistry.test.ts src/lint/lint.test.ts src/deck/cdp.test.ts src/deck/killswitch.test.ts src/deck/runSequence.test.ts src/deck/walkTo.test.ts src/deck/readFocus.test.ts src/deck/readPage.test.ts src/ingest/server.test.ts src/tools/captureOrchestrator.test.ts src/tools/deckAutonomy.test.ts src/tools/deckDeploy.test.ts",
     "pack": "npm pack",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"

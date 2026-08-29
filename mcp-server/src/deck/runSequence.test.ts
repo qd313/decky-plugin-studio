@@ -169,6 +169,56 @@ test("a Decky toggle is matched and named by its ancestor's label", async () => 
   }
 });
 
+test("mustReachText is not satisfied by text belonging to something else", async () => {
+  /*
+   * P1-10's third copy. matchesText used to concatenate text + ariaLabel +
+   * ownerText into one haystack, so any string anywhere above the ring counted
+   * as reached -- and with an icon-only control that inherited a whole pane,
+   * every label in that pane "was reached". `neverReached` is the field a whole
+   * unattended run is trusted on, so a false empty there is a run that reports
+   * a reachability guarantee it never checked.
+   *
+   * Here the ring is on a control genuinely named "Retry"; "Send" appears only
+   * in the surrounding container's text. "Retry" must be reached, "Send" must
+   * not.
+   */
+  const nestedPage = {
+    hasGpfocus: true,
+    elementCount: 300,
+    gpfocus: {
+      selector: null,
+      selectorVerified: false,
+      tag: "BUTTON",
+      id: null,
+      classes: ["Focusable"],
+      ariaLabel: null,
+      text: "Retry",
+      ownerText: "Send to bonsAIRetryCopy",
+      label: "Retry",
+      labelSource: "text",
+      labelOverflow: false,
+      rect: null,
+    },
+    gpfocusWithin: [],
+    activeElement: null,
+    agree: false,
+    quickAccessTab: "999",
+    deckyPluginRoot: true,
+  };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => nestedPage);
+  try {
+    const r = await runSequence({
+      steps: [{ press: "NOT_A_BUTTON" }],
+      mustReachText: ["Retry", "Send"],
+      cdpUrl: fake.base,
+      writeEvidence: false,
+    });
+    assert.deepEqual(r.neverReached, ["Send"], '"Send" is the container\'s text, not a control the ring reached');
+  } finally {
+    await fake.close();
+  }
+});
+
 // --------------------------------------------------------------------------
 // Runner paths reachable without a bridge board
 // --------------------------------------------------------------------------
