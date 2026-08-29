@@ -3,6 +3,7 @@
   "rpcAllowlist": [],
   "rpcDenylist": ["_main", "_unload", "_migration"],
   "ipcTimeoutMs": 120000,
+  "panelRootSelector": "",
   "permissions": {
     "hardware_control": true,
     "filesystem": true,

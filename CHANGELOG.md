@@ -2,12 +2,16 @@
 
 ## [Unreleased]
 
-> Package versions were bumped to **0.3.8** to deploy the killswitch into a running VS Code:
-> installing the same version over itself fails with `EBUSY` because the editor holds the
-> extension directory open, while a new version number installs alongside it. The entries
-> below are still unreleased -- fold them into a `## [0.3.8]` section when cutting the
-> release. `mcp-server` was on 0.3.6 while the extension was on 0.3.7 and the server
-> reported that stale number over MCP `serverInfo`; all four are now pinned together.
+> Package versions are at **0.3.9**, bumped for the same reason 0.3.8 was: installing the
+> same version over itself fails with `EBUSY` because a running editor holds the extension
+> directory open, while a new version number installs alongside it. 0.3.9 carries the
+> P1-8/P1-9/P1-10 fixes below into a live VS Code. The entries here are still unreleased --
+> fold them into a `## [0.3.9]` section when cutting the release. Root, `extension` and
+> `mcp-server` are pinned together, and `SERVER_INFO` in `mcp-server/src/index.ts` must move
+> with them or the server reports a stale number over MCP `serverInfo` (which it did once,
+> at 0.3.6, while the extension was on 0.3.7). **Stacked installs to clear:** each bump
+> leaves the previous version installed alongside -- the highest wins, so it is harmless,
+> but `code --list-extensions --show-versions` is worth a look before a release.
 
 ### Added
 

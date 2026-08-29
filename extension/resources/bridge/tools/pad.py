@@ -34,7 +34,7 @@ def _write(p, data):
         p.flush()
 
 
-def open_port(port, settle=2.5):
+def open_port(port, settle=2.5, probe_s=0.3):
     p = serial.Serial()
     p.port = port
     p.baudrate = BAUD
@@ -43,7 +43,29 @@ def open_port(port, settle=2.5):
     p.timeout = 0.05       # read timeout
     p.write_timeout = 2.0  # explicit, so a stall is an error not a hang
     p.open()
-    # If the driver reset the board on open, wait for it to come back.
+
+    # Ask the board whether it is up, rather than waiting to be told.
+    #
+    # The two lines above hold DTR and RTS low precisely so that opening the port does NOT reset
+    # the board. A board that was not reset never prints the "ready" line, so the wait below could
+    # only ever run to its full timeout -- and it did, on every single invocation. Measured
+    # 2026-08-28 against a live board: open_port took 2.523s and never saw "ready", while a status
+    # ping came back in 0.009s. That was ~2.5s of dead time on every press the QA rig sent.
+    #
+    # So probe first and treat an answer as proof of life. status only reports; it moves nothing.
+    try:
+        p.reset_input_buffer()
+        p.write(b'{"t":"status"}\n')
+        p.flush()
+        deadline = time.time() + probe_s
+        while time.time() < deadline:
+            if b'"t"' in p.readline():
+                return p
+    except Exception:
+        pass  # fall through to the original wait, which is the safe answer to any probe failure
+
+    # No answer. The board may genuinely be booting -- a fresh flash, or a driver that reset it on
+    # open despite the lines above -- so wait for it the way this always did.
     deadline = time.time() + settle
     while time.time() < deadline:
         if b'"ready"' in p.readline():
@@ -58,13 +80,29 @@ def send(p, obj, echo=True):
         print(f"-> {raw.strip()}")
 
 
-def drain(p, secs, prefix="<- "):
-    """Print everything the board says for `secs`."""
-    deadline = time.time() + secs
+def drain(p, secs, prefix="<- ", until=None, min_secs=0.0):
+    """Print everything the board says, for `secs` or until it has answered.
+
+    `until` is a marker to look for in a line -- once it is seen the drain can stop, because the
+    board has said what the caller was waiting for. The board answers in milliseconds, so the
+    fixed windows this used to run were almost entirely spent reading nothing.
+
+    `min_secs` is the floor, and it is load-bearing for `press`: the caller's `finally` writes a
+    release, so returning before the requested hold has elapsed would cut the press short. The ack
+    can arrive well before the hold finishes.
+    """
+    start = time.time()
+    deadline = start + secs
+    answered = False
     while time.time() < deadline:
         line = p.readline()
         if line:
-            print(prefix + line.decode("utf-8", "replace").rstrip())
+            text = line.decode("utf-8", "replace")
+            print(prefix + text.rstrip())
+            if until and until in text:
+                answered = True
+        if answered and time.time() - start >= min_secs:
+            return
 
 
 class Heartbeat(threading.Thread):
@@ -104,17 +142,24 @@ def main():
     try:
         if args.cmd == "status":
             send(p, {"t": "status"})
-            drain(p, 0.5)
+            drain(p, 0.5, until='"t":"status"')
 
         elif args.cmd == "release":
             send(p, {"t": "release"})
-            drain(p, 0.5)
+            drain(p, 0.5, until='"t":"release"')
 
         elif args.cmd == "press":
             if not args.buttons:
                 sys.exit("name at least one button")
             send(p, {"t": "press", "b": args.buttons, "ms": args.ms})
-            drain(p, max(1.0, args.ms / 1000 + 0.7))
+            # The old window was the full max(1.0, ms/1000 + 0.7) whatever the board did. Stop at
+            # the ack instead, but not before the hold has had time to finish -- see `drain`.
+            drain(
+                p,
+                max(1.0, args.ms / 1000 + 0.7),
+                until='"t":"press"',
+                min_secs=args.ms / 1000 + 0.05,
+            )
 
         elif args.cmd == "hold":
             if not args.buttons:
