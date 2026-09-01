@@ -32,9 +32,16 @@ import fs from "fs";
 import path from "path";
 
 import { openCdpTunnel } from "./cdpTunnel.js";
-import { readFocusAt, ReadFocusResult, FocusElement } from "./readFocus.js";
+import { readFocusAt, ReadFocusResult, FocusElement, Visibility } from "./readFocus.js";
 import { assertFocusMove } from "./assertFocusMove.js";
-import { focusKey, describe, describeElement, labelOfElement } from "./focusKey.js";
+import {
+  focusKey,
+  describe,
+  describeElement,
+  describeVisibility,
+  isVisible,
+  labelOfElement,
+} from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned } from "./walkTo.js";
 import { pressButton } from "./pressButton.js";
@@ -47,6 +54,12 @@ export interface SequenceStep {
   expect?: string;
   /** Human name for this step, used in the log and the summary. */
   label?: string;
+  /**
+   * Fail this step unless a person could see where the ring landed, the way
+   * `expect` fails it when the ring lands on the wrong element. Overrides the
+   * run-level option of the same name. See RunSequenceOptions.requireVisible.
+   */
+  requireVisible?: boolean;
   holdMs?: number;
   settleTimeoutMs?: number;
 }
@@ -65,6 +78,10 @@ export interface StepResult {
   from: string;
   to: string;
   focusKey: string | null;
+  /** Could a person see `to`? Null when nothing was measured. */
+  visibility: Visibility | null;
+  /** `visibility.verdict === "visible"`, or null when unmeasured. Never assume null means yes. */
+  visible: boolean | null;
   settled: boolean;
   settleMs: number;
   diagnosis: string;
@@ -99,6 +116,20 @@ export interface RunSequenceOptions {
    * per candidate.
    */
   mustReachText?: string[];
+  /**
+   * Fail any step whose landing spot a person could not see -- covered,
+   * clipped or off screen -- exactly the way `expect` fails a step that lands
+   * on the wrong element. A step's own `requireVisible` overrides this.
+   *
+   * DEFAULT OFF for this release: the verdict is still measured, reported per
+   * step, counted in `stopsFocusedButNotVisible` and shouted in the summary,
+   * but does not fail anything, so existing suites keep their results while
+   * consumers see what they would fail on. Plan 06 flips this to fail-by-
+   * default one release later -- a covered stop should never again read as a
+   * pass, and the only reason it does today is to give suites one release to
+   * look.
+   */
+  requireVisible?: boolean;
   /** Serial port of the bridge's COM side. */
   port?: string;
   /** Existing CDP endpoint; omit to open a temporary tunnel for the run. */
@@ -141,6 +172,15 @@ export interface RunSequenceResult {
   /** Entries of `mustReachText` that never appeared. */
   neverReached: string[];
   /**
+   * Stops -- the starting read plus every step that executed -- where the ring
+   * was on a control a person could not see. Nonzero here with every step
+   * passed is the 2026-08-31 bonsAI signature, and the reason this counter
+   * exists: a run that looks green and is not.
+   */
+  stopsFocusedButNotVisible: number;
+  /** One line per such stop, for the summary and the post-mortem. */
+  notVisibleStops: string[];
+  /**
    * True when the run ended because the killswitch was thrown, not because it
    * finished or failed. A stopped run is not a failed run: the steps that ran
    * are still evidence, and the ones that did not were never attempted.
@@ -158,6 +198,7 @@ export interface Visit {
   key: string | null;
   label: string;
   el: FocusElement | null;
+  visibility?: Visibility | null;
 }
 
 /**
@@ -221,6 +262,32 @@ function findCycle(visits: Visit[]): CycleReport | null {
  * false-success family as P1-10, and `neverReached` is exactly the field a run
  * is trusted on. labelOfElement resolves one name, with the container guard.
  */
+/**
+ * The visibility half of a step's verdict, kept pure so it can be pinned
+ * without a press: whether the stop was visible, whether that is allowed to
+ * fail the step, and what the diagnosis should add. A null verdict under
+ * requireVisible fails -- "could not measure" must never round up to "seen".
+ */
+export function judgeVisibility(
+  visibility: Visibility | null,
+  requireVisible: boolean,
+): { visible: boolean | null; visibleOk: boolean; note: string } {
+  const visible = isVisible(visibility);
+  const visibleOk = !requireVisible || visible === true;
+  const notVisible = describeVisibility(visibility);
+  let note = "";
+  if (notVisible) {
+    note =
+      `FOCUSED BUT ${notVisible} -- the ring is on it and a person could not see it` +
+      (requireVisible ? ", failing the step because requireVisible is set" : "");
+  } else if (requireVisible && visible === null) {
+    note =
+      "requireVisible is set but visibility could not be measured at this stop, " +
+      "so the step fails rather than assuming it was visible";
+  }
+  return { visible, visibleOk, note };
+}
+
 function matchesText(el: FocusElement | null, needle: string): boolean {
   const label = labelOfElement(el);
   if (!label) return false;
@@ -244,6 +311,8 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     visited: [],
     cycle: null,
     neverReached: mustReach,
+    stopsFocusedButNotVisible: 0,
+    notVisibleStops: [],
     stopped: false,
     evidenceFile: null,
     durationMs: 0,
@@ -323,7 +392,13 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
             "one press places it; acquireFocus does that automatically and is on by default.",
       };
     }
-    visits.push({ step: 0, key: focusKey(first), label: describe(first), el: first.gpfocus });
+    visits.push({
+      step: 0,
+      key: focusKey(first),
+      label: describe(first),
+      el: first.gpfocus,
+      visibility: first.visibility ?? null,
+    });
 
     for (let i = 0; i < steps.length; i++) {
       // The press itself refuses on the latch too, so no press can escape this.
@@ -353,7 +428,17 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
       // previous step's "after". That costs a read per step and is worth it: if
       // anything async moved the ring between steps, a cached value would hide it.
       const after: ReadFocusResult | null = r.after;
-      const pass = r.ok && (step.expect ? r.matched === true : true);
+
+      // Visibility is the second fact about a stop, measured beside the first.
+      // A step can only fail on it when asked to (requireVisible); otherwise it
+      // is reported, counted and shouted, but the pass stands -- for one
+      // release. See RunSequenceOptions.requireVisible.
+      const visibility = r.ok ? (after?.visibility ?? null) : null;
+      const requireVisible = step.requireVisible ?? opts.requireVisible ?? false;
+      const judged = judgeVisibility(visibility, requireVisible);
+      const visible = judged.visible;
+      const pass = r.ok && (step.expect ? r.matched === true : true) && judged.visibleOk;
+      const diagnosis = r.ok && judged.note ? `${r.diagnosis}; ${judged.note}` : r.diagnosis;
 
       results.push({
         index: i + 1,
@@ -367,9 +452,11 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
         from: describe(r.before),
         to: describe(after),
         focusKey: focusKey(after),
+        visibility,
+        visible,
         settled: r.settled,
         settleMs: r.settleMs,
-        diagnosis: r.diagnosis,
+        diagnosis,
         reason: r.reason,
       });
 
@@ -379,6 +466,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
           key: focusKey(after),
           label: describe(after),
           el: after?.gpfocus ?? null,
+          visibility,
         });
       }
 
@@ -396,6 +484,13 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
   for (const v of visits) if (!seenLabels.includes(v.label)) seenLabels.push(v.label);
 
   const neverReached = mustReach.filter((t) => !visits.some((v) => matchesText(v.el, t)));
+
+  // Counted over every stop the ring was read at, the starting one included: a
+  // run that BEGINS on a covered control is as much a finding as one that
+  // walks onto one.
+  const notVisibleStops = visits
+    .filter((v) => v.visibility && v.visibility.verdict !== "visible")
+    .map((v) => `step ${v.step}: ${v.label} ${describeVisibility(v.visibility)}`);
 
   const ranAll = results.length === steps.length;
   // A stopped run is never "ok" -- it did not do what it was asked -- but the
@@ -419,6 +514,12 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
             : ` and never reached anything new in the ${cycle.stepsAfterLoop} step(s) after`)
       : null,
     neverReached.length ? `never reached: ${neverReached.join(", ")}` : null,
+    notVisibleStops.length
+      ? `${notVisibleStops.length} stop(s) FOCUSED BUT NOT VISIBLE: ${notVisibleStops.join("; ")}` +
+        (opts.requireVisible || steps.some((s) => s.requireVisible)
+          ? ""
+          : " (report-only -- pass requireVisible to fail on this)")
+      : null,
   ].filter(Boolean);
 
   const result: RunSequenceResult = {
@@ -433,6 +534,8 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     visited: seenLabels,
     cycle,
     neverReached,
+    stopsFocusedButNotVisible: notVisibleStops.length,
+    notVisibleStops,
     stopped: stoppedMidRun,
     evidenceFile: null,
     durationMs: Date.now() - started,

@@ -36,8 +36,8 @@
  */
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton } from "./pressButton.js";
-import { readFocusAt, ReadFocusResult } from "./readFocus.js";
-import { focusKey, describe, labelOfElement } from "./focusKey.js";
+import { readFocusAt, ReadFocusResult, Visibility } from "./readFocus.js";
+import { focusKey, describe, describeVisibility, labelOfElement } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 
 export type WalkDirection = "UP" | "DOWN" | "LEFT" | "RIGHT";
@@ -80,6 +80,13 @@ export interface WalkToResult {
   /** Distinct labels seen, in order. The useful half of a miss. */
   seen: string[];
   focus: ReadFocusResult | null;
+  /**
+   * Could a person see the stop the walk ended on? `found: true` with a
+   * verdict other than "visible" is the exact signature of the 2026-08-31
+   * bonsAI incident -- ring on the control, control behind a dock -- and the
+   * summary says it out loud. Null when nothing was measured.
+   */
+  visibility: Visibility | null;
   /** True when the walk stopped because the ring stopped moving. */
   stalled: boolean;
   /**
@@ -184,6 +191,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
     presses: 0,
     seen: [],
     focus: null,
+    visibility: null,
     stalled: false,
     overshot: false,
     acquired: false,
@@ -291,6 +299,10 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       if (focus.gpfocus?.labelOverflow) overshot = true;
 
       if (matches(label, text, exact)) {
+        // Found is a statement about the ring, not about the eye. A person
+        // could not see the 2026-08-31 stop that every tool called found, so
+        // the summary shouts when the two disagree.
+        const notVisible = describeVisibility(focus.visibility);
         return {
           ok: true,
           found: true,
@@ -301,12 +313,16 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           presses,
           seen,
           focus,
+          visibility: focus.visibility ?? null,
           stalled: false,
           overshot,
           acquired,
           stopped: false,
           summary:
             `found after ${presses} press(es): ${describe(focus)}` +
+            (notVisible
+              ? `, but ${notVisible} -- the ring is on it and a person could not see it`
+              : "") +
             (exact || label.toLowerCase() === text.toLowerCase()
               ? ""
               : ` -- matched as a substring, so check this is the control you meant`),
@@ -364,6 +380,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       presses,
       seen,
       focus,
+      visibility: focus.visibility ?? null,
       stalled,
       overshot,
       acquired,

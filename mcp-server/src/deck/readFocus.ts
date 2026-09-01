@@ -105,6 +105,58 @@ export interface FocusElement {
   rect: { x: number; y: number; w: number; h: number } | null;
 }
 
+export type VisibilityVerdict = "visible" | "partial" | "covered" | "offscreen";
+
+/**
+ * Could a person SEE the focused control? (Plan 06, 2026-08-31.)
+ *
+ * Focus and visibility are two different facts, and until this existed the rig
+ * measured only the first. On bonsAI a control focused BEHIND its bottom-pinned
+ * dock passed `deck_walkTo` (found: true), `deck_runSequence` (every step
+ * matched) and `deck_readFocus` (correct selector, label and rect) -- and a
+ * human found it in thirty seconds. Second incident of that class in two days;
+ * the 2026-08-30 one was the pane's last 50px clipped by an `overflow: hidden`
+ * ancestor. Both are DOM-measurable in the eval the tools already run.
+ *
+ * Mechanism: a 3x3 grid of points across the element's rect, inset 2px, each
+ * put through `document.elementFromPoint`. The element itself or a descendant
+ * is a visible point; any other element on top is a covered point (the hit is
+ * recorded); an ancestor is a clipped point (nothing is on top -- the element
+ * simply is not painted there, which is what an overflow clip looks like); a
+ * point off the viewport is offscreen. `elementFromPoint` sees stacking exactly
+ * as the compositor resolves it and skips `pointer-events: none`, so a
+ * decorative scrim does not register as a coverer while an interactive dock
+ * does -- no plugin's dock is special-cased here.
+ *
+ * Honest limit: this is a DOM hit-test, not eyes. It cannot see a control in
+ * the wrong colour or a compositing artifact; those still need a screenshot or
+ * a human. The claim is exactly that focused-but-occluded and
+ * focused-but-offscreen can never again pass silently.
+ */
+export interface Visibility {
+  verdict: VisibilityVerdict;
+  /** Sampled: visible points out of nine, as a percentage. */
+  visiblePercent: number;
+  /** The most frequent element found ON TOP of a sampled point, when any was. */
+  coveredBy: string | null;
+  /** The most frequent ANCESTOR hit instead of the element -- an overflow clip. */
+  clippedBy: string | null;
+  points: { visible: number; covered: number; clipped: number; offscreen: number };
+}
+
+/**
+ * The nearest scrolling ancestor of the focused element -- the pane Steam
+ * scrolls a control "into view" of. Reported so a sweep can record where the
+ * pane was at every stop, and so a reader can tell "scrolled out of the pane"
+ * from "the pane itself is off screen".
+ */
+export interface ScrollPane {
+  selector: string | null;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}
+
 export interface ReadFocusResult {
   ok: boolean;
   reason?: string;
@@ -114,6 +166,14 @@ export interface ReadFocusResult {
   target: { title: string; url: string } | null;
   steamBuild: string | null;
   gpfocus: FocusElement | null;
+  /**
+   * Whether a person could see `gpfocus`. Null when nothing owns the ring, or
+   * the payload predates the field. Always informational here; walkTo shouts
+   * it in its summary, runSequence counts it and can fail on it.
+   */
+  visibility: Visibility | null;
+  /** The pane `gpfocus` scrolls inside, with its current scroll offset. */
+  scrollPane: ScrollPane | null;
   /** Ancestor chain carrying gpfocuswithin, innermost first. */
   gpfocusWithin: FocusElement[];
   activeElement: FocusElement | null;
@@ -354,6 +414,175 @@ export function pageExpression(expect?: string): string {
     };
   }
 
+  /*
+   * Class names a human would recognise. buildSelector's STABLE_CLASS keeps only
+   * letter-only names, which is right for a selector meant to re-resolve -- but
+   * a consumer's own classes are hyphenated (bonsai-main-tab-dock), and a
+   * coverer described without them is "div:nth-child(3)", which tells nobody
+   * what is in the way. Steam's per-build hashes carry digits or a leading
+   * underscore, so letters-and-hyphens is the line between the two.
+   */
+  var READABLE_CLASS = /^[A-Za-z]+(-[A-Za-z0-9]+)*$/;
+
+  function readableSegment(el) {
+    if (!el || el.nodeType !== 1) return null;
+    var seg = el.tagName.toLowerCase();
+    if (hasRealId(el)) return seg + '#' + el.id;
+    var raw = (el.className || '').toString().split(/\\s+/);
+    var n = 0;
+    for (var i = 0; i < raw.length && n < 3; i++) {
+      var c = raw[i];
+      if (!c || c.indexOf('gpfocus') === 0 || !READABLE_CLASS.test(c)) continue;
+      seg += '.' + c;
+      n++;
+    }
+    return n > 0 ? seg : null;
+  }
+
+  /*
+   * Name the thing found on top of a focused control: a short path of
+   * recognisable segments from the hit up towards -- but not including -- the
+   * first ancestor it shares with the focused element. For a chip inside a
+   * bottom-pinned dock that reads "div.bonsai-main-tab-dock > button.Focusable
+   * .bonsai-chip", which is what a person needs to go and look at. Nameless
+   * wrappers are skipped; at least the hit's own tag always comes back.
+   */
+  function describeCoverer(hit, el) {
+    var segs = [];
+    var n = hit, guard = 0;
+    while (n && n.nodeType === 1 && guard++ < 10 && segs.length < 4) {
+      if (n !== hit && n.contains && n.contains(el)) break;
+      var seg = readableSegment(n);
+      if (seg) segs.unshift(seg);
+      n = n.parentElement;
+    }
+    if (!segs.length) segs.push(hit.tagName ? hit.tagName.toLowerCase() : '?');
+    return segs.join(' > ');
+  }
+
+  function mostFrequent(tally) {
+    var best = null, bestN = 0;
+    for (var k in tally) {
+      if (tally[k] > bestN) { best = k; bestN = tally[k]; }
+    }
+    return best;
+  }
+
+  function viewport() {
+    var w = 0, h = 0;
+    try {
+      if (typeof window !== 'undefined' && window.innerWidth > 0) { w = window.innerWidth; h = window.innerHeight; }
+      else if (document.documentElement) { w = document.documentElement.clientWidth; h = document.documentElement.clientHeight; }
+    } catch (e) { w = 0; h = 0; }
+    return { w: w, h: h };
+  }
+
+  /*
+   * Could a person SEE this element? See the Visibility type for the why.
+   *
+   * A 3x3 grid across the rect, inset from the edges. MEASURED CORRECTION to
+   * plan 06's "inset ~2px", 2026-08-31: bonsAI's 98x32 "Show details" button
+   * has border-radius 8px, and at 2px its corner samples fell outside the
+   * rounded corner and hit the parent row -- a visible control read as 78%
+   * "partial, clipped by its own row". The inset is now a quarter of the
+   * shorter side (2px floor, 12px cap): a point that far in from both edges
+   * is inside any radius up to a full pill, and the grid still spans the box.
+   * Each point is put through document.elementFromPoint:
+   * the element or a descendant is visible; any other element is a coverer;
+   * an ANCESTOR means the element is not painted there -- an overflow clip, or
+   * the element is transparent to hit-testing -- and counts as clipped, which
+   * is reported under offscreen because nothing is on top of it. A point off
+   * the viewport is offscreen. Verdict: all nine visible -> visible; none
+   * visible -> covered if anything was found on top, else offscreen; otherwise
+   * partial.
+   *
+   * No fallback to rect overlap anywhere in here, on purpose: elementFromPoint
+   * skipping pointer-events:none is what keeps a decorative scrim from counting
+   * as a coverer, and any geometric second opinion would bring the scrim back.
+   */
+  var INSET_MIN = 2, INSET_MAX = 12, INSET_RATIO = 0.25;
+
+  function visibilityOf(el) {
+    if (!el) return null;
+    var out = {
+      verdict: 'offscreen',
+      visiblePercent: 0,
+      coveredBy: null,
+      clippedBy: null,
+      points: { visible: 0, covered: 0, clipped: 0, offscreen: 0 }
+    };
+    var b = null;
+    try { b = el.getBoundingClientRect(); } catch (e) { b = null; }
+    if (!b || !(b.width > 0) || !(b.height > 0)) {
+      // A collapsed box has nothing to sample; nine offscreen points is the
+      // honest count for "there is no box to see".
+      out.points.offscreen = 9;
+      return out;
+    }
+    var vp = viewport();
+    var x0 = b.left, x1 = b.left + b.width, y0 = b.top, y1 = b.top + b.height;
+    var inset = Math.min(INSET_MAX, Math.max(INSET_MIN, Math.min(b.width, b.height) * INSET_RATIO));
+    // A box thinner than twice the inset samples its centre line instead.
+    var ix = b.width > 2 * inset ? inset : b.width / 2;
+    var iy = b.height > 2 * inset ? inset : b.height / 2;
+    var xs = [x0 + ix, (x0 + x1) / 2, x1 - ix];
+    var ys = [y0 + iy, (y0 + y1) / 2, y1 - iy];
+    var coverers = {}, clippers = {};
+    for (var yi = 0; yi < 3; yi++) {
+      for (var xi = 0; xi < 3; xi++) {
+        var x = xs[xi], y = ys[yi];
+        if (x < 0 || y < 0 || x >= vp.w || y >= vp.h) { out.points.offscreen++; continue; }
+        var hit = null;
+        try { hit = document.elementFromPoint(x, y); } catch (e) { hit = null; }
+        if (!hit) { out.points.offscreen++; continue; }
+        if (hit === el || (el.contains && el.contains(hit))) { out.points.visible++; continue; }
+        var name = describeCoverer(hit, el);
+        if (hit.contains && hit.contains(el)) {
+          out.points.clipped++;
+          clippers[name] = (clippers[name] || 0) + 1;
+        } else {
+          out.points.covered++;
+          coverers[name] = (coverers[name] || 0) + 1;
+        }
+      }
+    }
+    out.visiblePercent = Math.round((out.points.visible / 9) * 100);
+    out.coveredBy = mostFrequent(coverers);
+    out.clippedBy = mostFrequent(clippers);
+    if (out.points.visible === 9) out.verdict = 'visible';
+    else if (out.points.visible === 0) out.verdict = out.points.covered > 0 ? 'covered' : 'offscreen';
+    else out.verdict = 'partial';
+    return out;
+  }
+
+  /*
+   * The nearest ancestor that scrolls: more content than box, and not
+   * overflow:visible. overflow:hidden counts -- scrollTop still works on it,
+   * and a pane that clips is exactly the 2026-08-30 shape.
+   */
+  function scrollPaneOf(el) {
+    var n = el ? el.parentElement : null, guard = 0;
+    while (n && guard++ < 24) {
+      var sh = n.scrollHeight, ch = n.clientHeight;
+      if (typeof sh === 'number' && typeof ch === 'number' && sh > ch + 1) {
+        var ov = '';
+        try { ov = getComputedStyle(n).overflowY || ''; } catch (e) { ov = ''; }
+        if (ov !== 'visible') {
+          var sel = null;
+          try { sel = buildSelector(n); } catch (e) { sel = null; }
+          return {
+            selector: sel,
+            scrollTop: Math.round(n.scrollTop || 0),
+            scrollHeight: Math.round(sh),
+            clientHeight: Math.round(ch)
+          };
+        }
+      }
+      n = n.parentElement;
+    }
+    return null;
+  }
+
   var gp = document.querySelector('.gpfocus');
   var active = document.activeElement;
   var within = [];
@@ -423,6 +652,8 @@ export function pageExpression(expect?: string): string {
     hasGpfocus: !!gp,
     elementCount: document.querySelectorAll('*').length,
     gpfocus: describe(gp),
+    visibility: visibilityOf(gp),
+    scrollPane: scrollPaneOf(gp),
     gpfocusWithin: within,
     activeElement: describe(active),
     agree: !!gp && gp === active,
@@ -439,6 +670,8 @@ interface PageResult {
   hasGpfocus: boolean;
   elementCount: number;
   gpfocus: FocusElement | null;
+  visibility?: Visibility | null;
+  scrollPane?: ScrollPane | null;
   gpfocusWithin: FocusElement[];
   activeElement: FocusElement | null;
   agree: boolean;
@@ -469,6 +702,8 @@ function emptyResult(method: string): ReadFocusResult {
     target: null,
     steamBuild: null,
     gpfocus: null,
+    visibility: null,
+    scrollPane: null,
     gpfocusWithin: [],
     activeElement: null,
     agree: false,
@@ -539,6 +774,8 @@ export async function readFocusAt(
       target: { title: t.title, url: t.url },
       steamBuild,
       gpfocus: page.gpfocus,
+      visibility: page.visibility ?? null,
+      scrollPane: page.scrollPane ?? null,
       gpfocusWithin: page.gpfocusWithin,
       activeElement: page.activeElement,
       agree: page.agree,

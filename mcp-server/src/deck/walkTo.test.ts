@@ -113,6 +113,49 @@ test("a match on the starting control costs no presses", async () => {
   }
 });
 
+test("found, but COVERED: a match the ring is on and a person cannot see is shouted", async () => {
+  /*
+   * The 2026-08-31 incident at the level a caller sees. The walk is right that
+   * the ring is on "bonsAI" -- found: true stays true -- and a human could not
+   * have seen it. The summary is the line a run log shows, so it says so, in
+   * capitals, naming what is in the way.
+   */
+  const coveredPage = {
+    ...focusedPage,
+    visibility: {
+      verdict: "covered",
+      visiblePercent: 0,
+      coveredBy: "div.bonsai-main-tab-dock > button.Focusable.bonsai-chip",
+      clippedBy: null,
+      points: { visible: 0, covered: 9, clipped: 0, offscreen: 0 },
+    },
+  };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => coveredPage);
+  try {
+    const r = await walkTo({ direction: "DOWN", text: "bonsAI", cdpUrl: fake.base });
+    assert.equal(r.found, true, "the ring IS on it; visibility is a second fact, not a retraction");
+    assert.equal(r.visibility?.verdict, "covered");
+    assert.match(r.summary, /found after 0 press\(es\).*but COVERED by div\.bonsai-main-tab-dock/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a visible match carries its verdict and a quiet summary", async () => {
+  const visiblePage = {
+    ...focusedPage,
+    visibility: { verdict: "visible", visiblePercent: 100, coveredBy: null, clippedBy: null, points: { visible: 9, covered: 0, clipped: 0, offscreen: 0 } },
+  };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => visiblePage);
+  try {
+    const r = await walkTo({ direction: "DOWN", text: "bonsAI", cdpUrl: fake.base });
+    assert.equal(r.visibility?.verdict, "visible");
+    assert.doesNotMatch(r.summary, /COVERED|OFFSCREEN|PARTIALLY/);
+  } finally {
+    await fake.close();
+  }
+});
+
 test("a substring match is flagged so a near miss cannot pass silently", async () => {
   // The real one: walking to "ask" stopped on "Attach screenshot to Ask", one
   // control before the send button. Pressing A there attaches a screenshot.

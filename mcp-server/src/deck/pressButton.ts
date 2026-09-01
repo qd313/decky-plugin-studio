@@ -53,6 +53,45 @@ export interface PressResult {
   holdMs: number;
   /** Raw firmware acknowledgement, for post-mortems. */
   ack?: string;
+  /**
+   * True when the first attempt could not OPEN the serial port and a second
+   * attempt, ~350 ms later, delivered the press. See portBusy(). Reported so
+   * a run log can show the collision rather than hide it.
+   */
+  retried?: boolean;
+}
+
+/**
+ * The one failure a press is allowed to retry: the COM port could not be
+ * opened because something else had it. Measured 2026-08-31 during the first
+ * deck_sweep runs: a press failed with `SerialException: could not open port
+ * 'COM7': PermissionError(13, 'Access is denied.')` every ~30 s -- which is the
+ * cadence of the extension's deck_status poll, whose probeBridge runs
+ * `pad.py status` and opens the same port. Two openers, one port.
+ *
+ * Retrying THIS is not retrying a press that did not land -- nothing was
+ * sent, the host lost a race for a serial handle -- so it does not fall under
+ * "no retries" (runSequence's header): re-pressing until focus moves is how a
+ * flaky focus graph gets marked green, and this never re-presses. Every other
+ * failure stays a refusal.
+ */
+export function portBusy(detail: string): boolean {
+  return /could not open port/i.test(detail) && /PermissionError|Access is denied|busy/i.test(detail);
+}
+
+/**
+ * The line of a failed pad.py run worth showing. The exception is the LAST
+ * line of a Python traceback; the old head-of-stderr slice cut it off, and the
+ * 2026-08-31 collision above was diagnosed from a report that ended in
+ * `File "C:\Users\sti` -- which says nothing.
+ */
+export function failureDetail(err: string, out: string): string {
+  const lines = err
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length) return lines[lines.length - 1].slice(0, 300);
+  return (out.trim() || "no output").slice(0, 300);
 }
 
 export interface PressOptions {
@@ -150,54 +189,73 @@ export async function pressButton(opts: PressOptions): Promise<PressResult> {
   const args = [pad, "press", ...buttons, "--ms", String(holdMs)];
   if (opts.port) args.push("--port", opts.port);
 
-  return new Promise<PressResult>((resolve) => {
-    const child = spawn("python", args, { stdio: ["ignore", "pipe", "pipe"] });
-    let out = "";
-    let err = "";
-    let done = false;
+  const attempt = (): Promise<PressResult & { detail?: string }> =>
+    new Promise((resolve) => {
+      const child = spawn("python", args, { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      let err = "";
+      let done = false;
 
-    const finish = (r: PressResult): void => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve(r);
-    };
+      const finish = (r: PressResult & { detail?: string }): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(r);
+      };
 
-    const timer = setTimeout(() => {
-      child.kill();
-      finish({ ...base, reason: `${REFUSAL} (pad.py did not answer within ${timeoutMs}ms)` });
-    }, timeoutMs);
+      const timer = setTimeout(() => {
+        child.kill();
+        finish({ ...base, reason: `${REFUSAL} (pad.py did not answer within ${timeoutMs}ms)` });
+      }, timeoutMs);
 
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (d: string) => (out += d));
-    child.stderr?.on("data", (d: string) => (err += d));
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (d: string) => (out += d));
+      child.stderr?.on("data", (d: string) => (err += d));
 
-    child.on("error", (e) => finish({ ...base, reason: `${REFUSAL} (${e.message})` }));
+      child.on("error", (e) => finish({ ...base, reason: `${REFUSAL} (${e.message})` }));
 
-    child.on("close", (code) => {
-      // The firmware acknowledges each command as one JSON line prefixed "<- ".
-      const ack = out
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l.startsWith("<- "))
-        .map((l) => l.slice(3))
-        .find((l) => l.includes('"t":"press"'));
+      child.on("close", (code) => {
+        // The firmware acknowledges each command as one JSON line prefixed "<- ".
+        const ack = out
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l.startsWith("<- "))
+          .map((l) => l.slice(3))
+          .find((l) => l.includes('"t":"press"'));
 
-      if (code !== 0 || !ack) {
-        const detail = (err.trim() || out.trim() || "no output").slice(0, 300);
-        return finish({ ...base, reason: `${REFUSAL} (pad.py exit ${code}: ${detail})` });
-      }
-      try {
-        if (JSON.parse(ack).ok !== true) {
-          return finish({ ...base, reason: `${REFUSAL} (firmware refused: ${ack})` });
+        if (code !== 0 || !ack) {
+          const detail = failureDetail(err, out);
+          return finish({ ...base, reason: `${REFUSAL} (pad.py exit ${code}: ${detail})`, detail });
         }
-      } catch {
-        return finish({ ...base, reason: `${REFUSAL} (unparseable acknowledgement: ${ack})` });
-      }
-      finish({ ...base, ok: true, fidelity: "steam-routed", ack });
+        try {
+          if (JSON.parse(ack).ok !== true) {
+            return finish({ ...base, reason: `${REFUSAL} (firmware refused: ${ack})` });
+          }
+        } catch {
+          return finish({ ...base, reason: `${REFUSAL} (unparseable acknowledgement: ${ack})` });
+        }
+        finish({ ...base, ok: true, fidelity: "steam-routed", ack });
+      });
     });
-  });
+
+  const first = await attempt();
+  if (first.ok || !first.detail || !portBusy(first.detail)) {
+    const { detail: _detail, ...result } = first;
+    return result;
+  }
+
+  // The port was held by another opener (see portBusy). Nothing was sent, so
+  // one more try is not a second press. The latch is re-checked: a human may
+  // have stopped the rig in the meantime, and no press goes out after that.
+  await new Promise((r) => setTimeout(r, 350));
+  const stoppedMeanwhile = bridgeDisabled();
+  if (stoppedMeanwhile) return { ...base, reason: stoppedMeanwhile };
+  const second = await attempt();
+  const { detail: _detail2, ...result } = second;
+  return second.ok
+    ? { ...result, retried: true }
+    : { ...result, reason: `${result.reason} -- and again after a 350ms retry (first: ${first.detail})` };
 }
 
 /**

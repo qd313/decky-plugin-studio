@@ -41,6 +41,8 @@ export interface AssertFocusMoveResult {
   settled: boolean;
   settleMs: number;
   diagnosis: string;
+  /** The press needed a second attempt because the serial port was busy. See pressButton.portBusy. */
+  pressRetried: boolean;
 }
 
 export interface AssertFocusMoveOptions {
@@ -76,6 +78,7 @@ export async function assertFocusMove(
     settled: false,
     settleMs: 0,
     diagnosis: "",
+    pressRetried: false,
   };
 
   // One tunnel for the whole sequence. Opening one per read would add ~350ms to
@@ -190,6 +193,7 @@ export async function assertFocusMove(
       settled,
       settleMs,
       diagnosis,
+      pressRetried: pressed.retried === true,
     };
   } finally {
     closeTunnel?.();

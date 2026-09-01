@@ -21,6 +21,7 @@ import { assertFocusMove } from "./deck/assertFocusMove.js";
 import { runSequence, SequenceStep } from "./deck/runSequence.js";
 import { openPluginDriven } from "./deck/openPlugin.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
+import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
 import { loadPreviewConfig } from "./preview/previewConfig.js";
 import {
@@ -194,6 +195,28 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
         acquireFocus: params.acquireFocus != null ? Boolean(params.acquireFocus) : undefined,
+        requireVisible: params.requireVisible != null ? Boolean(params.requireVisible) : undefined,
+      });
+
+    case "tools/deck_sweep":
+      return sweep({
+        direction:
+          params.direction != null
+            ? (String(params.direction).toUpperCase() as WalkDirection)
+            : undefined,
+        returnTrip: params.returnTrip != null ? Boolean(params.returnTrip) : undefined,
+        lanes: params.lanes != null ? Number(params.lanes) : undefined,
+        laneButton:
+          params.laneButton != null
+            ? (String(params.laneButton).toUpperCase() as LaneButton)
+            : undefined,
+        budget: params.budget != null ? Number(params.budget) : undefined,
+        stallLimit: params.stallLimit != null ? Number(params.stallLimit) : undefined,
+        acquireFocus: params.acquireFocus != null ? Boolean(params.acquireFocus) : undefined,
+        port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        runName: params.runName != null ? String(params.runName) : undefined,
+        writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
       });
 
     case "tools/deck_pressButton":

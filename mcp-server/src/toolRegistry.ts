@@ -349,12 +349,23 @@ export const TOOLS: ToolDef[] = [
                 description: "CSS selector focus should match after this press. Omit to just record where it went.",
               },
               label: { type: "string", description: "Human name for this step, used in the log." },
+              requireVisible: {
+                type: "boolean",
+                description:
+                  "Fail this step unless a person could see where the ring landed (visibility.verdict === 'visible'), the way expect fails it on the wrong element. Overrides the run-level requireVisible.",
+              },
               holdMs: { type: "number", default: 80 },
               settleTimeoutMs: { type: "number", default: 2500 },
             },
             required: ["press"],
             additionalProperties: false,
           },
+        },
+        requireVisible: {
+          type: "boolean",
+          default: false,
+          description:
+            "Fail any step whose landing spot a person could not see — covered by another element, clipped by an overflow, or off screen. Default false FOR THIS RELEASE: the verdict is still measured on every step, reported as step.visibility, counted in stopsFocusedButNotVisible and shouted in the summary, but does not fail the run. It flips to fail-by-default next release; set it true now to get that behaviour early.",
         },
         stopOnFailure: {
           type: "boolean",
@@ -379,6 +390,54 @@ export const TOOLS: ToolDef[] = [
         cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
       },
       required: ["steps"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_sweep",
+    description:
+      "Free play, scripted: emulate a user D-padding around the open pane and record what they would have found at every stop. Walks one direction until the ring stops moving or returns somewhere it has been, walks back, optionally repeats per carousel lane (LB/RB), and at EVERY stop records the control's label, selector, rect, the pane's scrollTop and the visibility verdict — whether a person could actually SEE the focused control, or whether it is covered by another element, clipped, or off screen. Same safety model as deck_walkTo: only direction presses and LB/RB, never A/B/START, so a sweep cannot activate anything. Writes a runs/ report built for diffing — rows plus totals (stopsRecorded, stopsVisited, unlabeledStops, cycles, stopsFocusedButNotVisible), deterministic for a given UI state, nothing clock-dependent in the file — so a consumer commits a baseline and QA becomes sweep-then-diff with no per-control assertions: a new stop, a lost stop, or a stop that went from visible to covered each shows up as a diff line. Use it after any UI change to a pane, and read stopsFocusedButNotVisible first: nonzero is a control a user can reach with the D-pad and cannot see.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        direction: {
+          type: "string",
+          enum: ["UP", "DOWN", "LEFT", "RIGHT"],
+          default: "DOWN",
+          description: "Primary walk direction. Only directions are accepted.",
+        },
+        returnTrip: {
+          type: "boolean",
+          default: true,
+          description: "Walk back the opposite way after the primary leg ends, so each control is read scrolled both ways.",
+        },
+        lanes: {
+          type: "number",
+          default: 0,
+          description: "Extra carousel positions to repeat the walk in, reached by pressing laneButton between them.",
+        },
+        laneButton: {
+          type: "string",
+          enum: ["LB", "RB"],
+          default: "RB",
+          description: "Shoulder button that changes lane. Nothing else is accepted.",
+        },
+        budget: { type: "number", default: 80, description: "Total presses for the whole sweep, lane presses included." },
+        stallLimit: {
+          type: "number",
+          default: 2,
+          description: "A leg ends after this many presses that do not move the ring.",
+        },
+        acquireFocus: {
+          type: "boolean",
+          default: true,
+          description: "When nothing owns the ring, spend one press placing it and carry on. As for deck_walkTo.",
+        },
+        runName: { type: "string", description: "Name for the evidence file under runs/. Defaults to sweep_<timestamp>." },
+        writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        port: { type: "string", description: "Serial port of the bridge's COM side." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
       additionalProperties: false,
     },
   },

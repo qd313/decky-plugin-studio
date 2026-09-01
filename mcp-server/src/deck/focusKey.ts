@@ -11,7 +11,41 @@
  * Steam's React tree is regenerated per render and would make every read look
  * like a move.
  */
-import type { FocusElement, ReadFocusResult } from "./readFocus.js";
+import type { FocusElement, ReadFocusResult, Visibility } from "./readFocus.js";
+
+/**
+ * True when a person could see the whole control, false when they could not,
+ * null when nothing was measured (no ring, or a payload from before the
+ * visibility oracle existed). Callers that gate on this must treat null as
+ * "unknown", never as "visible".
+ */
+export function isVisible(v: Visibility | null | undefined): boolean | null {
+  if (!v) return null;
+  return v.verdict === "visible";
+}
+
+/**
+ * The loud half of a summary line: "COVERED by div.bonsai-main-tab-dock >
+ * button.Focusable.bonsai-chip". Empty when the control is visible or nothing
+ * was measured, so a caller can append it unconditionally.
+ *
+ * Upper case on purpose. `found: true` with a covered stop is the exact
+ * signature of the 2026-08-31 bonsAI incident, and it must not be readable as
+ * a pass by someone skimming a run log.
+ */
+export function describeVisibility(v: Visibility | null | undefined): string {
+  if (!v || v.verdict === "visible") return "";
+  if (v.verdict === "covered") return `COVERED by ${v.coveredBy ?? "an unnamed element"}`;
+  if (v.verdict === "offscreen") {
+    return v.clippedBy ? `OFFSCREEN (clipped by ${v.clippedBy})` : "OFFSCREEN";
+  }
+  const by = v.coveredBy
+    ? `, covered by ${v.coveredBy}`
+    : v.clippedBy
+      ? `, clipped by ${v.clippedBy}`
+      : "";
+  return `only PARTIALLY visible (${v.visiblePercent}%)${by}`;
+}
 
 export function focusKey(r: ReadFocusResult | null): string | null {
   const el = r?.gpfocus;

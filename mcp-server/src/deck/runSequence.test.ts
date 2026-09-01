@@ -25,7 +25,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
-import { runSequence, findCycle, Visit } from "./runSequence.js";
+import { runSequence, findCycle, judgeVisibility, Visit } from "./runSequence.js";
+import type { Visibility } from "./readFocus.js";
 import type { PressOptions, PressResult } from "./pressButton.js";
 
 /** Build a visit list from labels; the key is the label unless one is given. */
@@ -214,6 +215,95 @@ test("mustReachText is not satisfied by text belonging to something else", async
       writeEvidence: false,
     });
     assert.deepEqual(r.neverReached, ["Send"], '"Send" is the container\'s text, not a control the ring reached');
+  } finally {
+    await fake.close();
+  }
+});
+
+// --------------------------------------------------------------------------
+// Visibility (plan 06): a stop the ring is on and a person cannot see
+// --------------------------------------------------------------------------
+
+const COVERED: Visibility = {
+  verdict: "covered",
+  visiblePercent: 0,
+  coveredBy: "div.bonsai-main-tab-dock > button.Focusable.bonsai-chip",
+  clippedBy: null,
+  points: { visible: 0, covered: 9, clipped: 0, offscreen: 0 },
+};
+const VISIBLE: Visibility = {
+  verdict: "visible",
+  visiblePercent: 100,
+  coveredBy: null,
+  clippedBy: null,
+  points: { visible: 9, covered: 0, clipped: 0, offscreen: 0 },
+};
+
+test("a covered stop is shouted but does not fail the step unless requireVisible is set", () => {
+  // The one-release grace period: measured, reported, counted -- not failed.
+  const reportOnly = judgeVisibility(COVERED, false);
+  assert.equal(reportOnly.visible, false);
+  assert.equal(reportOnly.visibleOk, true, "report-only for this release");
+  assert.match(reportOnly.note, /FOCUSED BUT COVERED by div\.bonsai-main-tab-dock/);
+  assert.doesNotMatch(reportOnly.note, /failing the step/);
+
+  const required = judgeVisibility(COVERED, true);
+  assert.equal(required.visibleOk, false, "requireVisible fails a covered stop the way expect fails a wrong one");
+  assert.match(required.note, /failing the step because requireVisible is set/);
+});
+
+test("a visible stop passes quietly either way", () => {
+  assert.deepEqual(judgeVisibility(VISIBLE, false), { visible: true, visibleOk: true, note: "" });
+  assert.deepEqual(judgeVisibility(VISIBLE, true), { visible: true, visibleOk: true, note: "" });
+});
+
+test("an unmeasured stop under requireVisible fails rather than rounding up to seen", () => {
+  const j = judgeVisibility(null, true);
+  assert.equal(j.visible, null);
+  assert.equal(j.visibleOk, false);
+  assert.match(j.note, /could not be measured/);
+  // And without the requirement, unmeasured is simply unmeasured.
+  assert.deepEqual(judgeVisibility(null, false), { visible: null, visibleOk: true, note: "" });
+});
+
+test("a run that starts on a covered control counts it and says so in the summary", async () => {
+  /*
+   * The starting read is a stop too. Here the ring begins on a control behind
+   * the dock; the step's press cannot be delivered (hardware guard), so the
+   * only stop is step 0 -- and it must still be counted and shouted, with the
+   * report-only caveat, because a suite that never looks at per-step fields
+   * reads the summary.
+   */
+  const coveredPage = { ...focusedPage, visibility: COVERED };
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => coveredPage);
+  try {
+    const r = await runSequence({
+      steps: [{ press: "NOT_A_BUTTON" }],
+      cdpUrl: fake.base,
+      writeEvidence: false,
+    });
+    assert.equal(r.stopsFocusedButNotVisible, 1);
+    assert.match(r.notVisibleStops[0], /^step 0: <BUTTON> "bonsAI" COVERED by div\.bonsai-main-tab-dock/);
+    assert.match(r.summary, /1 stop\(s\) FOCUSED BUT NOT VISIBLE/);
+    assert.match(r.summary, /report-only -- pass requireVisible/);
+    // A step that never executed has no verdict -- not a "visible" one.
+    assert.equal(r.steps[0].visibility, null);
+    assert.equal(r.steps[0].visible, null);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a payload from before the oracle existed counts as unmeasured, not as visible", async () => {
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => focusedPage);
+  try {
+    const r = await runSequence({
+      steps: [{ press: "NOT_A_BUTTON" }],
+      cdpUrl: fake.base,
+      writeEvidence: false,
+    });
+    assert.equal(r.stopsFocusedButNotVisible, 0);
+    assert.doesNotMatch(r.summary, /NOT VISIBLE/);
   } finally {
     await fake.close();
   }

@@ -34,6 +34,16 @@ interface ElSpec {
   /** This element's OWN text node, not its descendants'. */
   text?: string;
   rect?: { x: number; y: number; width: number; height: number };
+  /** `pointer-events: none` -- the fake elementFromPoint skips it, as a browser does. */
+  pointerEvents?: "none";
+  /** Paint order override; ties go to the later element in document order. */
+  zIndex?: number;
+  /** `overflow: hidden` -- descendants are only hittable inside this box. */
+  clips?: boolean;
+  /** `border-radius` in px: the corners outside the arc are not part of the box. */
+  radius?: number;
+  /** A scrolling pane: scrollHeight/clientHeight/scrollTop as the page reads them. */
+  scroll?: { scrollTop: number; scrollHeight: number; clientHeight: number };
   children?: ElSpec[];
 }
 
@@ -45,6 +55,13 @@ class FakeEl {
   attrs: Record<string, string>;
   ownText: string;
   rect: { x: number; y: number; width: number; height: number };
+  pointerEvents: "none" | undefined;
+  zIndex: number;
+  clips: boolean;
+  radius: number;
+  scrollTop: number | undefined;
+  scrollHeight: number | undefined;
+  clientHeight: number | undefined;
   children: FakeEl[] = [];
   parentElement: FakeEl | null = null;
 
@@ -55,6 +72,13 @@ class FakeEl {
     this.attrs = spec.attrs ?? {};
     this.ownText = spec.text ?? "";
     this.rect = spec.rect ?? { x: 0, y: 0, width: 0, height: 0 };
+    this.pointerEvents = spec.pointerEvents;
+    this.zIndex = spec.zIndex ?? 0;
+    this.clips = spec.clips ?? false;
+    this.radius = spec.radius ?? 0;
+    this.scrollTop = spec.scroll?.scrollTop;
+    this.scrollHeight = spec.scroll?.scrollHeight;
+    this.clientHeight = spec.scroll?.clientHeight;
     for (const child of spec.children ?? []) {
       const el = new FakeEl(child);
       el.parentElement = this;
@@ -82,8 +106,40 @@ class FakeEl {
     return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
   }
 
-  getBoundingClientRect(): { x: number; y: number; width: number; height: number } {
-    return this.rect;
+  getBoundingClientRect(): {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  } {
+    const r = this.rect;
+    return { ...r, left: r.x, top: r.y, right: r.x + r.width, bottom: r.y + r.height };
+  }
+
+  containsPoint(x: number, y: number): boolean {
+    const r = this.rect;
+    if (!(r.width > 0 && r.height > 0 && x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)) {
+      return false;
+    }
+    // Rounded corners: outside the arc is not the element, as in a browser.
+    const rad = Math.min(this.radius, r.width / 2, r.height / 2);
+    if (rad <= 0) return true;
+    const cx = x < r.x + rad ? r.x + rad : x > r.x + r.width - rad ? r.x + r.width - rad : x;
+    const cy = y < r.y + rad ? r.y + rad : y > r.y + r.height - rad ? r.y + r.height - rad : y;
+    return (x - cx) ** 2 + (y - cy) ** 2 <= rad * rad;
+  }
+
+  contains(other: FakeEl | null): boolean {
+    let n: FakeEl | null = other;
+    while (n) {
+      if (n === this) return true;
+      n = n.parentElement;
+    }
+    return false;
   }
 
   descendants(): FakeEl[] {
@@ -137,6 +193,42 @@ interface PageShape {
   quickAccessTab: string | null;
   visibleQuickAccessTab: string | null;
   deckyPluginRoot: boolean;
+  visibility: {
+    verdict: "visible" | "partial" | "covered" | "offscreen";
+    visiblePercent: number;
+    coveredBy: string | null;
+    clippedBy: string | null;
+    points: { visible: number; covered: number; clipped: number; offscreen: number };
+  } | null;
+  scrollPane: { selector: string | null; scrollTop: number; scrollHeight: number; clientHeight: number } | null;
+}
+
+const VIEWPORT = { innerWidth: 1280, innerHeight: 800 };
+
+/**
+ * Hit-testing the way a browser does it, reduced to what the oracle relies on:
+ * the top-most element whose box contains the point, where "top-most" is the
+ * highest z-index and then the latest in document order; elements with
+ * `pointer-events: none` are transparent to the test; and a descendant of an
+ * `overflow: hidden` box is only hittable inside that box. Outside the viewport
+ * there is nothing to hit.
+ */
+function elementFromPoint(all: FakeEl[], x: number, y: number): FakeEl | null {
+  if (x < 0 || y < 0 || x >= VIEWPORT.innerWidth || y >= VIEWPORT.innerHeight) return null;
+  let best: FakeEl | null = null;
+  for (const el of all) {
+    if (el.pointerEvents === "none" || !el.containsPoint(x, y)) continue;
+    let clipped = false;
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      if (a.clips && !a.containsPoint(x, y)) {
+        clipped = true;
+        break;
+      }
+    }
+    if (clipped) continue;
+    if (!best || el.zIndex >= best.zIndex) best = el;
+  }
+  return best;
 }
 
 /**
@@ -150,15 +242,17 @@ function runPageExpression(spec: ElSpec, expect?: string): PageShape {
 
   const document = {
     activeElement: null as FakeEl | null,
+    documentElement: root,
     querySelector: (s: string) => all.find((el) => matchesSelector(el, s)) ?? null,
     querySelectorAll: (s: string) => (s === "*" ? all : all.filter((el) => matchesSelector(el, s))),
     getElementById: (id: string) => all.find((el) => el.id === id) ?? null,
+    elementFromPoint: (x: number, y: number) => elementFromPoint(all, x, y),
   };
   const CSS = { escape: (s: string) => s };
 
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const fn = new Function("document", "CSS", `return ${pageExpression(expect)};`);
-  return fn(document, CSS) as PageShape;
+  const fn = new Function("document", "CSS", "window", `return ${pageExpression(expect)};`);
+  return fn(document, CSS, VIEWPORT) as PageShape;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,4 +415,219 @@ test("deckyPanelLabels still lists the pane's own short labels", () => {
   assert.equal(page.quickAccessTab, "999");
   assert.equal(page.visibleQuickAccessTab, "999");
   assert.equal(page.deckyPluginRoot, true);
+});
+
+// ---------------------------------------------------------------------------
+// The visibility oracle (plan 06). Focus and visibility are two different
+// facts; every fixture below has the ring correctly on the control, and only
+// the second fact varies.
+// ---------------------------------------------------------------------------
+
+/** A 400x800 QAM pane with a control at `rect` and whatever else sits on top. */
+function paneWith(control: ElSpec, ...others: ElSpec[]): ElSpec {
+  return {
+    tag: "div",
+    id: "quickaccess_content_999",
+    rect: { x: 0, y: 0, width: 400, height: 800 },
+    children: [
+      { tag: "span", text: "bonsAI" },
+      { tag: "button", className: "Focusable gpfocus", text: "Show details", ...control },
+      ...others,
+    ],
+  };
+}
+
+/** The bonsAI dock: 246px pinned to the pane's foot, chips inside, interactive. */
+function dock(top: number): ElSpec {
+  return {
+    tag: "div",
+    className: "bonsai-main-tab-dock",
+    rect: { x: 0, y: top, width: 400, height: 800 - top },
+    children: [
+      {
+        tag: "button",
+        className: "Focusable _2BB6ufjFaAmdnwLOqMU7 bonsai-chip",
+        rect: { x: 0, y: top, width: 400, height: 800 - top },
+        text: "Summarise",
+      },
+    ],
+  };
+}
+
+test("visibility: a control with nothing on top of it is visible at every point", () => {
+  const page = runPageExpression(paneWith({ rect: { x: 20, y: 100, width: 300, height: 40 } }));
+  assert.equal(page.visibility?.verdict, "visible");
+  assert.equal(page.visibility?.visiblePercent, 100);
+  assert.equal(page.visibility?.coveredBy, null);
+  assert.equal(page.visibility?.clippedBy, null);
+  assert.deepEqual(page.visibility?.points, { visible: 9, covered: 0, clipped: 0, offscreen: 0 });
+});
+
+test("visibility: rounded corners are not clipping -- the measured bonsAI button reads as visible", () => {
+  /*
+   * Measured on the Deck 2026-08-31, first live read of the oracle: bonsAI's
+   * "Show details" is 98x32 with border-radius 8px, and with a 2px inset two
+   * corner samples fell outside the arc, hit the parent row, and a perfectly
+   * visible control came back "partial, 78%, clipped by its own row". A
+   * quarter-of-the-short-side inset keeps every sample inside any radius up
+   * to a full pill.
+   */
+  const button = { rect: { x: 52, y: 458, width: 98, height: 32 }, radius: 8 };
+  const page = runPageExpression(paneWith(button));
+  assert.equal(page.visibility?.verdict, "visible");
+  assert.equal(page.visibility?.clippedBy, null);
+  assert.deepEqual(page.visibility?.points, { visible: 9, covered: 0, clipped: 0, offscreen: 0 });
+
+  // A full pill, the tightest case.
+  const pill = runPageExpression(paneWith({ rect: { x: 52, y: 458, width: 98, height: 32 }, radius: 16 }));
+  assert.equal(pill.visibility?.verdict, "visible");
+});
+
+test("visibility: the 2026-08-31 shape -- focused behind the dock is COVERED, and the dock is named", () => {
+  /*
+   * Steam scrolled "Show details" into the pane; the pane is what Steam owns.
+   * The dock is pinned over the pane's last 246px and Steam knows nothing about
+   * it, so the control lands focused and entirely behind the chips. Every focus
+   * tool called this success. The coverer must be named in the consumer's own
+   * vocabulary -- the hyphenated class buildSelector would have thrown away.
+   */
+  const page = runPageExpression(
+    paneWith({ rect: { x: 20, y: 600, width: 300, height: 40 } }, dock(554)),
+  );
+  assert.equal(page.visibility?.verdict, "covered");
+  assert.equal(page.visibility?.visiblePercent, 0);
+  assert.equal(
+    page.visibility?.coveredBy,
+    "div.bonsai-main-tab-dock > button.Focusable.bonsai-chip",
+    "the path to the coverer must carry the dock's own class name, and drop Steam's hash",
+  );
+  assert.deepEqual(page.visibility?.points, { visible: 0, covered: 9, clipped: 0, offscreen: 0 });
+  // Focus itself was read correctly the whole time. That is the point.
+  assert.equal(page.gpfocus?.label, "Show details");
+});
+
+test("visibility: a control half under the dock is PARTIAL, with the coverer still named", () => {
+  // Rows sampled at y=532, 550, 568 against a dock starting at 554: two rows
+  // clear, one row under it.
+  const page = runPageExpression(
+    paneWith({ rect: { x: 20, y: 530, width: 300, height: 40 } }, dock(554)),
+  );
+  assert.equal(page.visibility?.verdict, "partial");
+  assert.equal(page.visibility?.visiblePercent, 67);
+  assert.equal(page.visibility?.coveredBy, "div.bonsai-main-tab-dock > button.Focusable.bonsai-chip");
+  assert.deepEqual(page.visibility?.points, { visible: 6, covered: 3, clipped: 0, offscreen: 0 });
+});
+
+test("visibility: a control below the viewport is OFFSCREEN with no coverer", () => {
+  const page = runPageExpression(paneWith({ rect: { x: 20, y: 820, width: 300, height: 40 } }));
+  assert.equal(page.visibility?.verdict, "offscreen");
+  assert.equal(page.visibility?.visiblePercent, 0);
+  assert.equal(page.visibility?.coveredBy, null);
+  assert.deepEqual(page.visibility?.points, { visible: 0, covered: 0, clipped: 0, offscreen: 9 });
+});
+
+test("visibility: a collapsed box is OFFSCREEN -- there is nothing to see", () => {
+  const page = runPageExpression(paneWith({ rect: { x: 20, y: 100, width: 300, height: 0 } }));
+  assert.equal(page.visibility?.verdict, "offscreen");
+  assert.equal(page.visibility?.points.offscreen, 9);
+});
+
+test("visibility: the 2026-08-30 shape -- clipped by an overflow:hidden ancestor reads as OFFSCREEN, naming the clipper", () => {
+  /*
+   * The pane's last 50px were cut off by an ancestor with overflow: hidden.
+   * Every element was present, focusable and asserted, and unreachable by eye.
+   * Nothing is ON TOP of the control here -- the hit lands on an ancestor --
+   * so it is not "covered"; it is not painted, which is the offscreen family.
+   */
+  const page = runPageExpression({
+    tag: "div",
+    id: "quickaccess_content_999",
+    rect: { x: 0, y: 0, width: 400, height: 800 },
+    children: [
+      {
+        tag: "div",
+        className: "bonsai-scroll-region",
+        clips: true,
+        rect: { x: 0, y: 0, width: 400, height: 700 },
+        children: [
+          { tag: "button", className: "Focusable gpfocus", text: "Copy", rect: { x: 20, y: 710, width: 300, height: 40 } },
+        ],
+      },
+    ],
+  });
+  assert.equal(page.visibility?.verdict, "offscreen");
+  assert.equal(page.visibility?.coveredBy, null, "nothing is on top of it");
+  assert.equal(page.visibility?.clippedBy, "div#quickaccess_content_999");
+  assert.deepEqual(page.visibility?.points, { visible: 0, covered: 0, clipped: 9, offscreen: 0 });
+});
+
+test("visibility: a decorative scrim with pointer-events:none is NOT a coverer", () => {
+  /*
+   * elementFromPoint skips pointer-events:none, and the oracle must not bring
+   * such an element back through any geometric second opinion: a fade over
+   * the dock is decoration, and calling it a coverer would flag every control
+   * under a gradient. The contrast case right after pins that the same box
+   * WITH pointer events is a coverer -- so the skip is the browser's rule
+   * being honoured, not the oracle failing to look.
+   */
+  const scrim = (pe?: "none"): ElSpec => ({
+    tag: "div",
+    className: "bonsai-dock-fade",
+    pointerEvents: pe,
+    rect: { x: 0, y: 500, width: 400, height: 300 },
+  });
+  const under = { rect: { x: 20, y: 600, width: 300, height: 40 } };
+
+  const decorative = runPageExpression(paneWith(under, scrim("none")));
+  assert.equal(decorative.visibility?.verdict, "visible");
+  assert.equal(decorative.visibility?.coveredBy, null);
+
+  const interactive = runPageExpression(paneWith(under, scrim()));
+  assert.equal(interactive.visibility?.verdict, "covered");
+  assert.equal(interactive.visibility?.coveredBy, "div.bonsai-dock-fade");
+});
+
+test("visibility: coveredBy is the most frequent coverer when several overlap", () => {
+  // A small badge covers one corner; the dock covers the rest. The dock is the
+  // answer -- the badge is real, but naming it would send a reader to the
+  // wrong element.
+  const page = runPageExpression(
+    paneWith(
+      { rect: { x: 20, y: 600, width: 300, height: 40 } },
+      dock(554),
+      { tag: "span", className: "bonsai-badge", zIndex: 5, rect: { x: 300, y: 600, width: 30, height: 30 } },
+    ),
+  );
+  assert.equal(page.visibility?.verdict, "covered");
+  assert.equal(page.visibility?.coveredBy, "div.bonsai-main-tab-dock > button.Focusable.bonsai-chip");
+});
+
+test("visibility: nothing focused means nothing measured, not 'visible'", () => {
+  const page = runPageExpression({ tag: "div", children: [{ tag: "span", text: "idle" }] });
+  assert.equal(page.hasGpfocus, false);
+  assert.equal(page.visibility, null);
+  assert.equal(page.scrollPane, null);
+});
+
+test("scrollPane: the nearest scrolling ancestor and its offset are reported", () => {
+  const page = runPageExpression({
+    tag: "div",
+    id: "quickaccess_content_999",
+    rect: { x: 0, y: 0, width: 400, height: 800 },
+    children: [
+      {
+        tag: "div",
+        className: "Panel",
+        scroll: { scrollTop: 312, scrollHeight: 2000, clientHeight: 700 },
+        rect: { x: 0, y: 0, width: 400, height: 700 },
+        children: [
+          { tag: "div", children: [{ tag: "button", className: "Focusable gpfocus", text: "Copy", rect: { x: 20, y: 100, width: 300, height: 40 } }] },
+        ],
+      },
+    ],
+  });
+  assert.equal(page.scrollPane?.scrollTop, 312);
+  assert.equal(page.scrollPane?.scrollHeight, 2000);
+  assert.equal(page.scrollPane?.clientHeight, 700);
+  assert.match(page.scrollPane?.selector ?? "", /Panel/);
 });
