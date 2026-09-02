@@ -3,7 +3,7 @@ import fs from "fs";
 import { getIngestPort } from "../ingest/server.js";
 import { readDeckEnv, getWorkspaceRoot } from "../config.js";
 import { detectLocalSteamOs, getHomebrewPluginsDir, restartLoaderLocal } from "../deploy/local.js";
-import { sshRestartLoader } from "../deploy/deployHelpers.js";
+import { sshRestartLoader, waitForLoaderReady, LoaderReadiness } from "../deploy/deployHelpers.js";
 import { detectPlugin } from "./plugin.js";
 import { isDeckLocal } from "./captureOrchestrator.js";
 import { getTunnelState, pingDeck } from "./deck.js";
@@ -22,8 +22,9 @@ function execQuiet(cmd: string): string {
 }
 
 export async function reloadPlugin(
-  mode: "auto" | "local" | "remote" = "auto"
-): Promise<{ ok: boolean; mode: string; method: string }> {
+  mode: "auto" | "local" | "remote" = "auto",
+  opts: { waitForLoader?: boolean; loaderTimeoutMs?: number } = {}
+): Promise<{ ok: boolean; mode: string; method: string; loader?: LoaderReadiness | null }> {
   const localInfo = detectLocalSteamOs();
   const homebrew = getHomebrewPluginsDir();
   const canLocal =
@@ -44,7 +45,13 @@ export async function reloadPlugin(
   if (!host) throw new Error("DECK_IP not configured — run deck.configure first");
 
   sshRestartLoader(user, host);
-  return { ok: true, mode: "remote", method: `ssh ${user}@${host} plugin_loader restart` };
+  // Same restart as deck_deploy, same window after it (issue #3): return
+  // when the Deck is usable again, and say so if the deadline passed.
+  const loader =
+    opts.waitForLoader === false
+      ? null
+      : await waitForLoaderReady(user, host, { timeoutMs: opts.loaderTimeoutMs });
+  return { ok: true, mode: "remote", method: `ssh ${user}@${host} plugin_loader restart`, loader };
 }
 
 export function openPlugin(): {

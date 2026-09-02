@@ -18,8 +18,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
 
-import { evaluate, listTargets, getVersion, rewriteWsHost } from "./cdp.js";
-import { readFocusAt } from "./readFocus.js";
+import { evaluate, listTargets, getVersion, rewriteWsHost, hasSteamUiTargets } from "./cdp.js";
+import { readFocusAt, probeQuickAccess } from "./readFocus.js";
 import { pressButton, pressChord, findPadTool, findBridgeTool } from "./pressButton.js";
 import { assertFocusMove } from "./assertFocusMove.js";
 import { openPluginDriven } from "./openPlugin.js";
@@ -487,5 +487,283 @@ test("a rootSelector settles already-open in both directions, overriding the lab
     assert.equal(r.ok, true);
   } finally {
     await rootPresent.close();
+  }
+});
+
+// --------------------------------------------------------------------------
+// Issue #3 (bonsAI, 2026-08-30): the seconds after deck_deploy restarts
+// plugin_loader. CEF lists SharedJSContext and nothing else while Steam
+// rebuilds its UI pages; a read then scanned that one page and reported the
+// ring unowned, and deck_openPlugin fired its toggle chord on a null read
+// from a page that has no Quick Access panes in it, closing an open menu.
+// --------------------------------------------------------------------------
+
+test("issue #3: hasSteamUiTargets is false for a SharedJSContext-only list, true once any UI page is listed", () => {
+  const ws = "ws://127.0.0.1:1/devtools/page/x";
+  const t = (title: string) => ({ id: title, type: "page", title, url: "", webSocketDebuggerUrl: ws });
+  assert.equal(hasSteamUiTargets([]), false);
+  assert.equal(hasSteamUiTargets([t("SharedJSContext")]), false);
+  assert.equal(hasSteamUiTargets([t("SharedJSContext"), t("QuickAccess_uid2")]), true);
+  assert.equal(
+    hasSteamUiTargets([{ id: "x", type: "page", title: "MainMenu_uid2", url: "" }]),
+    false,
+    "a page with no debugger URL cannot be read, so it does not count",
+  );
+});
+
+test("issue #3: a read asked to wait sees the Quick Access page appear and answers from it", async () => {
+  // /json/list names only SharedJSContext for the first two polls, then the
+  // rebuilt Quick Access page shows up -- the post-restart sequence.
+  let polls = 0;
+  const fake = await startFakeCdp(
+    () => (++polls <= 2 ? ["SharedJSContext"] : ["SharedJSContext", "QuickAccess_uid2"]),
+    (t) => (t === "QuickAccess_uid2" ? focusedPage : unfocusedPage),
+  );
+  try {
+    const r = await readFocusAt(fake.base, 10_000, undefined, { targetsSettleMs: 5000, targetsPollMs: 50 });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.method, "cdp:QuickAccess_uid2");
+    assert.ok((r.waitedForTargetsMs ?? 0) > 0, "the wait must be reported");
+    assert.ok(fake.lists() >= 3, `expected the list to be polled until the page appeared, got ${fake.lists()}`);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("issue #3: a list that stays partial is reported as 'not enumerable', never as an unowned ring", async () => {
+  const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);
+  try {
+    const r = await readFocusAt(fake.base, 10_000, undefined, { targetsSettleMs: 200, targetsPollMs: 50 });
+    assert.equal(r.ok, false);
+    assert.match(r.reason ?? "", /not enumerable/);
+    assert.match(r.reason ?? "", /plugin_loader restart/);
+    // The phrase every caller reads as "press a D-pad direction to place the ring".
+    assert.doesNotMatch(r.reason ?? "", /gpfocus marker not found/);
+    assert.equal(fake.evaluations(), 0, "nothing may be scanned: that page never carries the ring");
+    assert.ok((r.waitedForTargetsMs ?? 0) >= 200, `waited ${r.waitedForTargetsMs}`);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("issue #3: with no wait asked for, a partial list is read exactly as before", async () => {
+  const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);
+  try {
+    const r = await readFocusAt(fake.base);
+    assert.equal(r.ok, false);
+    assert.match(r.reason ?? "", /gpfocus marker not found/);
+    assert.equal(fake.lists(), 1);
+    assert.equal(r.waitedForTargetsMs, undefined);
+  } finally {
+    await fake.close();
+  }
+});
+
+/** What the Quick Access page itself says when the menu is open on Decky's pane, or shut. */
+const qamOpenOnDecky = { visiblePane: "999", ownsFocus: false };
+const qamShut = { visiblePane: null, ownsFocus: false };
+
+test("issue #3: probeQuickAccess answers from the Quick Access page, waiting for it to be listed", async () => {
+  let polls = 0;
+  const fake = await startFakeCdp(
+    () => (++polls <= 2 ? ["SharedJSContext"] : ["SharedJSContext", "QuickAccess_uid2"]),
+    () => qamOpenOnDecky,
+  );
+  try {
+    const p = await probeQuickAccess(fake.base, { targetsSettleMs: 5000, targetsPollMs: 50 });
+    assert.equal(p.listed, true);
+    assert.equal(p.answered, true);
+    assert.equal(p.target, "QuickAccess_uid2");
+    assert.equal(p.visiblePane, "999");
+    assert.ok(p.waitedMs > 0);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("issue #3: probeQuickAccess with no Quick Access page listed is unanswered, and says why", async () => {
+  const fake = await startFakeCdp(["SharedJSContext", "Steam Big Picture Mode"], () => qamShut);
+  try {
+    const p = await probeQuickAccess(fake.base, { targetsSettleMs: 200, targetsPollMs: 50 });
+    assert.equal(p.listed, false);
+    assert.equal(p.answered, false);
+    assert.match(p.reason ?? "", /no Quick Access page is listed/);
+    assert.match(p.reason ?? "", /Steam Big Picture Mode/);
+    assert.equal(fake.evaluations(), 0);
+  } finally {
+    await fake.close();
+  }
+});
+
+/**
+ * Ring on a library tile in Steam's main page: the read that lied about the
+ * menu on attempt 2 of every deploy cycle. Its visibleQuickAccessTab is null
+ * because this document has no quickaccess panes in it, not because the
+ * menu is shut.
+ */
+const libraryTile = {
+  hasGpfocus: true,
+  elementCount: 346,
+  gpfocus: {
+    selector: null, selectorVerified: false, tag: "DIV", id: null,
+    classes: ["Focusable"], ariaLabel: null, text: "Hades", ownerText: "Hades", rect: null,
+  },
+  gpfocusWithin: [],
+  activeElement: null,
+  agree: false,
+  quickAccessTab: null,
+  visibleQuickAccessTab: null,
+  deckyPluginRoot: false,
+};
+
+/** The recording press seam every openPlugin case below shares. */
+function recordingPress(pressed: string[]): NonNullable<Parameters<typeof openPluginDriven>[0]["pressFn"]> {
+  return async ({ buttons }) => {
+    pressed.push(buttons.join("+"));
+    return { ok: false, reason: "fake press", fidelity: null, method: "test", buttons, holdMs: 0 };
+  };
+}
+
+test("issue #3: openPlugin does NOT fire the toggle chord on a null read from another page when the QAM page says the menu is open", async () => {
+  /*
+   * The exact attempt-2 shape. The Quick Access page has been rebuilt and has
+   * no ring in it yet; Steam's main page still carries one on a library tile;
+   * the menu is open on Decky's pane. The old code read visibleQuickAccessTab
+   * null from the main page and fired GUIDE+A, closing the menu. Now the QAM
+   * page is asked, it reports pane 999 on screen, the ring is re-read until it
+   * settles into that page, and the first press is the RIGHT that enters the
+   * pane -- no chord anywhere.
+   */
+  const qamReads: number[] = [];
+  const pressed: string[] = [];
+  const fake = await startFakeCdp(
+    ["SharedJSContext", "QuickAccess_uid2", "Steam Big Picture Mode"],
+    (title) => {
+      if (title === "Steam Big Picture Mode") return libraryTile;
+      if (title !== "QuickAccess_uid2") return unfocusedPage;
+      qamReads.push(qamReads.length);
+      if (qamReads.length === 1) return unfocusedPage; // the initial scan: rebuilt page, no ring yet
+      if (qamReads.length === 2) return qamOpenOnDecky; // the probe: pane 999 is on screen
+      return onRail; // the ring has settled into the menu, on its rail
+    },
+  );
+  try {
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, pressFn: recordingPress(pressed) });
+    const names = r.stages.map((s) => s.stage);
+    assert.ok(!names.includes("open-qam"), `the chord must not be fired at an open menu: ${names.join(",")}`);
+    const probe = r.stages.find((s) => s.stage === "probe-qam");
+    assert.ok(probe?.ok, JSON.stringify(probe));
+    assert.match(probe!.detail, /pane 999 on screen/);
+    assert.match(probe!.detail, /came from Steam Big Picture Mode/);
+    const settled = r.stages.find((s) => s.stage === "settle-qam-focus");
+    assert.ok(settled?.ok, JSON.stringify(settled));
+    assert.equal(pressed[0], "RIGHT", `the first press enters the pane, nothing else: ${pressed.join(",")}`);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("issue #3: openPlugin refuses, with no press, when the QAM page says open but the ring never settles into it", async () => {
+  const pressed: string[] = [];
+  const fake = await startFakeCdp(
+    ["SharedJSContext", "QuickAccess_uid2", "Steam Big Picture Mode"],
+    (title) => {
+      if (title === "Steam Big Picture Mode") return libraryTile;
+      if (title === "QuickAccess_uid2") return { ...unfocusedPage, ...qamOpenOnDecky };
+      return unfocusedPage;
+    },
+  );
+  try {
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, pressFn: recordingPress(pressed) });
+    assert.equal(r.ok, false);
+    assert.deepEqual(pressed, [], "nothing may be pressed on a menu whose ring is elsewhere");
+    const names = r.stages.map((s) => s.stage);
+    assert.ok(!names.includes("open-qam"), names.join(","));
+    assert.match(r.summary, /nothing was pressed/);
+    assert.match(r.reason ?? "", /open \(pane 999 on screen\) but Steam's focus ring is not inside it/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("issue #3: openPlugin still fires the chord when the QAM page itself says the menu is shut", async () => {
+  // The legitimate case must survive the gate: the probe answers "no pane on
+  // screen", so the chord is attempted. The suite's hardware guard refuses
+  // the chord, and that refusal -- an open-qam stage -- is the proof.
+  const pressed: string[] = [];
+  const fake = await startFakeCdp(
+    ["SharedJSContext", "QuickAccess_uid2", "Steam Big Picture Mode"],
+    (title) => {
+      if (title === "Steam Big Picture Mode") return libraryTile;
+      if (title === "QuickAccess_uid2") return { ...unfocusedPage, ...qamShut };
+      return unfocusedPage;
+    },
+  );
+  try {
+    const r = await openPluginDriven({ pluginName: "bonsAI", cdpUrl: fake.base, pressFn: recordingPress(pressed) });
+    const probe = r.stages.find((s) => s.stage === "probe-qam");
+    assert.ok(probe?.ok, JSON.stringify(probe));
+    assert.match(probe!.detail, /menu is shut/);
+    const chord = r.stages.find((s) => s.stage === "open-qam");
+    assert.ok(chord, `the chord must be attempted once the QAM page says shut: ${r.stages.map((s) => s.stage).join(",")}`);
+    assert.equal(r.ok, false, "the guard refuses the real chord, so the run cannot succeed -- the attempt is the point");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("issue #3: openPlugin refuses, with no press, while the Quick Access page is not listed at all", async () => {
+  const pressed: string[] = [];
+  const fake = await startFakeCdp(["SharedJSContext", "Steam Big Picture Mode"], (title) =>
+    title === "Steam Big Picture Mode" ? libraryTile : unfocusedPage,
+  );
+  try {
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 200,
+      pressFn: recordingPress(pressed),
+    });
+    assert.equal(r.ok, false);
+    assert.deepEqual(pressed, []);
+    const probe = r.stages.find((s) => s.stage === "probe-qam");
+    assert.equal(probe?.ok, false, JSON.stringify(probe));
+    assert.ok(!r.stages.some((s) => s.stage === "open-qam"));
+    assert.match(r.summary, /not enumerable .* nothing was pressed/);
+    assert.ok(r.checklist && r.checklist.length > 0);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("issue #3: openPlugin's first read waits out the restart instead of placing a ring that is not missing", async () => {
+  /*
+   * The attempt-1 shape: called seconds after deck_deploy, /json/list names
+   * only SharedJSContext for a while. The old code scanned it, read "unowned",
+   * pressed DOWN blind and then failed at read-initial. Now the read waits,
+   * the rebuilt Quick Access page appears with the ring on its rail, and the
+   * first press is the RIGHT that enters the Decky pane.
+   */
+  let polls = 0;
+  const pressed: string[] = [];
+  const fake = await startFakeCdp(
+    () => (++polls <= 2 ? ["SharedJSContext"] : ["SharedJSContext", "QuickAccess_uid2"]),
+    (title) => (title === "QuickAccess_uid2" ? onRail : unfocusedPage),
+  );
+  try {
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 5000,
+      pressFn: recordingPress(pressed),
+    });
+    const names = r.stages.map((s) => s.stage);
+    assert.ok(!names.includes("acquire-focus"), `no blind DOWN: ${names.join(",")}`);
+    const initial = r.stages.find((s) => s.stage === "read-initial");
+    assert.ok(initial?.ok, JSON.stringify(initial));
+    assert.ok((r.focus?.waitedForTargetsMs ?? 0) > 0 || polls >= 3, "the read must have waited for the page");
+    assert.equal(pressed[0], "RIGHT", pressed.join(","));
+  } finally {
+    await fake.close();
   }
 });

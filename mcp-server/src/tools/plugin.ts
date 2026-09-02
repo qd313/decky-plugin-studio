@@ -8,7 +8,7 @@ import {
   getHomebrewPluginsDir,
   restartLoaderLocal,
 } from "../deploy/local.js";
-import { deployRemote } from "./deck.js";
+import { deployRemote, DeployRemoteOptions } from "./deck.js";
 import { runPreDeployHook } from "../deploy/deployHelpers.js";
 
 export function detectPlugin() {
@@ -124,7 +124,7 @@ export function remotePluginDirName(name: unknown): string {
   return trimmed;
 }
 
-export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto") {
+export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto", opts: DeployRemoteOptions = {}) {
   const info = detectPlugin();
   if (!info.valid) throw new Error(info.reason);
 
@@ -147,6 +147,6 @@ export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto") {
     return { mode: "local", target, restartMethod };
   }
 
-  const remote = await deployRemote(info.root!, remotePluginDirName(info.name));
+  const remote = await deployRemote(info.root!, remotePluginDirName(info.name), opts);
   return { mode: "remote", ...remote };
 }

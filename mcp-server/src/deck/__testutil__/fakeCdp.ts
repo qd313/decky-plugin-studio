@@ -21,6 +21,8 @@ export interface Fake {
   base: string;
   /** How many Runtime.evaluate calls have been served. */
   evaluations: () => number;
+  /** How many /json/list calls have been served -- a settle loop's poll count. */
+  lists: () => number;
   close: () => Promise<void>;
 }
 
@@ -30,11 +32,16 @@ export interface Fake {
  * sequence runner's settle loop and cycle detector need to exercise.
  */
 export async function startFakeCdp(
-  targetTitles: string[],
+  targetTitles: string[] | (() => string[]),
   pageValue: (title: string, readIndex: number) => unknown,
 ): Promise<Fake> {
   const sockets = new Set<Socket>();
   let reads = 0;
+  let lists = 0;
+  // A function lets a test change the target list between /json/list calls:
+  // the shape of the seconds after a plugin_loader restart, when CEF names
+  // only SharedJSContext until Steam has rebuilt its UI pages (issue #3).
+  const titles = (): string[] => (typeof targetTitles === "function" ? targetTitles() : targetTitles);
 
   const server = http.createServer((req, res) => {
     if (req.url === "/json/version") {
@@ -43,11 +50,12 @@ export async function startFakeCdp(
       return;
     }
     if (req.url === "/json/list") {
+      lists++;
       const port = (server.address() as { port: number }).port;
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify(
-          targetTitles.map((title, i) => ({
+          titles().map((title, i) => ({
             id: `T${i}`,
             type: "page",
             title,
@@ -80,7 +88,7 @@ export async function startFakeCdp(
     );
 
     const idx = Number(/\/page\/T(\d+)$/.exec(req.url ?? "")?.[1] ?? 0);
-    const title = targetTitles[idx];
+    const title = titles()[idx];
 
     socket.on("data", (chunk: Buffer) => {
       /*
@@ -160,6 +168,7 @@ export async function startFakeCdp(
   return {
     base: `http://127.0.0.1:${port}`,
     evaluations: () => reads,
+    lists: () => lists,
     close: async () => {
       for (const s of sockets) s.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));

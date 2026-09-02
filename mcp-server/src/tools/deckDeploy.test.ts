@@ -30,7 +30,15 @@ import path from "node:path";
 
 import { deployPlugin, localPluginDirName, remotePluginDirName } from "./plugin.js";
 import { deployRemote } from "./deck.js";
-import { proc, quoteRemotePath, moveDeployedPluginIntoPlace } from "../deploy/deployHelpers.js";
+import {
+  proc,
+  quoteRemotePath,
+  moveDeployedPluginIntoPlace,
+  waitForLoaderReady,
+  parseLoaderReadiness,
+  loaderReadinessCommand,
+  LOADER_READINESS_MARK,
+} from "../deploy/deployHelpers.js";
 
 function makeFixturePlugin(name: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dps-deploy-plugin-"));
@@ -105,9 +113,14 @@ test('deployPlugin("remote") targets the manifest\'s exact case, never a lowerca
     const result = await withFakeExec(
       (cmd) => {
         calls.push(cmd);
+        // Answer the post-restart readiness poll (issue #3) so the deploy
+        // returns on its first poll instead of running to the 30 s deadline.
+        if (cmd.includes("is-active plugin_loader")) {
+          return `active\n${LOADER_READINESS_MARK}\n[{"title":"QuickAccess_uid2","webSocketDebuggerUrl":"ws://x"}]`;
+        }
         return "";
       },
-      () => deployPlugin("remote")
+      () => deployPlugin("remote", { loaderPollMs: 10 })
     );
     assert.equal(result.mode, "remote");
     assert.equal((result as { target: string }).target, "~/homebrew/plugins/bonsAI");
@@ -139,12 +152,30 @@ test("deployRemote stages through a deck-writable temp dir, then moves into plac
     const result = await withFakeExec(
       (cmd) => {
         calls.push(cmd);
+        // The post-restart readiness poll (issue #3): the loader is back and
+        // Steam lists a UI page, so the deploy returns on its first poll.
+        if (cmd.includes("is-active plugin_loader")) {
+          return (
+            `active\n${LOADER_READINESS_MARK}\n` +
+            JSON.stringify([
+              { title: "SharedJSContext", webSocketDebuggerUrl: "ws://x" },
+              { title: "QuickAccess_uid2", webSocketDebuggerUrl: "ws://x" },
+            ])
+          );
+        }
         return "";
       },
-      () => deployRemote(root, "bonsAI")
+      () => deployRemote(root, "bonsAI", { loaderPollMs: 10 })
     );
 
     assert.equal(result.target, "~/homebrew/plugins/bonsAI");
+    assert.equal(result.loader?.ready, true, JSON.stringify(result.loader));
+    assert.equal(result.loader?.polls, 1);
+    assert.ok(
+      calls.findIndex((c) => c.includes("is-active plugin_loader")) >
+        calls.findIndex((c) => c.includes("restart plugin_loader")),
+      "readiness is polled AFTER the restart is issued"
+    );
 
     const scpCalls = calls.filter((c) => c.startsWith("scp"));
     assert.ok(scpCalls.length > 0, "expected at least one scp call");
@@ -347,4 +378,104 @@ test("the elevated move normalises the staged modes before copying them into pla
     !/chmod[^&]*homebrew/.test(cmd),
     "the chmod belongs on the staging dir, not on the installed directory's pre-existing content",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3: deploy returns when the Deck is usable again, not when the
+// restart was issued. deck_openPlugin called straight after a deploy landed
+// in the seconds where the loader is still coming up and Steam's UI pages
+// are not listed, and paid for it with two failed attempts, 5 cycles of 5.
+// ---------------------------------------------------------------------------
+
+test("parseLoaderReadiness splits the loader state from the target list, and reads garbage as unknown", () => {
+  const ok = parseLoaderReadiness(
+    `active\n${LOADER_READINESS_MARK}\n[{"title":"SharedJSContext","webSocketDebuggerUrl":"ws://x"}]`
+  );
+  assert.equal(ok.loader, "active");
+  assert.deepEqual(ok.targets.map((t) => t.title), ["SharedJSContext"]);
+  const activating = parseLoaderReadiness(`activating\n${LOADER_READINESS_MARK}\n`);
+  assert.equal(activating.loader, "activating");
+  assert.deepEqual(activating.targets, []);
+  const junk = parseLoaderReadiness(`\n${LOADER_READINESS_MARK}\n<html>nope</html>`);
+  assert.equal(junk.loader, "");
+  assert.deepEqual(junk.targets, []);
+  assert.deepEqual(parseLoaderReadiness(""), { loader: "", targets: [] });
+});
+
+test("the readiness command reads both facts on the Deck itself, with no tunnel", () => {
+  const cmd = loaderReadinessCommand("deck", "203.0.113.5");
+  assert.match(cmd, /^ssh .*deck@203\.0\.113\.5 "/);
+  assert.match(cmd, /systemctl is-active plugin_loader\.service/);
+  assert.match(cmd, /127\.0\.0\.1:8080\/json\/list/);
+  assert.ok(cmd.includes(LOADER_READINESS_MARK));
+  assert.ok(!cmd.includes("--user"), "the unit is system-scope; --user was the half that always failed");
+});
+
+test("waitForLoaderReady polls until the loader is active AND a Steam UI page is listed", async () => {
+  const answers = [
+    `activating\n${LOADER_READINESS_MARK}\n`,
+    `active\n${LOADER_READINESS_MARK}\n[{"title":"SharedJSContext","webSocketDebuggerUrl":"ws://x"}]`,
+    `active\n${LOADER_READINESS_MARK}\n[{"title":"SharedJSContext","webSocketDebuggerUrl":"ws://x"},{"title":"QuickAccess_uid2","webSocketDebuggerUrl":"ws://x"}]`,
+  ];
+  let i = 0;
+  const r = await withFakeExec(
+    () => answers[Math.min(i++, answers.length - 1)],
+    () => waitForLoaderReady("deck", "203.0.113.5", { timeoutMs: 5000, pollMs: 10 })
+  );
+  assert.equal(r.ready, true, r.reason);
+  assert.equal(r.polls, 3, "active-but-SharedJSContext-only must not count as ready");
+  assert.deepEqual(r.targets, ["SharedJSContext", "QuickAccess_uid2"]);
+});
+
+test("waitForLoaderReady reports a passed deadline with what it saw, and never throws", async () => {
+  const r = await withFakeExec(
+    () => `activating\n${LOADER_READINESS_MARK}\n`,
+    () => waitForLoaderReady("deck", "203.0.113.5", { timeoutMs: 60, pollMs: 10 })
+  );
+  assert.equal(r.ready, false);
+  assert.equal(r.loader, "activating");
+  assert.match(r.reason ?? "", /plugin_loader was "activating"/);
+  assert.match(r.reason ?? "", /no CEF page/);
+  assert.ok(r.polls >= 2, `polls=${r.polls}`);
+});
+
+test("waitForLoaderReady still reads the output of a command that exited non-zero", async () => {
+  // systemctl exits 3 while the unit is inactive; curl exits 7 while nothing
+  // listens. Both still print, and execSync surfaces that print on the error.
+  let calls = 0;
+  const r = await withFakeExec(
+    () => {
+      calls++;
+      if (calls === 1) {
+        const err = new Error("Command failed") as Error & { stdout: string };
+        err.stdout = `inactive\n${LOADER_READINESS_MARK}\n`;
+        throw err;
+      }
+      return `active\n${LOADER_READINESS_MARK}\n[{"title":"QuickAccess_uid2","webSocketDebuggerUrl":"ws://x"}]`;
+    },
+    () => waitForLoaderReady("deck", "203.0.113.5", { timeoutMs: 5000, pollMs: 10 })
+  );
+  assert.equal(r.ready, true, r.reason);
+  assert.equal(r.polls, 2);
+});
+
+test("deployRemote with waitForLoader:false returns as soon as the restart is issued, loader: null", async () => {
+  process.env.DECK_IP = "203.0.113.5";
+  process.env.DECK_USER = "deck";
+  const root = makeFixturePlugin("bonsAI");
+  const calls: string[] = [];
+  try {
+    const result = await withFakeExec(
+      (cmd) => {
+        calls.push(cmd);
+        return "";
+      },
+      () => deployRemote(root, "bonsAI", { waitForLoader: false })
+    );
+    assert.equal(result.loader, null);
+    assert.ok(!calls.some((c) => c.includes("is-active plugin_loader")), "no readiness poll was asked for");
+    assert.ok(calls.some((c) => c.includes("restart plugin_loader")), "the restart itself still happens");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

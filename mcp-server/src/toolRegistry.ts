@@ -196,27 +196,53 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_deploy",
     description:
-      "Build and install the current plugin onto Decky Loader, then restart the loader. The main deploy verb — use before on-device QA.",
+      "Build and install the current plugin onto Decky Loader, restart the loader, and — by default — wait until the Deck is usable again: the loader active and Steam's UI pages listed over CDP. The main deploy verb — use before on-device QA. The result's `loader` block reports the wait; `loader.ready: false` means the deadline passed and the next deck_* call may still land in the restart (deck_openPlugin needed 2-3 attempts after every deploy before this wait existed).",
     inputSchema: {
       type: "object",
-      properties: { mode: DEPLOY_MODE },
+      properties: {
+        mode: DEPLOY_MODE,
+        waitForLoader: {
+          type: "boolean",
+          default: true,
+          description:
+            "After the plugin_loader restart, poll the Deck until the loader is active and Steam lists a UI page over CDP before returning. false returns as soon as the restart is issued, as before.",
+        },
+        loaderTimeoutMs: {
+          type: "number",
+          default: 30000,
+          description: "Upper bound on that wait; the result's `loader.ready` says whether it was met.",
+        },
+      },
       additionalProperties: false,
     },
   },
   {
     name: "deck_reloadPlugin",
     description:
-      "Reload just this plugin without a full redeploy. Faster than deck_deploy when only backend Python changed and the bundle is already installed.",
+      "Reload just this plugin without a full redeploy. Faster than deck_deploy when only backend Python changed and the bundle is already installed. Restarts the loader and, by default, waits until the Deck is usable again, as deck_deploy does; see its `loader` block.",
     inputSchema: {
       type: "object",
-      properties: { mode: DEPLOY_MODE },
+      properties: {
+        mode: DEPLOY_MODE,
+        waitForLoader: {
+          type: "boolean",
+          default: true,
+          description:
+            "After the plugin_loader restart, poll the Deck until the loader is active and Steam lists a UI page over CDP before returning. false returns as soon as the restart is issued, as before.",
+        },
+        loaderTimeoutMs: {
+          type: "number",
+          default: 30000,
+          description: "Upper bound on that wait; the result's `loader.ready` says whether it was met.",
+        },
+      },
       additionalProperties: false,
     },
   },
   {
     name: "deck_openPlugin",
     description:
-      "Open this plugin's panel on the Deck by driving Steam through the bridge board, verifying every stage against a live focus read rather than replaying a fixed button sequence. It only uses the D-pad while searching, and only presses A once a read confirms the ring is on a control labelled with the plugin's name, so it cannot activate something in an unrelated menu. If it runs out of budget it refuses and returns the manual checklist plus the list of controls it actually saw. Set rootSelector (or panelRootSelector in .decky/preview.json) to a selector your panel renders: without it, 'is the panel already open' is inferred from Decky's pane labels, and Decky's plugin LIST advertises every installed plugin's name, so an unmounted panel can read as open. Pass drive:false for the old checklist-only behaviour.",
+      "Open this plugin's panel on the Deck by driving Steam through the bridge board, verifying every stage against a live focus read rather than replaying a fixed button sequence. It only uses the D-pad while searching, and only presses A once a read confirms the ring is on a control labelled with the plugin's name, so it cannot activate something in an unrelated menu. If it runs out of budget it refuses and returns the manual checklist plus the list of controls it actually saw. Set rootSelector (or panelRootSelector in .decky/preview.json) to a selector your panel renders: without it, 'is the panel already open' is inferred from Decky's pane labels, and Decky's plugin LIST advertises every installed plugin's name, so an unmounted panel can read as open. Pass drive:false for the old checklist-only behaviour. Safe to call straight after deck_deploy: the first read waits out the loader restart, and the QAM open chord (a toggle) is fired only on the Quick Access page's own report that the menu is shut — never on a null read from another page.",
     inputSchema: {
       type: "object" as const,
       properties: {

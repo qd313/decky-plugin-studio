@@ -55,6 +55,22 @@ export async function listTargets(base: string, timeoutMs = 6000): Promise<CdpTa
   return getJson<CdpTarget[]>(`${base}/json/list`, timeoutMs);
 }
 
+/**
+ * The one target CEF keeps listing while Steam's UI pages are being torn down
+ * and rebuilt -- which is what the seconds after a plugin_loader restart look
+ * like. Issue #3 (bonsAI, 2026-08-30): right after every deck_deploy,
+ * /json/list named SharedJSContext and nothing else, and deck_openPlugin's
+ * first attempt scanned that one page, found no ring, and failed. A list with
+ * nothing else in it means "Steam's UI is not enumerable yet", never "Steam
+ * has no UI".
+ */
+export const ALWAYS_LISTED_TARGET = "SharedJSContext";
+
+/** Does the list name a Steam UI page -- anything debuggable beyond SharedJSContext? */
+export function hasSteamUiTargets(targets: CdpTarget[]): boolean {
+  return targets.some((t) => Boolean(t.webSocketDebuggerUrl) && t.title !== ALWAYS_LISTED_TARGET);
+}
+
 export async function getVersion(base: string, timeoutMs = 6000): Promise<CdpVersion> {
   const raw = await getJson<Record<string, string>>(`${base}/json/version`, timeoutMs);
   return {

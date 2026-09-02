@@ -131,10 +131,16 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
       );
 
     case "tools/deck_deploy":
-      return plugin.deployPlugin((params.mode as "auto" | "local" | "remote") ?? "auto");
+      return plugin.deployPlugin((params.mode as "auto" | "local" | "remote") ?? "auto", {
+        waitForLoader: params.waitForLoader !== false,
+        loaderTimeoutMs: params.loaderTimeoutMs != null ? Number(params.loaderTimeoutMs) : undefined,
+      });
 
     case "tools/deck_reloadPlugin":
-      return deckAutonomy.reloadPlugin((params.mode as "auto" | "local" | "remote") ?? "auto");
+      return deckAutonomy.reloadPlugin((params.mode as "auto" | "local" | "remote") ?? "auto", {
+        waitForLoader: params.waitForLoader !== false,
+        loaderTimeoutMs: params.loaderTimeoutMs != null ? Number(params.loaderTimeoutMs) : undefined,
+      });
 
     case "tools/deck_openPlugin": {
       // `drive: false` keeps the old checklist-only behaviour for anyone who

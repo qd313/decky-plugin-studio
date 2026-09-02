@@ -13,12 +13,15 @@ import {
   runPreDeployHook,
   runWithRetry,
   sshRestartLoader,
+  waitForLoaderReady,
+  LoaderReadiness,
 } from "../deploy/deployHelpers.js";
 import {
   bundleDeckScript,
   capturePassesGate,
   cleanupRemote,
   downloadRemoteFile,
+  getScriptsDir,
   getWorkspaceArtifactsDir,
   installCaptureHelperOnDeck,
   isDeckLocal,
@@ -56,11 +59,18 @@ export function startTunnel(): { pid?: number; skipped?: boolean; reason?: strin
     return { pid: tunnelProcess.pid };
   }
 
-  const scriptsDir = path.join(
-    path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")),
-    "..",
-    "scripts"
-  );
+  // The capture-scripts resolver, not a hand-rolled `import.meta.url` regex.
+  // That regex recognised only upper-case drive letters and turned bonsAI's
+  // lower-case `c:/...` mcp.json path into `\c:\...` (issue #2, the same
+  // defect captureOrchestrator had), and it knew only the dist layout, so
+  // under `tsx` it looked for a src/scripts that no build creates.
+  // getScriptsDir() tries dist, then the repo's templates.
+  let scriptsDir: string;
+  try {
+    scriptsDir = getScriptsDir();
+  } catch (err) {
+    return { reason: (err as Error).message };
+  }
   const script =
     process.platform === "win32"
       ? path.join(scriptsDir, "reverse-tunnel-deck-ingest.ps1")
@@ -307,10 +317,24 @@ export async function installCaptureHelper(
   return { installed };
 }
 
+export interface DeployRemoteOptions {
+  /**
+   * After the plugin_loader restart, poll the Deck until the loader is active
+   * and Steam lists a UI page over CDP again, so the next deck_* call does not
+   * land in the restart (issue #3). Default true.
+   */
+  waitForLoader?: boolean;
+  /** Upper bound on that wait. Default 30 s. */
+  loaderTimeoutMs?: number;
+  /** Poll interval for that wait. Default 1 s; tests shorten it. */
+  loaderPollMs?: number;
+}
+
 export async function deployRemote(
   pluginRoot: string,
-  pluginName: string
-): Promise<{ target: string; copied: string[] }> {
+  pluginName: string,
+  opts: DeployRemoteOptions = {}
+): Promise<{ target: string; copied: string[]; loader: LoaderReadiness | null }> {
   const env = readDeckEnv();
   const host = env.DECK_IP;
   const user = env.DECK_USER ?? "deck";
@@ -344,5 +368,15 @@ export async function deployRemote(
   moveDeployedPluginIntoPlace(user, host, tempDir, targetDir, pluginName);
 
   sshRestartLoader(user, host);
-  return { target: targetDir, copied: sources };
+
+  // Return when the Deck is usable again, not when the restart was ISSUED.
+  // Issue #3: every deck_openPlugin called straight after a deploy found the
+  // loader still coming up and Steam's UI pages not yet listed, and paid for
+  // it with two failed attempts. A deadline that passes is reported in
+  // `loader`, not thrown -- the files are deployed either way.
+  const loader =
+    opts.waitForLoader === false
+      ? null
+      : await waitForLoaderReady(user, host, { timeoutMs: opts.loaderTimeoutMs, pollMs: opts.loaderPollMs });
+  return { target: targetDir, copied: sources, loader };
 }

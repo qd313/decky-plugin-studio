@@ -23,7 +23,7 @@
  * the marker it returns ok:false with a specific reason, rather than a null
  * focus that reads as "nothing is focused".
  */
-import { CdpTarget, evaluate, getVersion, listTargets, rewriteWsHost } from "./cdp.js";
+import { CdpTarget, evaluate, getVersion, hasSteamUiTargets, listTargets, rewriteWsHost } from "./cdp.js";
 import { withCdpTunnel } from "./cdpTunnel.js";
 
 /**
@@ -203,6 +203,14 @@ export interface ReadFocusResult {
   targetsScanned: string[];
   /** Did the focused element match the caller's `expect` selector? null = not asked, or the selector was invalid. */
   matchesExpect?: boolean | null;
+  /**
+   * How long the read waited for Steam's UI pages to be listed before it
+   * scanned anything. 0 in the normal case; non-zero only in the seconds
+   * after a plugin_loader restart, when /json/list names SharedJSContext and
+   * nothing else while Steam rebuilds its pages (issue #3). Present only on
+   * reads that asked to wait -- see ReadFocusAtOptions.targetsSettleMs.
+   */
+  waitedForTargetsMs?: number;
 }
 
 /**
@@ -686,7 +694,36 @@ export interface ReadFocusOptions {
   /** Where CDP is reachable. Default assumes a forward tunnel on 8080. */
   cdpUrl?: string;
   timeoutMs?: number;
+  /** See ReadFocusAtOptions.targetsSettleMs. The tool entry point defaults this ON. */
+  targetsSettleMs?: number;
 }
+
+export interface ReadFocusAtOptions {
+  /**
+   * Upper bound, in ms, on waiting for Steam's UI pages to appear in
+   * /json/list before scanning. Default 0: read whatever is listed now.
+   *
+   * ISSUE #3 (bonsAI, 2026-08-30). For a few seconds after deck_deploy
+   * restarts plugin_loader, CEF lists SharedJSContext and nothing else while
+   * Steam rebuilds its UI pages. A read in that window scanned the one page
+   * that never carries the ring and failed with "gpfocus marker not found",
+   * which every caller reads as "nothing owns the ring" -- so deck_openPlugin
+   * spent a D-pad press placing a ring that was not missing, then failed its
+   * first attempt after every single deploy. A caller that can land in that
+   * window (deck_openPlugin, the deck_readFocus tool) asks to wait it out;
+   * the low-level default stays 0 so a mid-run read never stalls on the
+   * heuristic, and a list that stays partial is reported as exactly that
+   * rather than as an unowned ring.
+   */
+  targetsSettleMs?: number;
+  /** Poll interval for that wait. Default 500. */
+  targetsPollMs?: number;
+}
+
+/** How long the tool entry points wait for Steam's UI pages, when they wait at all. */
+export const DEFAULT_TARGETS_SETTLE_MS = 10_000;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 const PREFLIGHT =
   "Could not reach Steam's CEF debugger. On the Deck, confirm " +
@@ -725,15 +762,27 @@ export async function readFocusAt(
   base: string,
   timeoutMs = 10_000,
   expect?: string,
+  opts: ReadFocusAtOptions = {},
 ): Promise<ReadFocusResult> {
   const empty = emptyResult(`cdp:${base}`);
 
+  const settleMs = Math.max(0, opts.targetsSettleMs ?? 0);
+  const pollMs = Math.max(50, opts.targetsPollMs ?? 500);
+  const started = Date.now();
+  let waitedForTargetsMs = 0;
   let targets: CdpTarget[];
-  try {
-    targets = await listTargets(base, timeoutMs);
-  } catch (err) {
-    return { ...empty, reason: `${PREFLIGHT} (${(err as Error).message})` };
+  for (;;) {
+    try {
+      targets = await listTargets(base, timeoutMs);
+    } catch (err) {
+      return { ...empty, reason: `${PREFLIGHT} (${(err as Error).message})` };
+    }
+    if (settleMs === 0 || hasSteamUiTargets(targets)) break;
+    waitedForTargetsMs = Date.now() - started;
+    if (waitedForTargetsMs >= settleMs) break;
+    await sleep(Math.min(pollMs, settleMs - waitedForTargetsMs));
   }
+  const waited = settleMs > 0 ? { waitedForTargetsMs } : {};
 
   let steamBuild: string | null = null;
   try {
@@ -744,7 +793,26 @@ export async function readFocusAt(
 
   const pages = targets.filter((t) => t.webSocketDebuggerUrl);
   if (pages.length === 0) {
-    return { ...empty, steamBuild, reason: `${PREFLIGHT} (no debuggable targets listed)` };
+    return { ...empty, ...waited, steamBuild, reason: `${PREFLIGHT} (no debuggable targets listed)` };
+  }
+
+  // Asked to wait, and Steam's UI pages never appeared: say so. This must NOT
+  // fall through to the scan below -- its "gpfocus marker not found" is what
+  // every caller reads as "nothing owns the ring" and answers with a D-pad
+  // press. Wrong diagnosis and a blind press, both (issue #3).
+  if (settleMs > 0 && !hasSteamUiTargets(targets)) {
+    const listed = pages.map((t) => t.title).join(", ");
+    return {
+      ...empty,
+      ...waited,
+      steamBuild,
+      targetsScanned: pages.map((t) => t.title),
+      reason:
+        `Steam's UI pages are not enumerable: /json/list named only ${listed} for ${waitedForTargetsMs}ms. ` +
+        "This is what the seconds after a plugin_loader restart look like (deck_deploy, deck_reloadPlugin) " +
+        "-- wait, then read again. Nothing was scanned: that page never carries the ring, and reporting " +
+        "it as unowned would be wrong.",
+    };
   }
 
   const scanned: string[] = [];
@@ -785,6 +853,7 @@ export async function readFocusAt(
       visibleQuickAccessTab: page.visibleQuickAccessTab ?? null,
       targetsScanned: scanned,
       matchesExpect: page.matchesExpect ?? null,
+      ...waited,
     };
   }
 
@@ -793,6 +862,7 @@ export async function readFocusAt(
   const detail = failures.length ? ` Errors: ${failures.join("; ")}` : "";
   return {
     ...empty,
+    ...waited,
     steamBuild,
     targetsScanned: scanned,
     reason:
@@ -810,11 +880,117 @@ export async function readFocusAt(
  */
 export async function readFocus(opts: ReadFocusOptions = {}): Promise<ReadFocusResult> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
-  if (opts.cdpUrl) return readFocusAt(opts.cdpUrl, timeoutMs);
+  // The tool entry point waits out a loader restart by default: an agent
+  // calling deck_readFocus right after deck_deploy wants the state Steam is
+  // about to have, not a scan of the one page that never carries the ring.
+  const at: ReadFocusAtOptions = { targetsSettleMs: opts.targetsSettleMs ?? DEFAULT_TARGETS_SETTLE_MS };
+  if (opts.cdpUrl) return readFocusAt(opts.cdpUrl, timeoutMs, undefined, at);
 
   try {
-    return await withCdpTunnel((base) => readFocusAt(base, timeoutMs));
+    return await withCdpTunnel((base) => readFocusAt(base, timeoutMs, undefined, at));
   } catch (err) {
     return { ...emptyResult("ssh-tunnel"), reason: (err as Error).message };
+  }
+}
+
+/** Does this read's answer come from the Quick Access Menu's own page? */
+export function isQuickAccessTarget(r: ReadFocusResult | null): boolean {
+  return (r?.target?.title ?? "").toLowerCase().includes("quickaccess");
+}
+
+export interface QuickAccessProbe {
+  /** A Quick Access page was listed, after waiting up to targetsSettleMs for it. */
+  listed: boolean;
+  /** The page was listed AND answered; only then does `visiblePane` mean anything. */
+  answered: boolean;
+  /** Title of the page answered from, when listed. */
+  target: string | null;
+  /**
+   * The pane on screen, by tab id ("999" is Decky's), or null when the menu is
+   * shut. Unlike a focus read's visibleQuickAccessTab, this null was measured
+   * IN the Quick Access page, so it is evidence about the menu.
+   */
+  visiblePane: string | null;
+  /** Whether that page carries Steam's gpfocus marker right now. */
+  ownsFocus: boolean;
+  waitedMs: number;
+  reason?: string;
+}
+
+/**
+ * Ask the Quick Access Menu's own page whether it is open.
+ *
+ * A focus read answers from whichever page carries the ring. When that is not
+ * the Quick Access page, its `visibleQuickAccessTab` is null because THAT
+ * document has no quickaccess panes in it -- not because the menu is shut.
+ * deck_openPlugin fired its GUIDE+A toggle on exactly that null on the second
+ * attempt after every deploy (issue #3) and closed a menu that was open. The
+ * chord is now fired only on this page's own word.
+ *
+ * Read-only: one querySelectorAll and some rects.
+ */
+export async function probeQuickAccess(
+  base: string,
+  opts: ReadFocusAtOptions & { timeoutMs?: number } = {},
+): Promise<QuickAccessProbe> {
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const settleMs = Math.max(0, opts.targetsSettleMs ?? DEFAULT_TARGETS_SETTLE_MS);
+  const pollMs = Math.max(50, opts.targetsPollMs ?? 500);
+  const started = Date.now();
+  const unknown = (reason: string, target: string | null = null): QuickAccessProbe => ({
+    listed: target !== null,
+    answered: false,
+    target,
+    visiblePane: null,
+    ownsFocus: false,
+    waitedMs: Date.now() - started,
+    reason,
+  });
+
+  let qam: CdpTarget | undefined;
+  for (;;) {
+    let targets: CdpTarget[];
+    try {
+      targets = await listTargets(base, timeoutMs);
+    } catch (err) {
+      return unknown(`${PREFLIGHT} (${(err as Error).message})`);
+    }
+    qam = targets.find(
+      (t) => Boolean(t.webSocketDebuggerUrl) && (t.title ?? "").toLowerCase().includes("quickaccess"),
+    );
+    if (qam) break;
+    const waited = Date.now() - started;
+    if (waited >= settleMs) {
+      const listed = targets.map((t) => t.title).join(", ") || "nothing";
+      return unknown(
+        `no Quick Access page is listed by Steam's CEF debugger (listed: ${listed}) after ${waited}ms. ` +
+          "This is what the seconds after a plugin_loader restart look like (deck_deploy, deck_reloadPlugin); " +
+          "wait, then call again.",
+      );
+    }
+    await sleep(Math.min(pollMs, settleMs - waited));
+  }
+
+  const expr =
+    "(() => { var panes = document.querySelectorAll('[id^=\"quickaccess_content_\"]'); var visible = null; " +
+    "for (var i = 0; i < panes.length; i++) { var r = panes[i].getBoundingClientRect(); " +
+    "if (r.width > 0 && r.height > 0) { visible = panes[i].id.replace('quickaccess_content_', ''); break; } } " +
+    "return { visiblePane: visible, ownsFocus: !!document.querySelector('.gpfocus') }; })()";
+  try {
+    const page = await evaluate<{ visiblePane?: unknown; ownsFocus?: unknown }>(
+      rewriteWsHost(qam.webSocketDebuggerUrl!, base),
+      expr,
+      timeoutMs,
+    );
+    return {
+      listed: true,
+      answered: true,
+      target: qam.title,
+      visiblePane: typeof page?.visiblePane === "string" ? page.visiblePane : null,
+      ownsFocus: page?.ownsFocus === true,
+      waitedMs: Date.now() - started,
+    };
+  } catch (err) {
+    return unknown(`the Quick Access page was listed but could not be asked: ${(err as Error).message}`, qam.title);
   }
 }

@@ -26,7 +26,13 @@
  */
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton, pressChord } from "./pressButton.js";
-import { readFocusAt, ReadFocusResult } from "./readFocus.js";
+import {
+  isQuickAccessTarget,
+  probeQuickAccess,
+  readFocusAt,
+  DEFAULT_TARGETS_SETTLE_MS,
+  ReadFocusResult,
+} from "./readFocus.js";
 import { focusKey, describe, labelIsBorrowed } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned } from "./walkTo.js";
@@ -90,6 +96,13 @@ export interface OpenPluginOptions {
    * `.decky/preview.json`.
    */
   rootSelector?: string;
+  /**
+   * Upper bound on waiting for Steam's UI pages to be listed before the first
+   * read, and for the Quick Access page before the open chord. Default 10 s
+   * (DEFAULT_TARGETS_SETTLE_MS). The seconds after deck_deploy restarts the
+   * loader are exactly this window (issue #3); tests shorten it.
+   */
+  targetsSettleMs?: number;
   /**
    * Test-only seam: substitutes every D-pad press, so the navigation ORDER can
    * be exercised without the bridge board. Production code never sets this and
@@ -213,6 +226,11 @@ async function panelRootMounted(selector: string, cdpBase: string): Promise<bool
     "return r.width > 0 && r.height > 0; } catch (e) { return null; } })()";
   const r = await readPage<boolean | null>({ expression: expr, cdpUrl: cdpBase });
   if (!r.ok) return null;
+  // readPage falls back to whatever page is listed first when the Quick
+  // Access page is absent -- SharedJSContext, during a loader restart -- and
+  // that page has no plugin root in it. An answer from anywhere else is not
+  // "the panel is not mounted"; it is "the panel could not be asked".
+  if (!(r.target?.title ?? "").toLowerCase().includes("quickaccess")) return null;
   return typeof r.value === "boolean" ? r.value : null;
 }
 
@@ -291,7 +309,15 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
 
   try {
     // ---- Stage 1: where are we? -------------------------------------------
-    let focus = await readFocusAt(cdpBase, 10_000);
+    //
+    // The first read waits out a loader restart. Issue #3, attempt 1 of every
+    // deploy cycle: called seconds after deck_deploy, CEF listed only
+    // SharedJSContext, the read scanned that one page, reported the ring
+    // unowned, spent a DOWN press placing a ring that was not missing, and
+    // failed. Waiting here is what turns that into a first-attempt success;
+    // a list that stays partial comes back as its own reason, not as unowned.
+    const settle = { targetsSettleMs: opts.targetsSettleMs ?? DEFAULT_TARGETS_SETTLE_MS };
+    let focus = await readFocusAt(cdpBase, 10_000, undefined, settle);
 
     /*
      * An unowned ring is where this tool is normally CALLED FROM, not an edge
@@ -327,12 +353,16 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
 
     if (!focus.ok) {
       stages.push({ stage: "read-initial", ok: false, detail: focus.reason ?? "", presses: 0 });
+      const restarting = (focus.waitedForTargetsMs ?? 0) > 0;
       return fail(
         focus.reason ?? "could not read focus",
         focus,
         acquired
           ? "could not read the Deck's focus state even after placing the ring"
-          : "could not read the Deck's focus state, so nothing was pressed",
+          : restarting
+            ? `Steam's UI pages were not enumerable for ${focus.waitedForTargetsMs}ms -- the state right after ` +
+              "deck_deploy restarts the loader -- so nothing was pressed; wait a few seconds and call again"
+            : "could not read the Deck's focus state, so nothing was pressed",
       );
     }
     stages.push({
@@ -378,29 +408,100 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     // `quickAccessTab === null` -- that is also true on the rail, and reading it
     // as "closed" fired the open chord at an open menu and closed it again.
     if (focus.visibleQuickAccessTab === null) {
-      abortIfStopped();
-      const p = await pressChord("GUIDE", "A", { port: opts.port });
-      if (!p.ok) {
-        stages.push({ stage: "open-qam", ok: false, detail: p.reason ?? "", presses: 0 });
-        return fail(p.reason ?? "chord failed", focus, "the QAM chord could not be delivered");
+      /*
+       * THE CHORD IS A TOGGLE, SO IT FIRES ONLY ON THE QUICK ACCESS PAGE'S OWN WORD.
+       *
+       * Issue #3, attempt 2 of every deploy cycle: the focus read succeeded --
+       * from "Steam Big Picture Mode", whose document still carried a ring on
+       * a library tile while Decky's restart was rebuilding the Quick Access
+       * page -- so visibleQuickAccessTab was null. Not because the menu was
+       * shut: because THAT document has no quickaccess panes in it. The chord
+       * went out, the open menu closed, the tool reported "no quickaccess pane
+       * became visible", and the UI was left worse than it was found. A null
+       * read from any page but the Quick Access page is not evidence about the
+       * menu. So unless this read came from that page, ask it directly -- and
+       * wait for it to be listed if the restart is still in progress -- and
+       * press only when IT reports no pane on screen.
+       */
+      let menuShut = isQuickAccessTarget(focus);
+      if (!menuShut) {
+        const qam = await probeQuickAccess(cdpBase, { ...settle, timeoutMs: 10_000 });
+        stages.push({
+          stage: "probe-qam",
+          ok: qam.answered,
+          detail: qam.answered
+            ? qam.visiblePane === null
+              ? `the Quick Access page (${qam.target}) reports no pane on screen: the menu is shut`
+              : `the Quick Access page (${qam.target}) reports pane ${qam.visiblePane} on screen, so the ` +
+                `menu is OPEN; the focus read came from ${focus.target?.title ?? "another page"}`
+            : qam.reason ?? "the Quick Access page could not be asked",
+          presses: 0,
+        });
+        if (!qam.answered) {
+          return fail(
+            qam.reason ?? "the Quick Access page could not be asked whether the menu is open",
+            focus,
+            qam.listed
+              ? "could not ask the Quick Access page whether the menu is open, so the open chord was NOT fired"
+              : `the Quick Access page was not enumerable for ${qam.waitedMs}ms -- the state right after ` +
+                "deck_deploy restarts the loader -- so nothing was pressed; wait a few seconds and call again",
+          );
+        }
+        menuShut = qam.visiblePane === null;
+        if (!menuShut) {
+          // The menu is open and the ring simply was not read from it: give
+          // Steam a moment to settle focus into the rebuilt page, re-reading
+          // rather than pressing, and refuse if it never does.
+          const deadline = Date.now() + 3000;
+          while (!(focus.ok && isQuickAccessTarget(focus)) && Date.now() < deadline) {
+            await sleep(300);
+            focus = await readFocusAt(cdpBase, 10_000);
+          }
+          const settled = focus.ok && isQuickAccessTarget(focus);
+          stages.push({
+            stage: "settle-qam-focus",
+            ok: settled,
+            detail: settled
+              ? `ring read from ${focus.target?.title}, pane ${focus.visibleQuickAccessTab ?? "none"} on screen`
+              : `the ring never settled into the Quick Access page (last read from ${focus.target?.title ?? "nothing"})`,
+            presses: 0,
+          });
+          if (!settled) {
+            return fail(
+              `the Quick Access Menu is open (pane ${qam.visiblePane} on screen) but Steam's focus ring is not inside it`,
+              focus,
+              "the QAM is open but the ring is elsewhere, so nothing was pressed -- wait a moment, " +
+                "or move the ring into the menu by hand, and call again",
+            );
+          }
+        }
       }
-      await sleep(900);
-      focus = await readFocusAt(cdpBase, 10_000);
-      const opened = focus.ok && focus.visibleQuickAccessTab !== null;
-      stages.push({
-        stage: "open-qam",
-        ok: opened,
-        detail: opened
-          ? `QAM open, pane ${focus.visibleQuickAccessTab} on screen`
-          : "no quickaccess pane became visible after the chord",
-        presses: 1,
-      });
-      if (!opened) {
-        return fail(
-          "the QAM chord was delivered but no quickaccess pane appeared",
-          focus,
-          "could not confirm the Quick Access Menu opened",
-        );
+
+      if (menuShut) {
+        abortIfStopped();
+        const p = await pressChord("GUIDE", "A", { port: opts.port });
+        if (!p.ok) {
+          stages.push({ stage: "open-qam", ok: false, detail: p.reason ?? "", presses: 0 });
+          return fail(p.reason ?? "chord failed", focus, "the QAM chord could not be delivered");
+        }
+        await sleep(900);
+        focus = await readFocusAt(cdpBase, 10_000);
+        const opened = focus.ok && focus.visibleQuickAccessTab !== null;
+        stages.push({
+          stage: "open-qam",
+          ok: opened,
+          detail: opened
+            ? `QAM open, pane ${focus.visibleQuickAccessTab} on screen`
+            : "no quickaccess pane became visible after the chord",
+          presses: 1,
+        });
+        if (!opened) {
+          return fail(
+            "the QAM chord was delivered but no quickaccess pane appeared",
+            focus,
+            "could not confirm the Quick Access Menu opened",
+          );
+        }
       }
     }
 

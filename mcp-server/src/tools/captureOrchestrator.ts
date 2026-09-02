@@ -2,6 +2,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 import { getWorkspaceRoot } from "../config.js";
 
 const RECORD_RESULT_RE =
@@ -46,12 +47,58 @@ export type CaptureResult = {
  *    every copy is made from.
  */
 function scriptsDirCandidates(): string[] {
-  const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"));
-  return [
+  return scriptsDirCandidatesFrom(import.meta.url, process.env.DECKY_STUDIO_REPO);
+}
+
+/**
+ * The candidate list for a module living at `moduleUrl`, resolved,
+ * deduplicated and in search order. Pure, and exported so the path arithmetic
+ * can be pinned against the exact URL shapes consumers run this server from.
+ *
+ * ISSUE #2 (bonsAI, 2026-08-30). This used to turn the module URL into a path
+ * by hand: `new URL(url).pathname.replace(/^\/([A-Z]:)/, "$1")`. That regex
+ * recognises only an UPPER-CASE drive letter. bonsAI's `.mcp.json` runs the
+ * server as `node c:/Users/.../mcp-server/dist/index.js` -- lower-case, as
+ * Windows paths are routinely written -- so the URL's pathname `/c:/Users/...`
+ * kept its leading slash, `path.join` turned it into `\c:\Users\...`, and every
+ * candidate was a path nothing could open. Both capture tools failed, and so
+ * did `deck_installCaptureHelper`, the documented remedy, because it bundles
+ * from the same directory -- there was no in-tool way out. `fileURLToPath` is
+ * the real conversion: it handles either case, and percent-encoded characters
+ * such as a space in a user name, which the regex never did. The compiled-
+ * layout test never caught this because `pathToFileURL` on the machine it
+ * runs on produces an upper-case drive letter.
+ *
+ * The first two candidates are the same directory when running from
+ * `dist/tools` -- that was the "same path printed twice" in the report -- so
+ * the list is deduplicated after resolution.
+ *
+ * `repoRoot` is `DECKY_STUDIO_REPO`, which every consumer's mcp.json already
+ * sets. It names the DPS checkout independently of where this module happens
+ * to be running from, so the `templates/scripts` fallback still works once
+ * the module has been relocated (a VSIX bundle, a packed tarball) and the
+ * relative arithmetic above no longer lands on the repo.
+ */
+export function scriptsDirCandidatesFrom(moduleUrl: string, repoRoot?: string): string[] {
+  const here = path.dirname(fileURLToPath(moduleUrl));
+  const raw = [
     path.join(here, "..", "scripts"),
     path.join(here, "..", "..", "dist", "scripts"),
     path.join(here, "..", "..", "..", "templates", "scripts"),
   ];
+  if (repoRoot?.trim()) {
+    raw.push(path.join(repoRoot.trim(), "templates", "scripts"));
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const candidate of raw) {
+    const resolved = path.resolve(candidate);
+    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(resolved);
+  }
+  return out;
 }
 
 /**
