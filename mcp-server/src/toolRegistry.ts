@@ -470,7 +470,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_pressButton",
     description:
-      "Deliver a real controller press to the Deck through the ESP32 bridge board, which Steam sees as a USB gamepad and routes through Steam Input. This is the only press that proves anything about D-pad wiring; if the bridge is unavailable it refuses rather than falling back to a synthetic press, because a synthetic one proves a handler ran and nothing more. To press AND check what happened, use deck_assertFocusMove instead.",
+      "Deliver a real controller press to the Deck through the ESP32 bridge board, which Steam sees as a USB gamepad and routes through Steam Input. This is the only press that proves anything about D-pad wiring; if the bridge is unavailable it refuses rather than falling back to a synthetic press, because a synthetic one proves a handler ran and nothing more. A list of buttons is a SIMULTANEOUS press -- one HID report with every bit set -- which is not a chord: [GUIDE, A] that way is read by Steam as a bare GUIDE press, so the Steam main menu opens and the A lands in whatever that menu is showing (measured 2026-08-26, when the mistake was one press away from launching a game). For a real chord such as the Quick Access Menu toggle -- hold GUIDE, tap A -- use deck_pressChord. To press AND check what happened, use deck_assertFocusMove instead.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -478,12 +478,73 @@ export const TOOLS: ToolDef[] = [
           type: "array",
           items: { type: "string" },
           description:
-            "One or more of UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3. Several at once is a chord, e.g. [GUIDE, A] opens the Quick Access Menu.",
+            "One or more of UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3. Several at once are pressed SIMULTANEOUSLY in one report -- NOT a chord: [GUIDE, A] opens the Steam main menu, not the Quick Access Menu. Use deck_pressChord for hold-then-tap.",
         },
         holdMs: { type: "number", default: 80, description: "How long to hold the press." },
         port: { type: "string", description: "Serial port of the bridge's COM side, e.g. COM7." },
       },
       required: ["buttons"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_pressChord",
+    description:
+      "Hold one button, tap another, release -- a real chord, delivered by the bridge board as four HID reports in sequence. This is how Steam's Quick Access Menu is toggled: hold GUIDE, tap A. It is NOT what deck_pressButton with [GUIDE, A] does: that sends both bits in one report, which Steam reads as a bare GUIDE press, so the main menu opens and the A lands in whatever that menu is showing (measured 2026-08-26, when the mistake was one press away from launching a game). Same refusals as deck_pressButton -- no board, or the killswitch latch -- and nothing is faked in their place. When the goal is the plugin's panel, prefer deck_openPlugin: it asks the Quick Access page whether the menu is already open before toggling it, which a raw chord cannot.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        hold: {
+          type: "string",
+          description: "Button held for the whole chord, e.g. GUIDE. One of UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3.",
+        },
+        tap: { type: "string", description: "Button tapped while `hold` is down, e.g. A." },
+        port: { type: "string", description: "Serial port of the bridge's COM side, e.g. COM7." },
+      },
+      required: ["hold", "tap"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_launchGame",
+    description:
+      "Start a game on the Deck the way a thumb would -- Steam button, Home, the Recent Games shelf, Play -- with every stage verified against a read before the next press, so a QA row that needs 'with a game running' can set that state up itself. It reads Steam's own state over CDP (RunningApps, the app list, the main window's route) and never drives by script: no steam:// URL, no SteamClient.Apps.RunAppById, because a game started the way no thumb can is not evidence about what a thumb gets. Refuses BEFORE pressing anything when: neither or both of name/appid are given; a DIFFERENT game is already running (it names it and points at deck_exitGame -- it never launches a second game); the name is ambiguous (candidates listed, pass appid); or the game is not installed. A game already running returns ok with alreadyRunning:true and zero presses. It presses A only on a control the read taken just before it identified: the shelf tile by the app id in its own image (never its text), then the exact label 'Play' -- an app page showing Install, Update, Buy, Pre-load, Pre-purchase, Purchase, Add to Cart or Download is refused, because that press would spend disk or money. Only the D-pad while searching; A and GUIDE at named stages; never B, START or SELECT; the killswitch latch is checked before every press. A game that is not on the Recent Games shelf is a refusal in v1 (play it once by hand, or extend to the Library grid). The launch signal is the app id appearing in RunningApps (under a second on device) -- not the game's window being up; the route becomes /apprunning and the ring is left wherever Steam puts it, so reopen the plugin with deck_openPlugin, which can open the QAM over a running game. Result is shaped like deck_openPlugin's (stages, seen, presses, fidelity, stopped, reason, checklist), and runs/<runName|launch-game_<ts>>.json holds the stages, the controls seen, and RunningApps before and after.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description:
+            "Library display name. An exact (case-insensitive) match wins; otherwise a unique contains; more than one hit is refused. Give exactly one of name / appid.",
+        },
+        appid: { type: "number", description: "Steam app id, as listed in RunningApps and the library. Give exactly one of name / appid." },
+        budget: { type: "number", default: 40, description: "Max RIGHT presses along the Recent Games shelf before refusing." },
+        waitMs: {
+          type: "number",
+          default: 60000,
+          description: "How long to poll RunningApps (1 s interval) for the app id after A on Play. A timeout is a finding, reported with the presses that were made.",
+        },
+        runName: { type: "string", description: "Name for the evidence file under runs/. Defaults to launch-game_<timestamp>." },
+        writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        port: { type: "string", description: "Serial port of the bridge's COM side." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_exitGame",
+    description:
+      "Exit the running game the way a thumb would -- Steam button, Right into the game panel, Down to 'Exit game', A, then A on 'Confirm' -- with a read before every A. Nothing running returns ok with nothingRunning:true and zero presses. Refuses when the main menu does not open on an entry named after the running game, when no row labelled exactly 'Exit game' (lower-case g) is found within 10 Down presses, or when the confirmation dialog leaves the ring on anything but a control labelled exactly 'Confirm' -- it never guesses between Cancel and Confirm, and reports the game still running. Only the D-pad while searching; the killswitch latch is checked before every press. Done means the app id has left RunningApps (polled 1 s up to waitMs); the measured post-exit state, reported in the result, is the main window on /library/app/<appid> with the ring on Play. Reopen the plugin with deck_openPlugin afterwards. Writes runs/<runName|exit-game_<ts>>.json with the stages, the controls seen, and RunningApps before and after.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        waitMs: { type: "number", default: 60000, description: "How long to poll RunningApps for the app id to leave after A on Confirm." },
+        runName: { type: "string", description: "Name for the evidence file under runs/. Defaults to exit-game_<timestamp>." },
+        writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        port: { type: "string", description: "Serial port of the bridge's COM side." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
       additionalProperties: false,
     },
   },

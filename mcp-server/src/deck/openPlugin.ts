@@ -37,6 +37,7 @@ import { focusKey, describe, labelIsBorrowed } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned } from "./walkTo.js";
 import { readPage } from "./readPage.js";
+import { readRunningApps } from "./gameSession.js";
 
 export interface OpenStage {
   stage: string;
@@ -115,6 +116,13 @@ export interface OpenPluginOptions {
    * distinction the 2026-08-28 rail bug turned on.
    */
   pressFn?: typeof pressButton;
+  /**
+   * Test-only seam for the QAM chord, for the same reason as pressFn: the
+   * chord-first path over a running game (stage open-qam-blind) cannot be
+   * exercised against the board in a suite, and it has to be exercised
+   * somewhere. Production code never sets this.
+   */
+  chordFn?: typeof pressChord;
 }
 
 const CHECKLIST = (name: string): string[] => [
@@ -297,6 +305,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
   };
 
   const press = opts.pressFn ?? pressButton;
+  const chord = opts.chordFn ?? pressChord;
 
   /** A D-pad press followed by a settle and a fresh read. Never A, never B. */
   const nudge = async (dir: "UP" | "DOWN" | "LEFT" | "RIGHT"): Promise<ReadFocusResult> => {
@@ -318,6 +327,88 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     // a list that stays partial comes back as its own reason, not as unowned.
     const settle = { targetsSettleMs: opts.targetsSettleMs ?? DEFAULT_TARGETS_SETTLE_MS };
     let focus = await readFocusAt(cdpBase, 10_000, undefined, settle);
+
+    /*
+     * NO RING ANYWHERE: an unowned ring in Steam's UI, or a game?
+     *
+     * Measured 2026-09-02 (plan 07 § 6.1), on the first attempt to get bonsAI
+     * back after Half-Life 2 launched: with the game in the foreground NO CEF
+     * target carried gpfocus -- the game owns input, Steam's windows own no
+     * ring. The acquire press below then went INTO the game (a DOWN in its
+     * menu), the re-read still found nothing, and the tool refused with "could
+     * not read the Deck's focus state even after placing the ring". The chord
+     * stage was never reached, because its guard keyed on a read that never
+     * succeeded. So the one state deck_launchGame leaves the Deck in was the
+     * one state this tool could not start from.
+     *
+     * A focus read cannot tell the two apart: an unowned ring with the QAM
+     * open -- doc 03, the NORMAL start state here -- reads identically. The
+     * Quick Access page can, asked directly (issue #3's probe): no ring AND no
+     * pane on screen means something else owns input, a game or another
+     * full-screen surface, and a blind D-pad press is a press into it. In that
+     * state the chord goes FIRST, and a D-pad press follows only once a read
+     * shows Steam UI on screen. RunningApps is the confirming signal and goes
+     * into the stage detail; it is read best effort, because an unreadable
+     * list must not turn into a stray press either way.
+     */
+    if (!focus.ok && (focus.reason ?? "").includes("gpfocus marker not found")) {
+      const qam = await probeQuickAccess(cdpBase, { ...settle, timeoutMs: 10_000 });
+      if (qam.answered && qam.visiblePane === null) {
+        const running = await readRunningApps(cdpBase).catch(() => null);
+        const apps = running?.ok ? running.apps : null;
+        const why =
+          apps === null
+            ? "RunningApps could not be read"
+            : apps.length
+              ? `RunningApps: ${apps.map((a) => `${a.display_name} [${a.appid}]`).join(", ")}`
+              : "RunningApps is empty, so a full-screen surface rather than a game";
+        abortIfStopped();
+        const p = await chord("GUIDE", "A", { port: opts.port });
+        if (!p.ok) {
+          stages.push({
+            stage: "open-qam-blind",
+            ok: false,
+            detail: `no ring in any target and no pane on screen (${why}); ${p.reason ?? "chord failed"}`,
+            presses: 0,
+          });
+          return fail(
+            p.reason ?? "chord failed",
+            focus,
+            "the QAM chord could not be delivered over whatever owns input, so nothing was pressed",
+          );
+        }
+        await sleep(900);
+        focus = await readFocusAt(cdpBase, 10_000);
+        // The ring may still be unowned with the menu open (doc 03), or read
+        // from a page other than the Quick Access one; the page's own word
+        // decides whether Steam UI is on screen now.
+        let paneAfter: string | null = focus.ok ? focus.visibleQuickAccessTab : null;
+        if (paneAfter === null) {
+          const again = await probeQuickAccess(cdpBase, { ...settle, timeoutMs: 10_000 });
+          paneAfter = again.answered ? again.visiblePane : null;
+        }
+        const opened = paneAfter !== null;
+        stages.push({
+          stage: "open-qam-blind",
+          ok: opened,
+          detail:
+            "no ring in any target and the Quick Access page reports no pane on screen, so something " +
+            `else owns input (${why}); the QAM chord was sent before any D-pad press` +
+            (opened
+              ? `, and pane ${paneAfter} is on screen${focus.ok ? `, ring on ${describe(focus)}` : ", ring still unowned"}`
+              : ", and no pane appeared"),
+          presses: 1,
+        });
+        if (!opened) {
+          // Not "acquire": a D-pad press here goes into whatever owns the screen.
+          return fail(
+            "the QAM chord was sent over a surface that owns input, but no quickaccess pane appeared",
+            focus,
+            "could not open the Quick Access Menu over whatever owns the screen; no D-pad press was sent into it",
+          );
+        }
+      }
+    }
 
     /*
      * An unowned ring is where this tool is normally CALLED FROM, not an edge
@@ -479,7 +570,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
 
       if (menuShut) {
         abortIfStopped();
-        const p = await pressChord("GUIDE", "A", { port: opts.port });
+        const p = await chord("GUIDE", "A", { port: opts.port });
         if (!p.ok) {
           stages.push({ stage: "open-qam", ok: false, detail: p.reason ?? "", presses: 0 });
           return fail(p.reason ?? "chord failed", focus, "the QAM chord could not be delivered");

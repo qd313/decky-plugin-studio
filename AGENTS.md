@@ -23,6 +23,9 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 | `deck.deploy` | Build + deploy (local SteamOS/Bazzite or remote SSH) |
 | `deck.reloadPlugin` | Restart plugin_loader without redeploy |
 | `deck.openPlugin` | Checklist to open QAM + plugin on Deck |
+| `deck.launchGame` | Start a game by pressing buttons — Steam menu → Home → Recent Games tile (identified by app id) → Play; refuses a second game, an uninstalled one, or Install/Update/Buy |
+| `deck.exitGame` | Exit the running game the same way — Steam menu → Exit game → Confirm; done when `RunningApps` empties |
+| `deck.pressChord` | Hold one button, tap another — the real QAM toggle is hold GUIDE, tap A; `[GUIDE, A]` in `deck.pressButton` is a simultaneous press, which opens the main menu instead |
 | `deck.readPluginLog` | Tail plugin_loader journal on Deck |
 | `deck.getEnv` | Workspace + Deck environment snapshot |
 | `plugin.detect` / `plugin.build` / `plugin.verifyZip` | Workspace validation and build |

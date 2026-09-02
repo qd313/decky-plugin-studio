@@ -7,8 +7,13 @@ to ask a human to start a game. The maintainer's reply, verbatim: *"The rig can 
 game. I've seen it. If you can press buttons on a controller, you can press buttons within
 SteamOS. Draw it up and make sure that the DPS repo knows about it."*
 
-**Status:** drafted 2026-09-02 before the path was walked; the *Measured* sections are filled in
-from the device as the bonsAI spike runs. Nothing in *Measured* is predicted.
+**Status:** implemented 2026-09-02 — `deck_launchGame`, `deck_exitGame` and `deck_pressChord` are
+in the tree (`mcp-server/src/deck/gameSession.ts`, the registry, the dispatch, the docs; § 4
+lists every file), unit-tested through seams (24 tests in `gameSession.test.ts`, plus 3 for the
+§ 6.1 `deck_openPlugin` change in `openPlugin.test.ts`). **Device run pending:** the first
+end-to-end `runs/LAUNCH-GAME-01.json` / `runs/EXIT-GAME-01.json` (§ 5) have not been recorded yet.
+The *Measured* sections were filled in from the device during the bonsAI spike of the same day,
+before the code was written; nothing in them is predicted.
 
 ---
 
@@ -130,18 +135,20 @@ GUIDE plus anything opens the main menu — use `deck_pressChord` for chords.
 Found by grepping for `deck_openPlugin`; a new verb that misses one of these is invisible in
 that surface.
 
-| File | Change |
-|---|---|
-| `mcp-server/src/deck/gameSession.ts` (new) | `launchGame`, `exitGame`, shared readers (`readRunningApps`, `resolveApp`, `readRoute`, `focusedTileAppId`), a `pressFn` / `readFn` seam as `openPlugin.ts:96-107` has |
-| `mcp-server/src/deck/gameSession.test.ts` (new) | the seams drive it without a board: refuses on a second game, refuses on *Install*, presses A only after the app-id read, stops on the latch |
-| `mcp-server/src/index.ts` | three `case "tools/…"` entries in `handle()` |
-| `mcp-server/src/toolRegistry.ts` | three definitions; `toolRegistry.test.ts` fails until dispatch and registry agree |
-| `mcp-server/package.json` | the new test file in the `test` script's list |
-| `docs/MCP_TOOLS.md` | three bullets under *Focus rig*; the `deck.pressButton` bullet corrected |
-| `AGENTS.md`, `pack/AGENTS.md`, `extension/resources/pack/AGENTS.md` | three rows in the tool table |
-| `docs/device-qa-runbook.md` | a *Preconditions* note: how a row says "with a game running" and how the rig satisfies it |
-| `CHANGELOG.md` | *Added* entries under *Unreleased*, with the 2026-08-26 chord trap named |
-| `extension/src/ui/treeProvider.ts` | only if the sidebar lists tools by name (check before editing) |
+| File | Change | Done 2026-09-02 |
+|---|---|---|
+| `mcp-server/src/deck/gameSession.ts` (new) | `launchGame`, `exitGame`, shared readers (`readRunningApps`, `readAllApps`, `readRoute`, `readFocusedTile`), `resolveApp`; seams `pressFn` / `readFocusFn` / `readPageFn` / `sleepFn` as `openPlugin.ts` has. No `chordFn`: neither verb sends a chord — the measured press out of the QAM is a bare GUIDE (§ 6) | ✅ |
+| `mcp-server/src/deck/gameSession.test.ts` (new) | 24 tests through the seams: refuses on a second game, an ambiguous name, an uninstalled game and *Install*; every A is preceded by the read that named its target (asserted per A); shelf not found; the exit happy path and the Cancel-on-the-ring refusal; the latch stops the run before its next press; the evidence file's contents | ✅ |
+| `mcp-server/src/deck/openPlugin.ts` | § 6.1: when no page carries a ring AND the Quick Access page itself reports no pane, the chord goes first (stage `open-qam-blind`, `RunningApps` in its detail) and a D-pad press follows only once a read shows Steam UI; `chordFn` seam; 3 tests in `openPlugin.test.ts` | ✅ |
+| `mcp-server/src/index.ts` | three `case "tools/…"` entries in `handle()` | ✅ |
+| `mcp-server/src/toolRegistry.ts` | three definitions; `deck_pressButton`'s description corrected (a list is a *simultaneous* press); `toolRegistry.test.ts` agrees with the dispatch | ✅ |
+| `mcp-server/package.json` | both new test files in the `test` script's list | ✅ |
+| `docs/MCP_TOOLS.md` | three bullets under *Focus rig*; the `deck.pressButton` bullet corrected | ✅ |
+| `AGENTS.md`, `pack/AGENTS.md`, `extension/resources/pack/AGENTS.md` | three rows in the tool table | ✅ |
+| `docs/device-qa-runbook.md` | a *Preconditions* section: how a row says "with a game running" and how the rig satisfies it | ✅ |
+| `CHANGELOG.md` | *Added* entries under *Unreleased* (the 2026-08-26 chord trap named) and a *Fixed* entry for the 2026-09-02 `deck_openPlugin` gap | ✅ |
+| `extension/src/ui/treeProvider.ts` | it lists tools by name, so the three were added under *MCP tools* | ✅ |
+| `runs/LAUNCH-GAME-01.json`, `runs/EXIT-GAME-01.json` | the first end-to-end device run (§ 5) | ⬜ pending — needs the board and the Deck |
 
 `.claude/worktrees/*` copies are not edited; they are agents' checkouts.
 

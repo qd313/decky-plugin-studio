@@ -19,6 +19,25 @@ Record **build id / git SHA** and **SteamOS** when marking Pass / Partial / Fail
 
 ---
 
+## Preconditions
+
+A row that needs the Deck in a particular state says so in its title or its first step, in
+these words, so the rig can set the state up instead of a person:
+
+| Wording in the row | Meaning | The rig satisfies it with |
+|---|---|---|
+| **with a game running** | `window.SteamUIStore.RunningApps` lists one app before the row's first press | `deck.launchGame { name }` (or `{ appid }`) — refuses if a *different* game is up; `alreadyRunning: true` costs no presses |
+| **without a game running** / **no game** | `RunningApps` is empty | `deck.exitGame {}` — `nothingRunning: true` when it already is |
+| **with a game running and without** | run the row twice, once in each state, and record both | `deck.launchGame`, the row, `deck.exitGame`, the row again |
+
+Name the game in the row (e.g. *Half-Life 2*): the rig launches only what it is told, from the
+Recent Games shelf, and never launches a second game. Both verbs leave the ring wherever Steam
+puts it — get the plugin back with `deck.openPlugin`, which opens the QAM over a running game.
+Each writes `runs/launch-game_<ts>.json` / `runs/exit-game_<ts>.json`; cite the file in the
+row's evidence. Design and device measurements: `docs/planning/07-launch-and-exit-a-game.md`.
+
+---
+
 ## Progress tracker
 
 | Tier | Status | Last run | Notes |

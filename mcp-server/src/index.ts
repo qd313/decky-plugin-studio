@@ -16,7 +16,8 @@ import * as deckAutonomy from "./tools/deckAutonomy.js";
 import { diffRpc } from "./preview/rpcDiff.js";
 import { lintFocus } from "./lint/index.js";
 import { readFocus } from "./deck/readFocus.js";
-import { pressButton } from "./deck/pressButton.js";
+import { pressButton, pressChord } from "./deck/pressButton.js";
+import { launchGame, exitGame } from "./deck/gameSession.js";
 import { assertFocusMove } from "./deck/assertFocusMove.js";
 import { runSequence, SequenceStep } from "./deck/runSequence.js";
 import { openPluginDriven } from "./deck/openPlugin.js";
@@ -230,6 +231,32 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         buttons: (params.buttons as string[]) ?? [],
         holdMs: params.holdMs != null ? Number(params.holdMs) : undefined,
         port: params.port != null ? String(params.port) : undefined,
+      });
+
+    case "tools/deck_pressChord":
+      return pressChord(String(params.hold ?? ""), String(params.tap ?? ""), {
+        port: params.port != null ? String(params.port) : undefined,
+      });
+
+    case "tools/deck_launchGame":
+      return launchGame({
+        name: params.name != null ? String(params.name) : undefined,
+        appid: params.appid != null ? Number(params.appid) : undefined,
+        budget: params.budget != null ? Number(params.budget) : undefined,
+        waitMs: params.waitMs != null ? Number(params.waitMs) : undefined,
+        port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        runName: params.runName != null ? String(params.runName) : undefined,
+        writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
+      });
+
+    case "tools/deck_exitGame":
+      return exitGame({
+        waitMs: params.waitMs != null ? Number(params.waitMs) : undefined,
+        port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        runName: params.runName != null ? String(params.runName) : undefined,
+        writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
       });
 
     case "tools/deck_assertFocusMove":
