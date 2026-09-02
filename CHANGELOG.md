@@ -2,11 +2,12 @@
 
 ## [Unreleased]
 
-> Package versions are at **0.3.9**, bumped for the same reason 0.3.8 was: installing the
-> same version over itself fails with `EBUSY` because a running editor holds the extension
-> directory open, while a new version number installs alongside it. 0.3.9 carries the
-> P1-8/P1-9/P1-10 fixes below into a live VS Code. The entries here are still unreleased --
-> fold them into a `## [0.3.9]` section when cutting the release. Root, `extension` and
+> Package versions are at **0.3.10**, bumped for the same reason 0.3.8 and 0.3.9 were:
+> installing the same version over itself fails with `EBUSY` because a running editor holds
+> the extension directory open, while a new version number installs alongside it. 0.3.9
+> carried the P1-8/P1-9/P1-10 fixes into a live VS Code; 0.3.10 carries the visibility
+> oracle, `deck_sweep`, and the issue #2 / #3 fixes below. The entries here are still
+> unreleased -- fold them into a `## [0.3.10]` section when cutting the release. Root, `extension` and
 > `mcp-server` are pinned together, and `SERVER_INFO` in `mcp-server/src/index.ts` must move
 > with them or the server reports a stale number over MCP `serverInfo` (which it did once,
 > at 0.3.6, while the extension was on 0.3.7). **Stacked installs to clear:** each bump
