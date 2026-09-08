@@ -198,8 +198,12 @@ const DECKY_LIST_LABEL = "decky";
  * plugin that renders a short label reading exactly "Decky" falls back to
  * walking the list, which costs presses and ends in an honest checklist. That is
  * the failure to prefer.
+ *
+ * Exported (2026-09-07) so deck.checkReady can ask "is this plugin's panel
+ * open" without re-deriving this logic -- see checkReady.ts's checkPluginOpen,
+ * which applies the exact same precedence over panelRootMounted() below.
  */
-function looksLikeOpenPanelFor(r: ReadFocusResult | null, name: string): boolean {
+export function looksLikeOpenPanelFor(r: ReadFocusResult | null, name: string): boolean {
   if (!r?.ok || !r.deckyPluginRoot) return false;
   const want = name.trim().toLowerCase();
   if (!want) return false;
@@ -227,7 +231,7 @@ function looksLikeOpenPanelFor(r: ReadFocusResult | null, name: string): boolean
  * Returns null when the page could not be asked at all, so an unreachable CDP
  * endpoint falls back to the labels instead of reading as "not open".
  */
-async function panelRootMounted(selector: string, cdpBase: string): Promise<boolean | null> {
+export async function panelRootMounted(selector: string, cdpBase: string): Promise<boolean | null> {
   const expr =
     `(() => { try { var el = document.querySelector(${JSON.stringify(selector)}); ` +
     "if (!el) return false; var r = el.getBoundingClientRect(); " +

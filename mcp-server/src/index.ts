@@ -9,7 +9,7 @@ import {
   probeIngest,
   getIngestPort,
 } from "./ingest/server.js";
-import { writeDeckEnv, getWorkspaceRoot } from "./config.js";
+import { writeDeckEnv, getWorkspaceRoot, readDeckEnv } from "./config.js";
 import * as deck from "./tools/deck.js";
 import * as plugin from "./tools/plugin.js";
 import * as preview from "./tools/preview.js";
@@ -27,6 +27,7 @@ import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
 import { closeSharedCdpTunnel } from "./deck/cdpTunnel.js";
 import { saveCheck, replayChecks } from "./checks/checkRunner.js";
+import { checkDeckReady, DeclaredState } from "./deck/checkReady.js";
 import { loadPreviewConfig } from "./preview/previewConfig.js";
 import {
   stopAutomation,
@@ -339,6 +340,46 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
       return readFocus({
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
       });
+
+    case "tools/deck_checkReady": {
+      const info = plugin.detectPlugin();
+      const env = readDeckEnv();
+      const configuredRootSelector = loadPreviewConfig().panelRootSelector;
+      let defaultPluginName: string | undefined;
+      try {
+        defaultPluginName = info.valid ? plugin.remotePluginDirName(info.name) : undefined;
+      } catch {
+        // An invalid manifest name still lets every other declared check run;
+        // buildMatches alone reports "missing pluginName" if it was asked for.
+        defaultPluginName = undefined;
+      }
+
+      const declared: DeclaredState = {
+        awake: params.awake != null ? Boolean(params.awake) : undefined,
+        buildMatches: params.buildMatches != null ? Boolean(params.buildMatches) : undefined,
+        runningAppId: Object.prototype.hasOwnProperty.call(params, "runningAppId")
+          ? params.runningAppId === null
+            ? null
+            : Number(params.runningAppId)
+          : undefined,
+        pluginOpen: params.pluginOpen != null ? String(params.pluginOpen) : undefined,
+        noForeignCdpTunnel: params.noForeignCdpTunnel != null ? Boolean(params.noForeignCdpTunnel) : undefined,
+        modalOnScreen: params.modalOnScreen != null ? Boolean(params.modalOnScreen) : undefined,
+        focusRingOwned: params.focusRingOwned != null ? Boolean(params.focusRingOwned) : undefined,
+      };
+
+      return checkDeckReady(declared, {
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        targetsSettleMs: params.targetsSettleMs != null ? Number(params.targetsSettleMs) : undefined,
+        timeoutMs: params.timeoutMs != null ? Number(params.timeoutMs) : undefined,
+        rootSelector: params.rootSelector != null ? String(params.rootSelector) : configuredRootSelector,
+        pluginRoot: params.pluginRoot != null ? String(params.pluginRoot) : info.valid ? info.root : undefined,
+        pluginName: params.pluginName != null ? String(params.pluginName) : defaultPluginName,
+        user: env.DECK_USER ?? "deck",
+        host: env.DECK_IP,
+        pingFn: deck.pingDeck,
+      });
+    }
 
     case "tools/deck_readPluginLog":
       return deckAutonomy.readPluginLog(

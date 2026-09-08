@@ -696,6 +696,72 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "deck_checkReady",
+    description:
+      "Diff a DECLARED Deck state against the ACTUAL one before a run starts, so a blind run fails at step zero with a named reason instead of burning a whole run on a sleeping Deck, a stale build, a foreign CDP tunnel, an unexpected game, an on-screen modal, or an unowned focus ring. Every field is optional -- an absent one is not checked at all -- and a check that could not be evaluated (an unreachable Deck, a reader that errors) reports 'unknown' rather than silently passing. Read-only: this presses nothing. `buildMatches` reuses the exact file set deck_deploy copies and compares sha256 hashes; the other checks read through readFocus/readPage/gameSession/killswitch, the same machinery those tools use.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        awake: {
+          type: "boolean",
+          description: "The Deck must (true) or must not (false) be reachable right now.",
+        },
+        buildMatches: {
+          type: "boolean",
+          description:
+            "The build installed on the Deck must (true) or must not (false) have the same content hash as the local plugin's deploy sources (dist, main.py, plugin.json, etc). Uses pluginRoot/pluginName and the configured DECK_IP/DECK_USER.",
+        },
+        runningAppId: {
+          type: ["number", "null"],
+          description:
+            "The Steam app id that must be the one running game, or null to declare that nothing should be running. Omit this field entirely to skip the check.",
+        },
+        pluginOpen: {
+          type: "string",
+          description: "Name of the plugin whose own panel must currently be open and on screen in the Quick Access Menu.",
+        },
+        noForeignCdpTunnel: {
+          type: "boolean",
+          description:
+            "true to require no live CDP tunnel currently registered by a different process (e.g. another agent session already driving this Deck).",
+        },
+        modalOnScreen: {
+          type: "boolean",
+          description:
+            "Whether a Steam modal dialog (e.g. the exit-game confirmation) should currently be on screen. Best-effort: only detects a modal that has captured the gamepad focus ring, the one shape this codebase has measured.",
+        },
+        focusRingOwned: {
+          type: "boolean",
+          description: "Whether Steam's gamepad focus ring should currently be owned by something.",
+        },
+        pluginRoot: {
+          type: "string",
+          description: "Plugin workspace root, for buildMatches. Defaults to the detected workspace plugin.",
+        },
+        pluginName: {
+          type: "string",
+          description:
+            "Deployed directory name (plugin.json's name, case intact), for buildMatches. Defaults to the detected plugin's name.",
+        },
+        rootSelector: {
+          type: "string",
+          description:
+            "CSS selector for the plugin's own panel root, for a definitive pluginOpen check instead of inferring from Decky's pane labels. Defaults to panelRootSelector in .decky/preview.json.",
+        },
+        cdpUrl: {
+          type: "string",
+          description: "Existing CDP endpoint; omit to open a temporary tunnel for whichever checks need one.",
+        },
+        targetsSettleMs: {
+          type: "number",
+          description: "Upper bound on waiting for Steam's UI pages to be listed, e.g. right after a deploy restarts the loader. Default 10s.",
+        },
+        timeoutMs: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_readPluginLog",
     description:
       "Read the plugin's log from the Deck. Use filter to grep server-side rather than pulling a large log and searching locally.",
