@@ -5,6 +5,8 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 ## Platform contract (read first)
 
 - **Focus-graph first:** D-pad navigation uses Decky `Focusable` callbacks (`onMoveLeft`, `onMoveRight`, `onOKButton`, etc.), not DOM `keydown`.
+- **The linter now enforces the focus-graph rule:** R13 flags D-pad routing through a DOM `keydown`/`keyup`/`keypress` handler, and R14 flags `instanceof Element`/`Node` on a node that may come from another document (the QAM is a different realm, so the brand check is false for every node).
+- **Fidelity is earned:** `deck.pressButton` reports `fidelity: "wire-sent"` — the bridge firmware acked, which says nothing about whether the Deck received anything. Pass `verify: true` to earn `"steam-routed"`, which reads focus before and after the press. Treat a bare `wire-sent` as "sent", never as "landed".
 - **Build parity:** After changes to `src/`, `main.py`, or `plugin.json`, run `plugin.build` (MCP) or `./scripts/build.sh` / `./scripts/build.ps1` before on-device QA.
 - **Preview vs on-device:** The live preview is **very much beta**. Use `preview.start` for fast UI iteration; use `deck.deploy` + on-device QA for focus/layout bugs the preview cannot reproduce faithfully.
 
@@ -24,6 +26,10 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 | `deck.launchGame` | Start a game by pressing buttons — Steam menu → Home → Recent Games tile (identified by app id) → Play; refuses a second game, an uninstalled one, or Install/Update/Buy |
 | `deck.exitGame` | Exit the running game the same way — Steam menu → Exit game → Confirm; done when `RunningApps` empties |
 | `deck.pressChord` | Hold one button, tap another — the real QAM toggle is hold GUIDE, tap A; `[GUIDE, A]` in `deck.pressButton` is a simultaneous press, which opens the main menu instead |
+| `deck.checkReady` | Declare the state a run needs (awake, build hash, game, tab, no foreign tunnel, no modal, ring owned) and get the diff against reality — fails at step zero with a named reason. An unknown never reads as a pass |
+| `deck.saveCheck` / `deck.replayChecks` | Save a sweep or sequence with its expected landings as a named check file; rerun them all after a deploy and diff. Timing, retries and fidelity are ignored on purpose |
+| `deck.holdAwake` / `deck.restorePowerSettings` | Hold the Deck awake for a run, then put the exact previous timeouts back. **Always pair them — expiry is lazy, so an unrestored hold leaves the Deck awake and draining** |
+| `deck.snapshotSettings` / `deck.restoreSettings` | Copy the plugin's settings (optionally data) directory off the Deck and put exactly that copy back |
 | `deck.readPluginLog` | Tail plugin_loader journal on Deck |
 | `deck.getEnv` | Workspace + Deck environment snapshot |
 | `plugin.detect` / `plugin.build` / `plugin.verifyZip` | Workspace validation and build |

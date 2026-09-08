@@ -177,6 +177,8 @@ Three rules keep that safe:
 ## Planned features
 
 ### Hold the Deck awake for a test run, then put the setting back
+> **Shipped 2026-09-07 (plan 09, lane 1) — desk-verified only, never run against a Deck.**
+
 ★★ · Planned — asked 2026-09-07
 - **Problem:** QA runs involve a lot of waiting (slow replies, game launches, a person reading results), and the Deck falls asleep mid-run. Presses land on a sleeping machine and get lost; reads come back empty — costing real time working out "did the Deck sleep" versus "did the thing under test break."
 - **What to build:** two paired calls. One turns off the screen/suspend timeouts and records their old values; the other restores exactly those values.
@@ -198,6 +200,8 @@ Three rules keep that safe:
 - **Related:** wake option 1's bridge keyboard is the same hardware *Type text on the Deck* below needs; build it once.
 
 ### Save and restore the plugin's settings around a test run
+> **Shipped 2026-09-07 (plan 09, lane 1) — desk-verified only, never run against a Deck.**
+
 ★★ · Planned — asked 2026-09-07
 - **Problem:** every device session ends with someone putting the Deck back by hand — settings, pinned test questions, which tab was open. bonsAI's plan 31 lists what each round will change and restore, the plan 32 log ends with a paragraph doing it manually, and a `settings.json.bak-preQA` sits on the Deck because nothing tooled does this.
 - **What to build:** two paired calls. One copies the plugin's settings directory (and optionally its data directory) over SSH into a run file. The other puts exactly that copy back. Refuse to take a new snapshot while an old one was never restored, and make the restore safe to call when nothing changed — the same safety rules as *Hold the Deck awake* above.
@@ -205,6 +209,8 @@ Three rules keep that safe:
 - **Acceptance:** a device round that changes five settings and pins three test chips ends with the plugin's files byte-identical to the snapshot, with no hand edits.
 
 ### Check the Deck is ready before a run starts
+> **Shipped 2026-09-07 (plan 09, lane 2) — desk-verified only, never run against a Deck.**
+
 ★★★ · Planned — asked 2026-09-07
 - **Problem:** runs start blind. bonsAI's plan 23 names "is the Deck in the state I think it is" as the one bucket worth investing in, and the log shows why: a sleeping Deck, a stale build proven only by a manual `md5sum`, a foreign tunnel, a game running when none was expected, and a Steam dialog nobody knew was on screen. Each one costs a run plus the time to work out it wasn't the thing under test.
 - **What to build:** one call that takes a declared state and returns the diff: awake, deployed build hash equals the local build, running game is X or none, plugin open on tab Y, no foreign CDP tunnel, nothing modal on screen, focus ring owned. Any mismatch fails the run at step zero with a named reason.
@@ -212,6 +218,8 @@ Three rules keep that safe:
 - **Acceptance:** a run against a Deck that fell asleep, or that still has last night's build, stops before the first press and says which precondition failed.
 
 ### Save a passing check and replay it after every deploy
+> **Shipped 2026-09-07 (plan 09, lane 3) — desk-verified only, never run against a Deck.**
+
 ★★ · Planned — asked 2026-09-07
 - **Problem:** bonsAI reruns the same sweeps by hand after every build (plan 32: two regression sweeps at 03:50 on build 4), and its key metric is "bugs fixed more than once" — but nothing counts that. Its M4 milestone is exactly "a D-pad bug locked by a check that fails without the fix," reached once by hand.
 - **What to build:** a way to save a `deck_runSequence` or `deck_sweep` result, with its expected landings, as a named check file in the consumer repo. A replay call reruns every saved check after a deploy and diffs against the saved result. Sweep reports already reproduce byte-for-byte across runs, so this is a file format plus a loop.
@@ -239,6 +247,12 @@ Three rules keep that safe:
 - **Acceptance:** three consecutive Asks on the Deck report three separate durations with the per-stage split, and a probe-style false PASS is impossible by construction.
 
 ### Make the preview behave more like Steam
+> **Partly shipped 2026-09-07 (plan 09, lane 4).** Lint rules R13 (D-pad via DOM `keydown`) and R14
+> (cross-realm `instanceof Element`/`Node`) landed, and the preview shim now swallows direction keys on
+> the capture phase so a `keydown` D-pad handler stops working there as it does on device. **Still open:**
+> rendering the plugin in a separate frame, so cross-realm brand checks fail in the preview too — see
+> `preview-server/src/sandbox-host.tsx`'s `mount()`, where the plugin currently shares a document with the shim.
+
 ★★★ · Planned — asked 2026-09-07
 - **Problem:** fixes pass on the PC and do nothing on the Deck, repeatedly. The spoiler-fence keydown intercept was "dead code on hardware and alive under vitest, which is the recurrence engine" (`31423e7`) — Steam never dispatches DOM keyboard events into a plugin. The hidden-tab trap's `instanceof Element` check was false for every node because the QAM document is a different realm (`d86b694`), and jsdom shares realms so the test couldn't reproduce it.
 - **What to build, in three parts:** (1) the preview stops sending DOM keydown for D-pad and fires only Focusable nav props, as Steam does; (2) the plugin renders in a separate frame so a brand check that fails on the Deck fails in the preview too; (3) the focus linter gains rules against D-pad routing via keydown and against `instanceof Element` / `Node` on nodes from another document.
@@ -309,37 +323,26 @@ Three rules keep that safe:
 
 ## Open bugs
 
+### Six tools still claim `fidelity: "steam-routed"` from a press count
+★★ · Open — found 2026-09-07 (plan 09, lane 6)
+- **Problem:** lane 6 made `deck_pressButton` honest (`"wire-sent"` unless `verify: true` earns `"steam-routed"`), but `assertFocusMove.ts`, `walkTo.ts`, `sweep.ts`, `openPlugin.ts`, `runSequence.ts` and `gameSession.ts` each independently hardcode `fidelity: "steam-routed"` based purely on `presses > 0`, and none of them reads the field `pressButton()` now returns.
+- **Why it matters:** it is the same false claim the lane just removed, one level up and at a coarser grain — a whole sweep reports `steam-routed` on a dead path exactly as a single press used to. Fixing the leaf while leaving six callers asserting the same untruth buys less than it looks like.
+- **Not fixed in lane 6 on purpose:** outside the three-part brief; flagged rather than silently scope-crept.
+- **Fix:** have each of the six report the weakest fidelity any of its presses actually earned, rather than deriving one from a count.
+
+### Two different "build hash" implementations, both called the build hash
+★★ · Open — found 2026-09-07 (plan 09, merge review)
+- **Problem:** lanes 2 and 3 each needed to fingerprint "the files `deck_deploy` would ship" and each built its own. `deck/buildHash.ts` (lane 2) hashes each file, then hashes the sorted `path:sha256` lines; `checks/buildHash.ts` (lane 3) hashes `rel\0content\0` concatenated in one pass. Both read the same `listDeploySources()` manifest and **both are correct**; they simply produce different values for the same tree. Measured on `example-plugin`: `sha256:2f4ef12a…` (lane 3) versus `b70fcb14…` (lane 2).
+- **Why it matters:** `deck_checkReady` reports "the deployed build matches" against one, and `deck_saveCheck` stamps a check file with the other. Those two facts are most useful together — "this check passed against the build you are running" — and today they cannot be compared.
+- **Why it was not unified at merge:** lane 3's hash is **persisted inside saved check files**, so changing the algorithm silently invalidates every check already on disk. That is a file-format decision, not a merge cleanup.
+- **Fix:** pick one (lane 2's is the superset — it also hashes remotely over SSH), have the other call it, and bump the check file's `formatVersion` so old files are rejected with a clear message rather than silently mis-compared.
+
 ### The extension's 30s status poll opens COM7 and collides with presses
 ★ · Open — found 2026-08-31, mitigated
 - **Problem:** the extension polls `deck_status` every 30s ([extension.ts](../extension/src/extension.ts) `pollStatus`), which opens the same serial port a live press is trying to use. Every early `deck_sweep` run died around press 10–22 with `PermissionError: could not open port 'COM7'`.
 - **Mitigation shipped:** `pressButton` now retries once, 350ms later, on exactly this error, reports `retried: true`, and callers surface it as `pressRetried` / `pressRetries` so the collision stays visible instead of hidden. Also fixed the error message getting truncated before the actual exception line.
 - **Still needed:** the status poll shouldn't open the serial port while a run holds it (shared port ownership, or a cached last-known state), and the extension shouldn't probe at all while a run is live.
 - **Root fix:** *Only one driver at a time* under Planned features — the poll simply stays off the port while a lease is held.
-
-### `bridgeReady` and `fidelity: "steam-routed"` both report success down a dead path
-★★★ · Open — found 2026-08-27
-- **Problem:** with the bridge board connected to the host but its USB lead unplugged from the Deck, every layer reported success and nothing actually happened — `deck_status` said `bridgeReady: true`, `deck_pressButton` said `ok: true, fidelity: "steam-routed"`, and focus reads before/after the press showed no change.
-- **Cause:** both signals only check the near half of the path. `bridgeReady` just confirms the serial port opens and the firmware acks — which it does regardless of whether its USB side reaches the Deck. `fidelity: "steam-routed"` claims the Deck received the press without ever asking the Deck.
-- **Why it matters more than the star rating suggests:** a confident false "success" is worse than an honest failure — the same class of problem the killswitch feature exists to prevent.
-- **Why it's not fixed yet:** the honest fix costs a press — proving delivery means reading focus before and after a real press. Minimum fix in the meantime: rename `bridgeReady` to something accurate like `bridgePortOpen`, and stop calling an unverified press `steam-routed`.
-- **Repro:** unplug just the board's Deck-side USB lead, leave the host-side COM port connected, press a button, read focus twice.
-
-### `deck_runSequence` crashes on a malformed step instead of rejecting it cleanly
-★ · Open — found 2026-08-27
-- **Problem:** passing `{"buttons": ["DOWN"]}` instead of the correct `{"press": "DOWN"}` throws a raw `TypeError: Cannot read properties of undefined (reading 'trim')` instead of a clear validation error.
-- **Cause:** the registry schema already declares the required shape, but nothing enforces it before the step runs.
-- **Why it matters:** the caller is usually an agent that guessed a field name — a validation error tells it to re-read the schema; a `TypeError` sends it debugging the server instead.
-
-### Deploy re-owns pre-existing plugin content, and the loader-restart message cries wolf
-★ · Open — found 2026-08-27
-- **Issue 1 — ownership:** the final `sudo chown -R root:root <target>` walks the *entire* installed directory, not just what was just uploaded — so pre-existing content (like bonsAI's `data/`) silently changes ownership. Harmless if the plugin only reads it, a silent problem if anything writes there, and it also blocks a later plain-`scp` deploy from overwriting those files. Fix: scope the chown to only what was staged.
-- **Issue 2 — false alarm:** `sshRestartLoader()` tries a user-scope restart first, which always fails because the systemd unit is system-scope — so every *successful* restart still prints a scary "Failed to restart" line. Cosmetic, but it trains people to ignore the one failure message that would actually matter.
-
-### Every CDP read opens and tears down its own SSH tunnel
-★★ · Open
-- **Problem:** `withCdpTunnel` ([cdpTunnel.ts](../mcp-server/src/deck/cdpTunnel.ts)) spawns a fresh SSH tunnel, waits for it to be ready, runs the call, then closes it — for every single `deck_readPage` / `readFocus` / `walkTo` / `runSequence` call. A round trip is ~350ms on this network, plus a 300ms-step readiness poll on top, so a ~150ms read ends up costing close to a second.
-- **Why it matters now:** this is the largest remaining per-step cost, now that the bridge fix (below) got presses down to ~0.4s.
-- **Options:** keep one tunnel alive for the server's whole lifetime and hand its URL to every tool call (the `cdpUrl` input already half-exists for this), or use SSH `ControlMaster` / `ControlPersist` to amortize the connection cost. Expected gain: roughly 2–3x on read-heavy runs.
 
 ### `deck_openPlugin` intermittently fails to open the QAM
 ★★ · Open
@@ -348,15 +351,33 @@ Three rules keep that safe:
 - **Cost:** a full failed run plus a retry, and the failure message points at hardware/config, sending the reader to check cabling when nothing is wrong there.
 - **Fix idea:** retry the pane-visibility check on a short loop before declaring failure, and if a resend is genuinely needed, say in the message that a retry usually works.
 
-### `deck_walkTo` calls a legitimate stay-put a stall
-★★ · Open
-- **Problem:** the stall detector compares the focused *element* between presses. A container that handles its own left/right/up/down internally (like bonsAI's context-chip strip) looks frozen to that check even though it's actually responding — `walkTo` reported `stalled: true` after 3 presses when 2 more presses would have walked out of the strip onto the next real control.
-- **Why it matters:** a false dead end reads like a focus-trap bug in the plugin being tested, when the plugin is fine.
-- **Fix idea:** treat a change in the focused element's text/`aria-label` as movement even when the DOM node itself doesn't change — that's exactly what an internally-paged container does change.
-
 ---
 
 ## Fixed bugs
+
+### Fixed 2026-09-07 (plan 09 — eight parallel lanes)
+
+Landed desk-verified only: unit tests green, **no on-device pass yet**. See
+[09-parallel-feature-session.md](planning/09-parallel-feature-session.md) § Phase 2.
+
+**`bridgeReady` and `fidelity: "steam-routed"` both reported success down a dead path** · ★★★ (lane 6)
+- Fixed by `bridgePortOpen` (honest name; `bridgeReady` kept as a deprecated alias because bonsAI reads it) and by making `"steam-routed"` unreachable except through the new opt-in `verify: true`, which reads focus before and after a real press. An unverified press reports `"wire-sent"` — the firmware acked, and nothing more. `preview_start` had the same one-line disease and now checks the URL answers. **Its device repro — unplug the board's Deck-side lead — is the one phase-2 step that needs a human's hands, and is still outstanding.**
+- Also found: the lane brief assumed the extension's status bar and tree view display bridge state. They do not — nothing in `extension/` reads `bridgeReady`/`bridgePort`/`bridgeReason` today. No extension change was needed.
+
+**Every CDP read opened and tore down its own SSH tunnel** · ★★ (lane 7)
+- One tunnel, opened lazily and shared for the process lifetime; `close()` became a no-op so no call site changed. 2.6x at 8 reads, 3.1x at 20, against the faked layer at real costs. Dead-tunnel rebuild, single-creation-under-race, IP change, shutdown and killswitch teardown all handled explicitly. Residual: a Deck that sleeps without resetting TCP leaves ssh believing the link is fine for up to ~30 s.
+
+**`deck_runSequence` crashed on a malformed step** · ★ (lane 5)
+- Steps validated before the run starts — ahead of the killswitch check and the tunnel — with the step index and offending field named.
+
+**Deploy re-owned pre-existing plugin content, and the restart message cried wolf** · ★ (lane 5)
+- Chown scoped to the staged manifest entries; the doomed user-scope restart attempt removed so a successful restart stops printing a failure. A real failure reports exactly as before.
+
+**`deck_walkTo` called a legitimate stay-put a stall** · ★★ (lane 5)
+- A change in the focused element's accessible name now counts as movement even when the DOM node does not, via the existing shared resolver.
+
+**`npm test` failed on a clean checkout** · (merge)
+- The test script now runs `copy-scripts.mjs`, not just `tsc`. Four of eight lanes independently lost time to this.
 
 ### Fixed 2026-09-02
 

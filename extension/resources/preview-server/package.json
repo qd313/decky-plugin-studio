@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --import tsx --test src/focusGraph.test.ts"
   },
   "dependencies": {
     "html2canvas": "^1.4.1",
@@ -19,6 +20,7 @@
     "@types/react-dom": "^19.0.0",
     "@types/ws": "^8.5.10",
     "@vitejs/plugin-react": "^4.3.0",
+    "tsx": "^4.7.0",
     "typescript": "^5.6.2",
     "vite": "^5.4.0"
   }
