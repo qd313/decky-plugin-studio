@@ -99,6 +99,28 @@ test("R11: declaring the state clears the warning", () => {
   assert.equal(warnings("r11-good", "R11").length, 0);
 });
 
+test("R13: a normal keydown handler (Tab, in a text field) produces no warning", () => {
+  assert.equal(warnings("r13-good", "R13").length, 0);
+});
+
+test("R13: a keydown listener routing Enter/Space to an app action is reported once", () => {
+  const found = warnings("r13-bad", "R13");
+  assert.equal(found.length, 1);
+  assert.match(found[0].headline, /routes A\/B activation via a DOM key event/);
+  assert.match(found[0].action, /onOKButton/);
+});
+
+test("R14: instanceof Element against a self-registered ref produces no warning", () => {
+  assert.equal(warnings("r14-good", "R14").length, 0);
+});
+
+test("R14: instanceof Element on event.target is reported once", () => {
+  const found = warnings("r14-bad", "R14");
+  assert.equal(found.length, 1);
+  assert.match(found[0].headline, /instanceof Element checked on a node that may cross documents/);
+  assert.match(found[0].action, /\.contains\(\)/);
+});
+
 test("R12: stops built from backend data are reported", () => {
   const found = warnings("r12-bad", "R12");
   assert.equal(found.length, 1);
