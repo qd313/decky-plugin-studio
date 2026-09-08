@@ -177,9 +177,9 @@ Three rules keep that safe:
 ## Planned features
 
 ### Hold the Deck awake for a test run, then put the setting back
-> **Spike run on hardware 2026-09-08. The answer is yes: a logind block inhibitor stops Steam suspending this Deck.**
-> v1 (plan 09, lane 1) shipped broken and is still broken on `main` — see
-> [Open bugs](#deck_holdawake-does-not-hold-a-steam-deck-awake). What follows is the measured replacement.
+> **Shipped 2026-09-08 and verified on the Deck.** Second implementation: a logind block
+> inhibitor, replacing v1's two settings that held nothing. See
+> [Fixed bugs](#fixed-2026-09-08). The spike that found the mechanism is preserved below.
 
 ★★ · Planned — asked 2026-09-07, re-scoped to ★★★★ 2026-09-08, **back to ★★ the same day once the spike answered it**
 - **Problem:** QA runs involve a lot of waiting (slow replies, game launches, a person reading results), and the Deck falls asleep mid-run. Presses land on a sleeping machine and get lost; reads come back empty — costing real time working out "did the Deck sleep" versus "did the thing under test break."
@@ -338,14 +338,6 @@ Three rules keep that safe:
 
 ## Open bugs
 
-### `deck_holdAwake` does not hold a Steam Deck awake
-★★★ · Open — found 2026-09-08 on the plan-09 phase-2 device pass
-- **Problem:** the tool reports `ok: true`, "screen/suspend timeouts disabled", and `restored: true` — and controls nothing. Neither setting it targets governs Game Mode sleep.
-- **Measured on device:** `xset q` on `DISPLAY=:1` answers, but reports **"Server does not have the DPMS Extension"** — the whole `xset dpms`/`xset s` half is a no-op on this Deck's Xwayland. Sleep here is owned by **gamescope** (`start-gamescope-session`, `--xwayland-count 2`) with `upower`/`vpower`, not by systemd-logind's idle action, so `IdleActionSec` is the wrong knob even when it is written successfully.
-- **And restore does not restore.** Both reads collapse "could not read" into `0`, and `0` is also the value meaning "disabled". An **absent** `IdleActionSec` — where systemd's own default (30 min, per the commented line in `logind.conf`) applies — is therefore recorded as `previous: 0`, and restore writes back an explicit `IdleActionSec=0` that is never removed. The Deck is left in a state it was not in before, while the tool reports success. **Cleaned up 2026-09-08:** the QA Deck's `/etc/systemd/logind.conf` did carry an uncommented `IdleActionSec=0` from this pass — proven added by the tool rather than pre-existing (file mtime 00:19 on the night of the run, the line appended as the last line of an otherwise entirely commented stock file). It was removed, and the file is back to stock with `[Login]` as its only uncommented line; a copy of the modified version is at `/etc/systemd/logind.conf.dps-bak-20260908` on the Deck.
-- **Why the unit tests did not catch it:** the SSH layer is faked, so the fake answers whatever the test wrote — the "test mocks the thing under test" case the acceptance bar's honesty paragraph exists to surface. **The lane's own report predicted this precisely** and marked the feature device-unverified. The process worked; the feature does not.
-- **Fix: known, and measured on hardware 2026-09-08.** Replace both settings with a single logind **block-mode `sleep` inhibitor**, held in system scope via `systemd-run` — see [Hold the Deck awake](#hold-the-deck-awake-for-a-test-run-then-put-the-setting-back) for the measurement and the exact commands. Steam refuses to suspend while one is held, and says so itself (`Access denied due to active block inhibitor`). A lease has nothing to read and nothing to write, so both halves of this bug disappear rather than getting patched: there is no "absent versus 0" to confuse, and no file to leave changed. The tool can also *prove* it holds the lock (`systemd-inhibit --list`) instead of asserting success. Until that ships, `deck_holdAwake` must refuse rather than report a hold it did not take.
-
 ### The extension's 30s status poll opens COM7 and collides with presses
 ★ · Open — found 2026-08-31, mitigated
 - **Problem:** the extension polls `deck_status` every 30s ([extension.ts](../extension/src/extension.ts) `pollStatus`), which opens the same serial port a live press is trying to use. Every early `deck_sweep` run died around press 10–22 with `PermissionError: could not open port 'COM7'`.
@@ -365,6 +357,15 @@ Three rules keep that safe:
 ## Fixed bugs
 
 ### Fixed 2026-09-08
+
+**`deck_holdAwake` held nothing, and its restore changed the Deck** · ★★★ (opened on the plan-09 phase-2 device pass, rebuilt and verified 2026-09-08)
+- **Problem:** the tool reported `ok: true`, "screen/suspend timeouts disabled" and `restored: true`, and controlled nothing. `xset q` on this Deck's Xwayland answers *"Server does not have the DPMS Extension"*, so that half was a no-op on every call, and Game Mode sleep is not governed by logind's idle action, so `IdleActionSec` was the wrong knob even when written successfully. Both reads also collapsed "could not read" into `0` — which is *also* the value meaning "disabled" — so an **absent** `IdleActionSec` was recorded as `previous: 0` and the restore wrote back an explicit `IdleActionSec=0` that was never removed. It reported success while leaving the machine changed.
+- **Replaced, not patched.** `deck_holdAwake` now holds a systemd-logind **block-mode `sleep` inhibitor** and `deck_restorePowerSettings` releases it. Steam suspends *through* logind (`SteamClient.System.SuspendPC()`), so the lock refuses it outright — Steam logs the refusal itself: `Error org.freedesktop.DBus.Error.AccessDenied: Access denied due to active block inhibitor`.
+- **Why that retires the bug class rather than fixing an instance of it:** an inhibitor is a *lease*. Nothing is read and nothing is written, so there is no previous value to capture, no file to restore, and no "absent versus 0" to get wrong. Every failure falls toward the safe state on its own — the unit dies, the host crashes, or the TTL lapses, and the Deck sleeps again. The snapshot state machine is gone from this feature entirely (`settingsSnapshot.ts` still uses `snapshotLease.ts`, which is the right tool for something that genuinely does have old values to put back).
+- **The hold is verified, not asserted** — the actual repair for what made v1 dishonest. `systemd-inhibit --list` is read back and the matching line is returned as `evidence`; `held: true` means a lock was *seen*. When the lock does not appear the tool reports `ok: false` and says the Deck can still sleep, rather than claiming a hold it never took. The release is symmetrical: a lock still listed after the stop is a failure, because a Deck that cannot sleep is a battery problem somebody needs to hear about.
+- **The detail the whole thing turns on:** the lock is taken with `systemd-run --unit=`, in **system scope**. SteamOS sets `KillUserProcesses=True`, so anything started from an SSH session dies with that session — including a `setsid`-detached process, which escapes the controlling terminal but not the systemd session scope. The first spike run did exactly that, the lock was already dead when the suspend arrived, the Deck slept, and it read as a clean negative. A unit test pins this so it cannot regress to a background process.
+- **A v1 run file left on disk is reported and cleared, and its values are deliberately NOT pushed back:** v1 recorded an absent `IdleActionSec` as `0`, so replaying its snapshot is precisely how Decks ended up carrying an `IdleActionSec=0` they never had. The warning names `/etc/systemd/logind.conf` so a human can check.
+- **Verified on the Deck 2026-09-08**, end to end: `deck_holdAwake` returned `held: true` with the real lock line quoted; `SuspendPC()` was then called and the Deck stayed up, with Steam logging the refusal; `deck_restorePowerSettings` reported `released: true`; a second release was a clean no-op (`wasHeld: false`); and the Deck came back to exactly its four stock inhibitors with `logind.conf` untouched. 21 unit tests, 390 in the suite.
 
 **Six tools still claimed `fidelity: "steam-routed"` from a press count** · ★★ (opened by lane 6, 2026-09-07)
 - **Problem:** lane 6 made `deck_pressButton` honest, and six callers kept the lie one level up. `assertFocusMove.ts`, `walkTo.ts`, `sweep.ts`, `openPlugin.ts`, `runSequence.ts` and `gameSession.ts` each hardcoded `fidelity: "steam-routed"` from `presses > 0` — or, in `runSequence`'s case, from `results.some(r => r.ok)`, which let a single passing step license the claim for every other step in the run. None read the field `pressButton` had started returning, so a whole sweep reported `steam-routed` down a physically dead wire exactly as a single press used to.

@@ -779,28 +779,36 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_holdAwake",
     description:
-      "Disable the Deck's screen-off and suspend timeouts for the length of a QA run, recording " +
-      "their previous values first so deck_restorePowerSettings can put them back exactly. Use " +
-      "this before a run with a lot of waiting -- slow replies, a game launch, a person reading " +
-      "results -- where the Deck falling asleep would swallow presses and empty-read the rest, " +
-      "rather than reveal a real defect. Refuses if an earlier hold from this same tool was never " +
-      "restored, naming when it was taken and pointing at deck_restorePowerSettings; that hold " +
-      "also expires and restores itself automatically if nothing calls it first, so a forgotten " +
-      "restore costs battery for a bounded time rather than forever. DOES NOT ACTUALLY HOLD A " +
-      "STEAM DECK AWAKE -- measured on hardware 2026-09-08. It targets xset DPMS (this Deck's " +
-      "Xwayland reports no DPMS extension at all, so that half is a no-op) and systemd-logind's " +
-      "IdleActionSec (Game Mode sleep is owned by gamescope, not logind). It will report ok:true " +
-      "and hold nothing. Until its replacement lands, set Steam's own sleep timer to Never before " +
-      "a long unattended run, and do not treat this call as having done anything.",
+      "Stop the Deck falling asleep for the length of a QA run, by holding a systemd-logind " +
+      "BLOCK inhibitor on sleep. Use it before a run with a lot of waiting -- slow replies, a " +
+      "game launch, a person reading results -- where the Deck sleeping would swallow presses " +
+      "and empty-read the rest rather than reveal a real defect. Measured on hardware " +
+      "2026-09-08: Steam suspends through logind (SteamClient.System.SuspendPC()), and with " +
+      "this lock held Steam is refused and says so itself -- 'Access denied due to active " +
+      "block inhibitor'. NOTHING ON THE DECK IS MODIFIED: this is a lease, not a setting, so " +
+      "there is no previous value to capture and nothing to put back, and every failure falls " +
+      "toward the safe state -- if the lock is dropped, the host crashes, or the TTL runs out, " +
+      "the Deck simply sleeps again. THE HOLD IS VERIFIED, NOT ASSUMED: the lock is read back " +
+      "from systemd-inhibit --list and the matching line is returned as `evidence`. held:true " +
+      "means a lock was actually seen; if the lock does not appear, this reports ok:false and " +
+      "says the Deck can still sleep, rather than claiming a hold it never took. Call " +
+      "deck_restorePowerSettings when the run ends; the TTL is a safety net, not the normal path.",
     inputSchema: {
       type: "object",
       properties: {
         ttlMinutes: {
           type: "number",
           default: 30,
-          description: "Auto-restore after this many minutes if deck_restorePowerSettings is never called.",
+          description:
+            "Lease length. The lock releases itself after this many minutes if " +
+            "deck_restorePowerSettings is never called. Clamped to 1..480.",
         },
-        note: { type: "string", description: "Freeform note recorded in the run file, e.g. why this hold was taken." },
+        note: {
+          type: "string",
+          description:
+            "Short reason, shown in the WHY column of systemd-inhibit --list on the Deck so a " +
+            "human can see who took the lock. Filtered to a safe character set.",
+        },
       },
       additionalProperties: false,
     },
@@ -808,12 +816,14 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_restorePowerSettings",
     description:
-      "Put back the screen-off and suspend timeouts deck_holdAwake disabled, exactly as they were " +
-      "before. Safe to call when nothing was ever held (a clean no-op, not an error) and safe to " +
-      "call twice (the second call is also a no-op). Call this at the end of every run that called " +
-      "deck_holdAwake -- the automatic expiry is a safety net, not the normal path. ALSO DOES NOT " +
-      "WORK: see deck_holdAwake. It additionally cannot tell a setting that was absent from one " +
-      "set to 0, so it can write back a value that was never there while reporting restored:true.",
+      "Release the wake lock deck_holdAwake took, so the Deck sleeps normally again. Despite the " +
+      "name -- kept because a live consumer already calls it -- there are no settings to put " +
+      "back: the hold is a logind inhibitor, so nothing on the Deck was ever changed. Safe to " +
+      "call when nothing was held (a clean no-op, not an error) and safe to call twice. Like the " +
+      "hold, the release is VERIFIED: the inhibitor list is read back, and a lock still present " +
+      "after the stop is reported as ok:false rather than as a success -- a Deck that cannot " +
+      "sleep is a battery problem somebody needs to hear about. Call this at the end of every " +
+      "run that called deck_holdAwake; the TTL expiry is a safety net, not the normal path.",
     inputSchema: noArgs,
   },
   {

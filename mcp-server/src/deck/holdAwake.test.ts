@@ -1,15 +1,24 @@
 /**
- * Tests for deck_holdAwake / deck_restorePowerSettings.
+ * Tests for deck_holdAwake / deck_restorePowerSettings, second implementation
+ * (a logind block inhibitor, not two settings written over SSH).
  *
- * THE EXEC LAYER IS FAKED. proc.execSync (deploy/deployHelpers.ts) is the
- * seam every ssh/scp call in this codebase goes through; tests replace it for
- * the duration of a case, exactly as deckDeploy.test.ts does. No network, no
+ * THE EXEC LAYER IS FAKED. proc.execSync (deploy/deployHelpers.ts) is the seam
+ * every ssh/scp call in this codebase goes through; tests replace it for the
+ * duration of a case, exactly as deckDeploy.test.ts does. No network, no
  * hardware, ever.
  *
  * THE RUN-FILE DIRECTORY IS REDIRECTED TO A TEMP HOME, same trick
  * killswitch.test.ts uses: getConfigDir() derives from os.homedir(), read at
- * call time, so pointing USERPROFILE/HOME at a temp dir moves the run file
- * with it.
+ * call time, so pointing USERPROFILE/HOME at a temp dir moves the file with it.
+ *
+ * WHAT THESE TESTS CANNOT PROVE, stated plainly: a faked exec layer answers
+ * whatever the test wrote, so none of this establishes that a block inhibitor
+ * stops a real Steam Deck sleeping. That was settled separately, on hardware,
+ * by holding the lock and calling SteamClient.System.SuspendPC() -- Steam
+ * refused with "Access denied due to active block inhibitor". What IS pinned
+ * here is the part that made v1 dishonest and the part that made the first
+ * spike run lie: that `held` is decided ONLY by reading the lock back, and that
+ * the lock is taken in system scope.
  */
 import { test, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
@@ -30,21 +39,23 @@ process.env.DECK_IP = "203.0.113.9";
 process.env.DECK_USER = "deck";
 
 const { proc } = await import("../deploy/deployHelpers.js");
-const { snapshotPath, CorruptSnapshotError, StaleSnapshotError } = await import("./snapshotLease.js");
+const { snapshotPath, writeSnapshotFile } = await import("./snapshotLease.js");
 const {
   holdAwake,
   restorePowerSettings,
-  parsePowerRead,
-  readPowerCommand,
-  writePowerCommand,
-  POWER_READ_MARK,
-  RESTORE_POWER_TOOL_HINT,
+  buildWhy,
+  clampTtlMinutes,
+  holdCommand,
+  releaseCommand,
+  parseHoldOutput,
+  HOLD_UNIT,
+  HOLD_MARKER,
 } = await import("./holdAwake.js");
 
 function assertSandboxed(): void {
   assert.ok(
     snapshotPath("sandbox-check").startsWith(tempHome),
-    `run file escaped the sandbox: ${snapshotPath("sandbox-check")} is not under ${tempHome}`
+    `run file escaped the sandbox: ${snapshotPath("sandbox-check")} is not under ${tempHome}`,
   );
 }
 
@@ -72,188 +83,246 @@ async function withFakeExec<T>(impl: (cmd: string) => string, fn: () => Promise<
   }
 }
 
-function fakeReadAnswer(screenSec: number, suspendSec: number): string {
-  return `${screenSec}\n${POWER_READ_MARK}\nIdleActionSec=${suspendSec}\n`;
+const LOCK_LINE = `sleep 1800     0    root 4242   systemd-inhibit sleep ${HOLD_MARKER}: run 12    block`;
+
+/** What the Deck answers: the three marked sections, in order. */
+function deckSays(opts: { wasActive?: boolean; runOutput?: string; listed?: string | null }): string {
+  return (
+    "---DPS-HOLD-PRE---\n" +
+    (opts.wasActive ? "active\n" : "inactive\n") +
+    "---DPS-HOLD-RUN---\n" +
+    (opts.runOutput ?? `Running as unit: ${HOLD_UNIT}.service\n`) +
+    "---DPS-HOLD-LIST---\n" +
+    (opts.listed === undefined ? LOCK_LINE : (opts.listed ?? "")) +
+    "\n"
+  );
 }
 
 // ---------------------------------------------------------------------------
-// parsePowerRead / command shape (pure functions)
+// Pure helpers
 // ---------------------------------------------------------------------------
 
-test("parsePowerRead reads both facts out of one round trip", () => {
-  assert.deepEqual(parsePowerRead(fakeReadAnswer(600, 300)), {
-    screenTimeoutSec: 600,
-    suspendTimeoutSec: 300,
-  });
+test("buildWhy strips anything that could break out of the quoted ssh argument", () => {
+  // The note is caller-supplied and lands inside a single-quoted argument
+  // nested in a double-quoted remote command.
+  const why = buildWhy("run 12'; rm -rf / #`whoami`$(id)");
+  assert.ok(why.startsWith(HOLD_MARKER), why);
+  for (const bad of ["'", '"', ";", "`", "$", "(", ")", "#", "&", "|"]) {
+    assert.ok(!why.includes(bad), `"${bad}" survived sanitisation in: ${why}`);
+  }
 });
 
-test("parsePowerRead treats a missing IdleActionSec line as disabled (0)", () => {
-  assert.deepEqual(parsePowerRead(`600\n${POWER_READ_MARK}\n`), {
-    screenTimeoutSec: 600,
-    suspendTimeoutSec: 0,
-  });
+test("buildWhy with no note is just the marker, so the lock is still findable", () => {
+  assert.equal(buildWhy(), HOLD_MARKER);
+  assert.equal(buildWhy("   "), HOLD_MARKER);
 });
 
-test("parsePowerRead treats unreadable xset output as disabled (0), not a throw", () => {
-  assert.deepEqual(parsePowerRead(`\n${POWER_READ_MARK}\nIdleActionSec=120`), {
-    screenTimeoutSec: 0,
-    suspendTimeoutSec: 120,
-  });
-  assert.deepEqual(parsePowerRead("garbage with no marker at all"), {
-    screenTimeoutSec: 0,
-    suspendTimeoutSec: 0,
-  });
+test("clampTtlMinutes defaults to 30 and refuses absurd values in both directions", () => {
+  assert.equal(clampTtlMinutes(undefined), 30);
+  assert.equal(clampTtlMinutes(Number.NaN), 30);
+  assert.equal(clampTtlMinutes(0), 1);
+  assert.equal(clampTtlMinutes(-5), 1);
+  assert.equal(clampTtlMinutes(99999), 480);
+  assert.equal(clampTtlMinutes(45), 45);
 });
 
-test("readPowerCommand and writePowerCommand target the configured Deck over ssh", () => {
-  const readCmd = readPowerCommand("deck", "203.0.113.9");
-  assert.match(readCmd, /^ssh .*deck@203\.0\.113\.9 "/);
-  assert.match(readCmd, /xset q/);
-  assert.match(readCmd, /IdleActionSec=/);
-  assert.ok(readCmd.includes(POWER_READ_MARK));
+test("the hold is taken in SYSTEM scope, which is the whole reason this works", () => {
+  /*
+   * The trap that made the first hardware spike report a false negative:
+   * SteamOS ships logind.conf.d/killuserprocesses.conf with
+   * KillUserProcesses=True, so anything launched from an SSH session dies when
+   * that session ends -- including a setsid-detached process, which escapes
+   * the controlling terminal but NOT the systemd session scope. The lock was
+   * therefore already gone by the time the suspend arrived, and the Deck slept.
+   * If this ever regresses to a plain background process, the tool silently
+   * stops holding anything again.
+   */
+  const cmd = holdCommand("deck", "203.0.113.9", `${HOLD_MARKER}: x`, 1800);
+  assert.match(cmd, /systemd-run --unit=dps-hold-awake/, "must be a transient system unit");
+  assert.ok(!/setsid/.test(cmd), "setsid does not survive KillUserProcesses -- system scope is required");
+  assert.ok(!/nohup/.test(cmd), "nohup does not survive KillUserProcesses either");
+});
 
-  const writeCmd = writePowerCommand("deck", "203.0.113.9", { screenTimeoutSec: 0, suspendTimeoutSec: 0 });
-  assert.match(writeCmd, /xset dpms 0 0 0/);
-  assert.match(writeCmd, /IdleActionSec=0/);
-  assert.match(writeCmd, /sudo/);
+test("the hold asks for exactly the lock that stops Steam: what=sleep, mode=block", () => {
+  const cmd = holdCommand("deck", "203.0.113.9", `${HOLD_MARKER}: x`, 1800);
+  assert.match(cmd, /--what=sleep/);
+  assert.match(cmd, /--mode=block/, "a delay inhibitor postpones a suspend; only block refuses it");
+  assert.match(cmd, /sleep 1800/, "the TTL is the lease length, in seconds");
+  assert.match(cmd, /ssh -o BatchMode=yes[^"]*deck@203\.0\.113\.9/);
+});
+
+test("a stale unit from a previous run is cleared before a new hold is taken", () => {
+  // systemd-run refuses a unit name that already exists, so a failed leftover
+  // would make every later hold fail for an unrelated reason.
+  const cmd = holdCommand("deck", "203.0.113.9", HOLD_MARKER, 60);
+  assert.match(cmd, /systemctl stop dps-hold-awake/);
+  assert.match(cmd, /systemctl reset-failed dps-hold-awake/);
+});
+
+test("both commands read the lock back, so neither reports from intent alone", () => {
+  assert.match(holdCommand("deck", "h", HOLD_MARKER, 60), /systemd-inhibit --list/);
+  assert.match(releaseCommand("deck", "h"), /systemd-inhibit --list/);
+});
+
+test("parseHoldOutput finds the lock, and notices a hold that was already running", () => {
+  const probe = parseHoldOutput(deckSays({ wasActive: true }));
+  assert.equal(probe.wasActive, true);
+  assert.ok(probe.evidence?.includes(HOLD_MARKER));
+});
+
+test("parseHoldOutput reports no evidence when the list is empty", () => {
+  const probe = parseHoldOutput(deckSays({ listed: "" }));
+  assert.equal(probe.evidence, null);
+  assert.equal(probe.wasActive, false);
+});
+
+test("a DELAY inhibitor carrying our marker is not accepted as a hold", () => {
+  // NetworkManager, rtkit, UPower and cecd all hold `sleep` delay locks on a
+  // stock Deck. A delay lock postpones a suspend by a few seconds; it does not
+  // refuse one, so matching the marker alone would be a false positive.
+  const delayLine = `sleep 1800  0  root 4242 systemd-inhibit sleep ${HOLD_MARKER}: x   delay`;
+  assert.equal(parseHoldOutput(deckSays({ listed: delayLine })).evidence, null);
 });
 
 // ---------------------------------------------------------------------------
-// holdAwake: write-before-change, and the shape of the result
+// holdAwake
 // ---------------------------------------------------------------------------
 
-test("holdAwake persists the previous values to the run file BEFORE the disable command is sent", async () => {
-  const calls: string[] = [];
-  let sawRunFileDuringDisable: unknown = "not reached";
-
-  const result = await withFakeExec((cmd) => {
-    calls.push(cmd);
-    if (cmd.includes("xset dpms")) {
-      // The disable command itself -- the run file must already exist here.
-      sawRunFileDuringDisable = fs.existsSync(snapshotPath("power-hold"))
-        ? JSON.parse(fs.readFileSync(snapshotPath("power-hold"), "utf8"))
-        : null;
-      return "";
-    }
-    return fakeReadAnswer(600, 300); // the read command
-  }, () => holdAwake());
-
-  assert.notEqual(sawRunFileDuringDisable, "not reached", "the disable command was never sent");
-  assert.ok(sawRunFileDuringDisable, "the run file did not exist yet when the disable command ran");
-  assert.deepEqual((sawRunFileDuringDisable as { values: unknown }).values, {
-    screenTimeoutSec: 600,
-    suspendTimeoutSec: 300,
-  });
-
-  assert.deepEqual(result.previous, { screenTimeoutSec: 600, suspendTimeoutSec: 300 });
-  assert.deepEqual(result.changed, { screenTimeoutSec: 0, suspendTimeoutSec: 0 });
-  assert.match(result.summary, /600s/);
-  assert.match(result.summary, /300s/);
-
-  const readIdx = calls.findIndex((c) => c.includes("xset q"));
-  const writeIdx = calls.findIndex((c) => c.includes("xset dpms"));
-  assert.ok(readIdx >= 0 && writeIdx > readIdx, "the read must happen strictly before the write");
+test("a hold is reported ONLY when the lock is read back from the Deck", async () => {
+  const r = await withFakeExec(() => deckSays({}), () => holdAwake({ ttlMinutes: 30, note: "run 12" }));
+  assert.equal(r.ok, true);
+  assert.equal(r.held, true);
+  assert.equal(r.unit, HOLD_UNIT);
+  assert.ok(r.evidence?.includes(HOLD_MARKER), "the proving line is returned, not just a boolean");
+  assert.ok(r.expiresAt, "a lease says when it lapses");
+  assert.match(r.summary, /lease, not a setting/);
 });
 
-test("a second holdAwake over an unrestored hold is refused, naming the stale hold and deck_restorePowerSettings", async () => {
-  await withFakeExec(() => fakeReadAnswer(600, 300), () => holdAwake());
-
-  await assert.rejects(
-    () => withFakeExec(() => fakeReadAnswer(600, 300), () => holdAwake()),
-    (err: unknown) => {
-      assert.ok(err instanceof StaleSnapshotError);
-      assert.match((err as Error).message, new RegExp(RESTORE_POWER_TOOL_HINT));
-      return true;
-    }
+test("systemd-run claiming success does not make a hold -- an unlisted lock is held: false", async () => {
+  /*
+   * The exact failure v1 shipped: reporting success for a hold it never took.
+   * Here systemd-run says the unit started and the inhibitor list is empty, so
+   * nothing is held -- and the result must say so rather than trust the
+   * hopeful half of the output.
+   */
+  const r = await withFakeExec(
+    () => deckSays({ runOutput: `Running as unit: ${HOLD_UNIT}.service\n`, listed: "" }),
+    () => holdAwake(),
   );
+  assert.equal(r.held, false);
+  assert.equal(r.ok, false);
+  assert.equal(r.evidence, null);
+  assert.match(r.summary, /NOT holding this Deck awake/);
+  assert.match(r.summary, /can still sleep mid-run/);
 });
 
-// ---------------------------------------------------------------------------
-// restorePowerSettings: safe no-op, idempotent, restores exact values
-// ---------------------------------------------------------------------------
-
-test("restorePowerSettings with nothing held is a clean no-op and sends nothing to the Deck", async () => {
-  const calls: string[] = [];
-  const result = await withFakeExec(
+test("the TTL reaches the Deck in seconds, and comes back as a wall-clock expiry", async () => {
+  let sent = "";
+  const r = await withFakeExec(
     (cmd) => {
-      calls.push(cmd);
-      return "";
+      sent = cmd;
+      return deckSays({});
     },
-    () => restorePowerSettings()
+    () => holdAwake({ ttlMinutes: 45, now: () => 1_000_000 }),
+  );
+  assert.match(sent, /sleep 2700\b/, "45 minutes must arrive as 2700 seconds");
+  assert.equal(r.ttlMinutes, 45);
+  assert.equal(r.expiresAt, new Date(1_000_000 + 45 * 60_000).toISOString());
+});
+
+test("replacing a hold that was already running is reported, not hidden", async () => {
+  const r = await withFakeExec(() => deckSays({ wasActive: true }), () => holdAwake());
+  assert.equal(r.held, true);
+  assert.equal(r.replaced, true);
+  assert.match(r.summary, /earlier hold was already running and was replaced/);
+});
+
+test("an unreachable Deck is an honest failure, never a silent hold", async () => {
+  const r = await withFakeExec(
+    () => {
+      throw Object.assign(new Error("ssh: connect to host ... port 22: Connection timed out"), { stdout: "" });
+    },
+    () => holdAwake(),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.held, false);
+  assert.match(r.summary, /could not reach the Deck/);
+});
+
+// ---------------------------------------------------------------------------
+// restorePowerSettings (release)
+// ---------------------------------------------------------------------------
+
+test("releasing with nothing held is a clean no-op, and says nothing was changed", async () => {
+  const r = await withFakeExec(() => deckSays({ wasActive: false, listed: "" }), () => restorePowerSettings());
+  assert.equal(r.ok, true);
+  assert.equal(r.wasHeld, false);
+  assert.equal(r.released, true);
+  assert.match(r.summary, /nothing was holding this Deck awake/);
+  assert.match(r.summary, /nothing to put back/);
+});
+
+test("a released hold is confirmed by the lock being gone from the list", async () => {
+  const r = await withFakeExec(() => deckSays({ wasActive: true, listed: "" }), () => restorePowerSettings());
+  assert.equal(r.ok, true);
+  assert.equal(r.wasHeld, true);
+  assert.equal(r.released, true);
+  assert.match(r.summary, /sleeps normally again/);
+});
+
+test("a lock still listed after the stop is a failure, not a success", async () => {
+  // The mirror of the hold case: releasing must not be reported from intent
+  // either. A Deck that cannot sleep is a battery problem someone must know of.
+  const r = await withFakeExec(() => deckSays({ wasActive: true }), () => restorePowerSettings());
+  assert.equal(r.ok, false);
+  assert.equal(r.released, false);
+  assert.match(r.summary, /STILL held/);
+});
+
+test("releasing twice is safe -- the second call is the no-op branch", async () => {
+  await withFakeExec(() => deckSays({ wasActive: true, listed: "" }), () => restorePowerSettings());
+  const second = await withFakeExec(
+    () => deckSays({ wasActive: false, listed: "" }),
+    () => restorePowerSettings(),
+  );
+  assert.equal(second.ok, true);
+  assert.equal(second.released, true);
+});
+
+// ---------------------------------------------------------------------------
+// The v1 leftover
+// ---------------------------------------------------------------------------
+
+test("a v1 run file is reported and cleared, and its values are NOT pushed back", async () => {
+  /*
+   * v1 recorded an ABSENT IdleActionSec as 0, so "restoring" its snapshot is
+   * precisely how Decks ended up carrying an explicit IdleActionSec=0 they
+   * never had. Finding one must warn a human, not replay the corruption.
+   */
+  writeSnapshotFile("power-hold", { screenTimeoutSec: 0, suspendTimeoutSec: 0 }, 30, { note: "v1 hold" });
+  assert.ok(fs.existsSync(snapshotPath("power-hold")));
+
+  const sent: string[] = [];
+  const r = await withFakeExec(
+    (cmd) => {
+      sent.push(cmd);
+      return deckSays({});
+    },
+    () => holdAwake(),
   );
 
-  assert.equal(result.ok, true);
-  assert.equal(result.restored, false);
-  assert.equal(calls.length, 0, `expected no ssh calls, got: ${JSON.stringify(calls)}`);
+  assert.ok(r.legacy, "the leftover must be surfaced");
+  assert.match(r.legacy!.warning, /NOT pushed back/);
+  assert.match(r.summary, /logind\.conf/, "the human is told where to look");
+  assert.equal(fs.existsSync(snapshotPath("power-hold")), false, "the landmine is cleared");
+  assert.ok(
+    !sent.some((c) => /IdleActionSec|xset/.test(c)),
+    "no v1-era setting may be written to the Deck",
+  );
 });
 
-test("restorePowerSettings puts back exactly the captured values, and is idempotent", async () => {
-  await withFakeExec(() => fakeReadAnswer(450, 900), () => holdAwake());
-
-  const writeCalls: string[] = [];
-  const first = await withFakeExec((cmd) => {
-    if (cmd.includes("xset dpms")) writeCalls.push(cmd);
-    return "";
-  }, () => restorePowerSettings());
-
-  assert.equal(first.restored, true);
-  assert.deepEqual(first.values, { screenTimeoutSec: 450, suspendTimeoutSec: 900 });
-  assert.equal(writeCalls.length, 1);
-  assert.match(writeCalls[0], /xset dpms 450 450 450/);
-  assert.match(writeCalls[0], /IdleActionSec=900/);
-  assert.equal(fs.existsSync(snapshotPath("power-hold")), false);
-
-  const secondCalls: string[] = [];
-  const second = await withFakeExec((cmd) => {
-    secondCalls.push(cmd);
-    return "";
-  }, () => restorePowerSettings());
-
-  assert.equal(second.restored, false);
-  assert.equal(secondCalls.length, 0, "a second restore must not touch the Deck at all");
-});
-
-// ---------------------------------------------------------------------------
-// A corrupt run file is detected at the feature layer too
-// ---------------------------------------------------------------------------
-
-test("a corrupt power-hold run file is detected, not silently treated as absent", async () => {
-  fs.mkdirSync(path.dirname(snapshotPath("power-hold")), { recursive: true });
-  fs.writeFileSync(snapshotPath("power-hold"), "{ not json", "utf8");
-
-  await assert.rejects(() => withFakeExec(() => fakeReadAnswer(1, 1), () => holdAwake()), CorruptSnapshotError);
-  await assert.rejects(() => withFakeExec(() => "", () => restorePowerSettings()), CorruptSnapshotError);
-});
-
-// ---------------------------------------------------------------------------
-// Expiry restores the original power values automatically
-// ---------------------------------------------------------------------------
-
-test("an expired hold is auto-restored, pushing the ORIGINAL screen/suspend values, the next time holdAwake runs", async () => {
-  let clock = 1_700_000_000_000;
-  const now = () => clock;
-  const writeCalls: string[] = [];
-
-  await withFakeExec((cmd) => {
-    if (cmd.includes("xset dpms")) writeCalls.push(cmd);
-    return fakeReadAnswer(300, 600);
-  }, () => holdAwake({ ttlMinutes: 1, now }));
-
-  clock += 5 * 60_000; // well past the 1-minute lease
-
-  const result = await withFakeExec((cmd) => {
-    if (cmd.includes("xset dpms")) writeCalls.push(cmd);
-    return fakeReadAnswer(300, 600); // the Deck's live values, if asked again
-  }, () => holdAwake({ ttlMinutes: 1, now }));
-
-  assert.ok(result.autoRestoredExpired, "the expired hold was not auto-restored");
-  assert.deepEqual(result.autoRestoredExpired!.values, { screenTimeoutSec: 300, suspendTimeoutSec: 600 });
-  assert.match(result.summary, /had expired and was/);
-
-  // Three writes total: the first hold's disable, the auto-restore of the
-  // original 300/600, and the second hold's fresh disable.
-  assert.equal(writeCalls.length, 3, JSON.stringify(writeCalls));
-  assert.match(writeCalls[0], /xset dpms 0 0 0/);
-  assert.match(writeCalls[1], /xset dpms 300 300 300/);
-  assert.match(writeCalls[2], /xset dpms 0 0 0/);
+test("with no v1 run file, nothing is invented", async () => {
+  const r = await withFakeExec(() => deckSays({}), () => holdAwake());
+  assert.equal(r.legacy, null);
+  assert.ok(!/logind\.conf/.test(r.summary));
 });
