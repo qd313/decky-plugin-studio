@@ -89,6 +89,89 @@ Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) l
 - **Shape of the tool:** one call — sleep, then come back after N seconds. It refuses to sleep until it has proven a way back on this machine (armed and read back the alarm, or confirmed the board's wake permission), refuses while a game is running, and logs what it saw before/after to a run file. It must not touch the panel on the way back, so the very next read shows exactly where focus landed. Prefer sleeping through the real power menu (truer to what a person does), falling back to the network method when the menu isn't reachable, and report which path was used.
 - **Also needs:** confirming the stop-control (killswitch file) survives a sleep, and reporting plainly — not silently pressing on — if focus comes back somewhere unexpected on wake.
 - **Acceptance:** the bonsAI suspend/resume test can run unattended and report where the focus ring landed on wake.
+- **Related:** wake option 1's bridge keyboard is the same hardware *Type text on the Deck* below needs; build it once.
+
+### Save and restore the plugin's settings around a test run
+★★ · Planned — asked 2026-09-07
+- **Problem:** every device session ends with someone putting the Deck back by hand — settings, pinned test questions, which tab was open. bonsAI's plan 31 lists what each round will change and restore, the plan 32 log ends with a paragraph doing it manually, and a `settings.json.bak-preQA` sits on the Deck because nothing tooled does this.
+- **What to build:** two paired calls. One copies the plugin's settings directory (and optionally its data directory) over SSH into a run file. The other puts exactly that copy back. Refuse to take a new snapshot while an old one was never restored, and make the restore safe to call when nothing changed — the same safety rules as *Hold the Deck awake* above.
+- **Also unlocks:** the "clean install" test rows bonsAI's plan 23 lists as permanently manual become partly mechanical.
+- **Acceptance:** a device round that changes five settings and pins three test chips ends with the plugin's files byte-identical to the snapshot, with no hand edits.
+
+### Check the Deck is ready before a run starts
+★★★ · Planned — asked 2026-09-07
+- **Problem:** runs start blind. bonsAI's plan 23 names "is the Deck in the state I think it is" as the one bucket worth investing in, and the log shows why: a sleeping Deck, a stale build proven only by a manual `md5sum`, a foreign tunnel, a game running when none was expected, and a Steam dialog nobody knew was on screen. Each one costs a run plus the time to work out it wasn't the thing under test.
+- **What to build:** one call that takes a declared state and returns the diff: awake, deployed build hash equals the local build, running game is X or none, plugin open on tab Y, no foreign CDP tunnel, nothing modal on screen, focus ring owned. Any mismatch fails the run at step zero with a named reason.
+- **Cheap first half:** `deck_deploy` already knows every file it shipped, so "is the right build installed" is a hash compare and nothing more. bonsAI's own `build.ps1` already does this for 57 files.
+- **Acceptance:** a run against a Deck that fell asleep, or that still has last night's build, stops before the first press and says which precondition failed.
+
+### Save a passing check and replay it after every deploy
+★★ · Planned — asked 2026-09-07
+- **Problem:** bonsAI reruns the same sweeps by hand after every build (plan 32: two regression sweeps at 03:50 on build 4), and its key metric is "bugs fixed more than once" — but nothing counts that. Its M4 milestone is exactly "a D-pad bug locked by a check that fails without the fix," reached once by hand.
+- **What to build:** a way to save a `deck_runSequence` or `deck_sweep` result, with its expected landings, as a named check file in the consumer repo. A replay call reruns every saved check after a deploy and diffs against the saved result. Sweep reports already reproduce byte-for-byte across runs, so this is a file format plus a loop.
+- **Acceptance:** after a deploy, one call replays every pinned check and names the ones whose landings changed.
+
+### Run the same check through every way into the plugin
+★★★ · Planned — asked 2026-09-07
+- **Problem:** the same bug appears on one entry path and not another. bonsAI measured four fresh mounts, a QAM close-and-reopen, a chord reopen, a modal close, a loader restart and a suspend-and-resume, each landing focus somewhere different for the same bug (`6fb7104`, `1c7e6ac`, `d86b694`). The plan 32 sweeps were clean only because no game was running, so no words were highlighted — and the highlighted words were the trap (`4183f6f`).
+- **What to build:** a tool that reaches the plugin by a named path (`fresh`, `qam-toggle`, `chord`, `modal-close`, `loader-restart`, later `suspend-resume`), plus an option on sweep and runSequence that repeats the check across every drivable path and reports each separately. A second axis for "game running / none" belongs here too.
+- **Depends on:** *Sleep the Deck and wake it again* for the suspend path; the other paths exist today.
+- **Acceptance:** one call runs a check five ways and reports per path, so "passes fresh, fails after loader restart" is a single line rather than a night's work.
+
+### Only one driver at a time
+★★★ · Planned — asked 2026-09-07
+- **Problem:** bonsAI's plan 31 states it plainly: the bridge registers CDP tunnels but not presses, and has no lock, so "nobody is looking" does not mean "nobody is pressing." Two chat sessions drove the same Deck in one evening, one pinned chips the other had to restore, and every press batch starts with a manual check for a foreign tunnel.
+- **What to build:** a lease with owner, purpose, expiry and heartbeat, held in a file on the host and on the device. Presses, deploys and reloads refuse without it, or when another live holder exists. The extension's 30 s status poll honours it too.
+- **Fixes at the root:** the open *status poll opens COM7* bug below — the poll simply doesn't touch the port while a lease is held.
+- **Acceptance:** a second session that tries to press while the first holds the lease gets a refusal naming the holder, and the status poll never opens the serial port during a leased run.
+
+### Time a run the way a person sees it
+★★★ · Planned — asked 2026-09-07
+- **Problem:** speed checks that lie. bonsAI's newest commit (`fdfa91a`) is a budget probe that prints PASS at 23–38 ms while a real Ask on the same Deck, minutes apart, costs over a second for the same step — the probe warms itself inside one process, a real question pays every time. Its testing doc now says "ask a throwaway question before timing anything."
+- **What to build:** wrap a sequence and a `deck_waitFor` with wall-clock stamps at each stage (press sent, first DOM change, first streamed token via the ingest tail, reply done), repeat N times cold and warm, and report the spread rather than one number. It measures only what the UI shows, so a warm in-process cache can't fool it.
+- **Honest limit:** it can't see inside the backend. It answers "how long did the person wait," which is the number the budget is actually about.
+- **Acceptance:** three consecutive Asks on the Deck report three separate durations with the per-stage split, and a probe-style false PASS is impossible by construction.
+
+### Make the preview behave more like Steam
+★★★ · Planned — asked 2026-09-07
+- **Problem:** fixes pass on the PC and do nothing on the Deck, repeatedly. The spoiler-fence keydown intercept was "dead code on hardware and alive under vitest, which is the recurrence engine" (`31423e7`) — Steam never dispatches DOM keyboard events into a plugin. The hidden-tab trap's `instanceof Element` check was false for every node because the QAM document is a different realm (`d86b694`), and jsdom shares realms so the test couldn't reproduce it.
+- **What to build, in three parts:** (1) the preview stops sending DOM keydown for D-pad and fires only Focusable nav props, as Steam does; (2) the plugin renders in a separate frame so a brand check that fails on the Deck fails in the preview too; (3) the focus linter gains rules against D-pad routing via keydown and against `instanceof Element` / `Node` on nodes from another document.
+- **Cheapest slice:** the two lint rules alone are ★ and would have caught both multi-fix bugs before deploy.
+- **Concrete first step for:** *One D-pad test, two runners* below — this is what makes the preview runner worth having.
+- **Acceptance:** a D-pad handler written on keydown, or a brand-checked node, fails in the preview and the linter, not only on the Deck.
+
+### Find and launch games from the library, not the Recent shelf
+★★★ · Planned — asked 2026-09-07
+- **Problem:** `deck_launchGame` walks the Home screen's Recent Games shelf in one direction. bonsAI's round 34 hit both limits in one night: Black Mesa was installed but not on the shelf, so the launcher refused it, and "the launcher only walks right, so a ring parked at the end of the shelf makes a present game look absent" (`4183f6f`). bonsAI also read the Steam library over SSH by hand twice to plan test titles.
+- **What to build:** a `deck_listGames` that reads installed titles, non-Steam shortcuts and running apps from `SharedJSContext` with no presses, and a launch path that navigates to the game's own page (`/library/app/<appid>`) and presses A on Play, with the shelf walk as fallback and both walk directions.
+- **Acceptance:** any installed title, including a non-Steam shortcut, launches by app id whether or not it is on the Recent shelf.
+
+### Measure colours inside a control
+★★★★ · Planned — asked 2026-09-07
+- **Problem:** screenshots are being used as rulers. bonsAI sampled nine points by hand to explain why a corner icon read as 89 % visible on a two-line bubble and 67 % on a one-line one (`48c8c08`), and "measured and pictured" two colour fixes on device (`b8ed222`). The visibility oracle is a DOM hit-test and admits it can't see colour.
+- **What to build:** given a selector or the focused element, capture the screen, sample N points inside its rect, return the colours and a cropped PNG, and compare against a saved baseline (`preview.compareScreenshot` does this for the preview only).
+- **Why four stars:** needs the capture helper (sudo, gamescope) on every read, and colour thresholds are easy to get wrong in both directions.
+- **Acceptance:** "is the focus ring the right colour and uncovered" is a number with a crop attached, reproducible across two runs on the same build.
+
+### Type text on the Deck
+★★★★ · Planned — asked 2026-09-07
+- **Problem:** nothing can type on the Deck. bonsAI built "frozen test chips" (`b278f7b`) and pins test questions into `settings.json` over SSH with the panel closed, purely because a question can't be entered from a tool. Every Ask test is routed through that workaround.
+- **What to build:** a keyboard interface on the bridge board alongside the gamepad, and a `deck_typeText` that uses it. Shares the firmware work and the "does the extra interface disturb Steam's view of the controller" check with option 1 of *Sleep the Deck and wake it again*.
+- **Fallback:** CDP `Input.insertText` is ★ and works today, but must be fidelity-tagged as injected, never `steam-routed` — it bypasses Steam's on-screen keyboard and proves nothing about the real path.
+- **Acceptance:** a test types a question into the plugin's Ask field through the bridge and the reply arrives, with no pinned chip involved.
+
+### Keep a log of every run automatically
+★★ · Planned — asked 2026-09-07
+- **Problem:** bonsAI's `runs/` folder holds 457 hand-named evidence files, `roadmap.md` changed 290 times in a month, and a whole subagent lane exists for "desk paperwork" during device rounds. Each device row means saving a tool result under a name, flipping a testing row, and moving a roadmap entry — three merges were resolved by hand in three days.
+- **What to build:** every `deck_*` tool appends a line to a per-session ledger (row id, build hash, running game, verdict, evidence path), tools accept a `rowId` / `saveAs` so evidence files name themselves, and a report call emits the markdown block a testing row expects.
+- **Out of scope:** flipping rows in the consumer's own docs — that convention is theirs.
+- **Acceptance:** a night's device round produces a ledger and named evidence files with no hand-typed filenames.
+
+### A self-check for DPS itself
+★ · Planned — asked 2026-09-07
+- **Problem:** three bonsAI commits went to DPS setup drift: Claude Code reads `.mcp.json` not `mcp.json` (`6322f64`), the DPS tools pointed at a path that no longer existed (`d98a97a`), and a second VS Code window killed its own MCP server (`127a743`). bonsAI is now building a connection doctor for Ollama; DPS has none for itself.
+- **What to build:** a `studio_doctor` call and IDE command that checks the MCP config points at a live server path, no second workspace shares the preview or sidecar ports, and the bridge, tunnel script and capture helper are present — and prints the fix for each miss.
+- **Acceptance:** each of the three drifts above is reported by name with its fix, instead of surfacing as a silent dead tool.
 
 ### Studio issue intake
 ★★ · Planned
@@ -107,6 +190,7 @@ Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) l
 - **Honest framing:** this gives a shared test *definition*, not a shared *verdict* — the preview has no access to Steam's real navigation graph, so it can never confirm Deck focus behavior. The win is that the preview catches cheap failures early (a control that stopped rendering, a changed label), while the device run stays the only source of truth for "did the ring actually move."
 - **Evidence it's needed:** a real bonsAI navigation bug (Down never reaching a masked spoiler fence) was reproduced twice on-device, but a preview run of the same steps would have reported it as fine, since the preview doesn't model Steam's routing at all.
 - **Must-have to avoid making things worse:** label the preview result as a smoke check only, never merge it into the device verdict — a green preview must never be mistakable for a green device result.
+- **Concrete first step:** *Make the preview behave more like Steam* above — until the preview stops dispatching keydown and shares a realm with the plugin, its green means less than it looks.
 
 ### Automated issue triage agent
 ★★★ · Planned
@@ -123,6 +207,7 @@ Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) l
 - **Problem:** the extension polls `deck_status` every 30s ([extension.ts](../extension/src/extension.ts) `pollStatus`), which opens the same serial port a live press is trying to use. Every early `deck_sweep` run died around press 10–22 with `PermissionError: could not open port 'COM7'`.
 - **Mitigation shipped:** `pressButton` now retries once, 350ms later, on exactly this error, reports `retried: true`, and callers surface it as `pressRetried` / `pressRetries` so the collision stays visible instead of hidden. Also fixed the error message getting truncated before the actual exception line.
 - **Still needed:** the status poll shouldn't open the serial port while a run holds it (shared port ownership, or a cached last-known state), and the extension shouldn't probe at all while a run is live.
+- **Root fix:** *Only one driver at a time* under Planned features — the poll simply stays off the port while a lease is held.
 
 ### `bridgeReady` and `fidelity: "steam-routed"` both report success down a dead path
 ★★★ · Open — found 2026-08-27
