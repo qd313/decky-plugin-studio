@@ -687,6 +687,11 @@ test("press-play that never shows up in RunningApps is a finding, not a success"
   assert.match(r.reason ?? "", /never listed appid 220 within 30ms/);
   assert.deepEqual(deck.presses, ["GUIDE", "A", "A", "A"], "the presses were made; the confirmation was not");
   assert.equal(r.stages.find((s) => s.stage === "press-play")?.ok, false);
+  assert.equal(
+    r.fidelity,
+    "wire-sent",
+    "presses were spent and RunningApps never confirmed the launch, so nothing established that they reached Steam -- this path claimed steam-routed off rig.presses > 0 until 2026-09-08",
+  );
 });
 
 // --------------------------------------------------------------------------

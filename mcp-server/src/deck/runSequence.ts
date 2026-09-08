@@ -45,6 +45,7 @@ import {
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned } from "./walkTo.js";
 import { pressButton } from "./pressButton.js";
+import { weakestFidelity, type Fidelity } from "./fidelity.js";
 import { getWorkspaceArtifactsDir, timestamp } from "../tools/captureOrchestrator.js";
 
 export interface SequenceStep {
@@ -160,7 +161,7 @@ export interface RunSequenceOptions {
 export interface RunSequenceResult {
   ok: boolean;
   reason?: string;
-  fidelity: "steam-routed" | null;
+  fidelity: Fidelity;
   steps: StepResult[];
   ranSteps: number;
   totalSteps: number;
@@ -428,6 +429,9 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
   const visits: Visit[] = [];
   let stoppedMidRun = false;
   let acquired = false;
+  // One entry per step that actually pressed, taken from assertFocusMove's
+  // own before/after reads. The run claims the weakest of them.
+  const fidelities: Fidelity[] = [];
 
   try {
     // Step 0 is the state the run starts from. Without it a loop back to the
@@ -492,6 +496,8 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
         // The whole point: reuse the run's tunnel instead of opening one per press.
         cdpUrl: cdpBase,
       });
+
+      fidelities.push(r.fidelity);
 
       // assertFocusMove re-reads focus before its press rather than trusting the
       // previous step's "after". That costs a read per step and is worth it: if
@@ -594,7 +600,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
   const result: RunSequenceResult = {
     ok,
     reason: stoppedMidRun ? stoppedMessage(automationStopped() ?? latchedBefore!) : undefined,
-    fidelity: results.some((r) => r.ok) ? "steam-routed" : null,
+    fidelity: weakestFidelity(fidelities),
     steps: results,
     ranSteps: results.length,
     totalSteps: steps.length,

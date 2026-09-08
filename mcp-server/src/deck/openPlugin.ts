@@ -26,6 +26,7 @@
  */
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton, pressChord } from "./pressButton.js";
+import { confirmedFidelity, type Fidelity } from "./fidelity.js";
 import {
   isQuickAccessTarget,
   probeQuickAccess,
@@ -56,7 +57,7 @@ export interface OpenPluginResult {
    * anything -- so `ok: true` here means "confirmed open", not "just opened".
    */
   alreadyOpen?: boolean;
-  fidelity: "steam-routed" | null;
+  fidelity: Fidelity;
   stages: OpenStage[];
   /** Controls seen while walking the Decky list, for when the plugin was not found. */
   seen: string[];
@@ -254,6 +255,9 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
   const stages: OpenStage[] = [];
   const seen: string[] = [];
 
+  /** Presses this call actually delivered, across every stage. */
+  const pressCount = (): number => stages.reduce((n, st) => n + (st.presses ?? 0), 0);
+
   const fail = (
     reason: string,
     focus: ReadFocusResult | null,
@@ -263,7 +267,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     ok: false,
     pluginName,
     verified: false,
-    fidelity: stages.some((s) => s.presses > 0) ? "steam-routed" : null,
+    fidelity: confirmedFidelity(pressCount(), false),
     stages,
     seen,
     focus,
@@ -744,7 +748,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         // Reached without the latch tripping -- the killswitch check above
         // returns early, so getting here means the rig was never stopped.
         stopped: false,
-        fidelity: stages.some((s) => s.presses > 0) ? "steam-routed" : null,
+        fidelity: confirmedFidelity(pressCount(), false),
         stages,
         seen,
         focus,
@@ -853,7 +857,10 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
       ok: true,
       pluginName,
       verified: true,
-      fidelity: "steam-routed",
+      // Earned, not asserted: the panel was just confirmed open by a read, and
+      // presses that never reached Steam cannot open a Decky panel. This is the
+      // one path in this file entitled to the stronger value.
+      fidelity: confirmedFidelity(pressCount(), true),
       stages,
       seen,
       focus: after,

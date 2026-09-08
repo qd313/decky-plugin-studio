@@ -45,6 +45,7 @@ import path from "path";
 
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton } from "./pressButton.js";
+import { confirmedFidelity, type Fidelity } from "./fidelity.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
 import { focusKey, describe, labelIsBorrowed } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
@@ -96,7 +97,7 @@ export interface GameSessionResult {
   /** Controls the ring was read on, in order -- the useful half of a refusal. */
   seen: string[];
   presses: number;
-  fidelity: "steam-routed" | null;
+  fidelity: Fidelity;
   reason?: string;
   /** True when the run ended because the killswitch was thrown. */
   stopped: boolean;
@@ -701,7 +702,10 @@ async function runSession(
       stages: rig.stages,
       seen: rig.seen,
       presses: rig.presses,
-      fidelity: rig.presses > 0 ? "steam-routed" : null,
+      // out.ok means RunningApps confirmed the launch or the exit: an end state
+      // presses that never reached Steam cannot produce. Without it, the presses
+      // were delivered and nothing about their routing was established.
+      fidelity: confirmedFidelity(rig.presses, out.ok === true),
       stopped: false,
       ...(out.ok ? {} : { checklist: checklistFor(out.name ?? asked) }),
     };
@@ -715,7 +719,7 @@ async function runSession(
       stages: rig.stages,
       seen: rig.seen,
       presses: rig.presses,
-      fidelity: rig.presses > 0 ? "steam-routed" : null,
+      fidelity: confirmedFidelity(rig.presses, false),
       stopped,
       reason: (err as Error).message,
       checklist: checklistFor(asked),

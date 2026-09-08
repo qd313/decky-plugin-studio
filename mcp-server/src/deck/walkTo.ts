@@ -36,6 +36,7 @@
  */
 import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton } from "./pressButton.js";
+import { earnedFidelity, weakestFidelity, type Fidelity } from "./fidelity.js";
 import { readFocusAt, ReadFocusResult, Visibility } from "./readFocus.js";
 import { focusKey, describe, describeVisibility, labelOfElement } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
@@ -80,7 +81,7 @@ export interface WalkToResult {
   ok: boolean;
   found: boolean;
   reason?: string;
-  fidelity: "steam-routed" | null;
+  fidelity: Fidelity;
   direction: WalkDirection;
   text: string;
   /** The label actually matched. Check this -- a substring match can land next door. */
@@ -152,6 +153,12 @@ export interface AcquireFocusOutcome {
   focus: ReadFocusResult;
   acquired: boolean;
   presses: number;
+  /**
+   * What the placing press earned. The ring going from unreadable to
+   * readable IS a focus change, so a successful acquire is as verified as
+   * anything `verify: true` would report -- and null when no press was spent.
+   */
+  fidelity: Fidelity;
 }
 
 /**
@@ -172,15 +179,17 @@ export async function acquireFocusIfUnowned(
   opts: AcquireFocusOptions,
 ): Promise<AcquireFocusOutcome> {
   const unowned = !focus.ok && (focus.reason ?? "").includes("gpfocus marker not found");
-  if (!unowned) return { focus, acquired: false, presses: 0 };
+  if (!unowned) return { focus, acquired: false, presses: 0, fidelity: null };
 
   const press = opts.pressFn ?? pressButton;
   const p = await press({ buttons: [opts.direction], port: opts.port });
-  if (!p.ok) return { focus, acquired: false, presses: 0 };
+  if (!p.ok) return { focus, acquired: false, presses: 0, fidelity: null };
 
   await sleep(250);
   const reread = await readFocusAt(opts.cdpBase, 10_000);
-  return { focus: reread, acquired: true, presses: 1 };
+  // A ring that was unreadable and is now readable moved because of this
+  // press: that is the same evidence verify:true looks for, already paid for.
+  return { focus: reread, acquired: true, presses: 1, fidelity: earnedFidelity(reread.ok) };
 }
 
 export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
@@ -249,6 +258,9 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
   }
 
   const seen: string[] = [];
+  // One entry per press actually delivered. The walk as a whole may claim
+  // only as much as its weakest press -- see fidelity.ts.
+  const fidelities: Fidelity[] = [];
   let presses = 0;
   let stalls = 0;
   let stalled = false;
@@ -267,6 +279,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       focus = outcome.focus;
       acquired = outcome.acquired;
       presses += outcome.presses;
+      if (outcome.fidelity) fidelities.push(outcome.fidelity);
     }
 
     if (!focus.ok) {
@@ -298,6 +311,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           overshot,
           acquired,
           stopped: true,
+          fidelity: weakestFidelity(fidelities),
           reason: stoppedMessage(midWalk),
           summary:
             `KILLSWITCH: the walk was stopped by hand after ${presses} press(es), ` +
@@ -317,7 +331,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
         return {
           ok: true,
           found: true,
-          fidelity: presses > 0 ? "steam-routed" : null,
+          fidelity: weakestFidelity(fidelities),
           direction,
           text,
           matched: label,
@@ -355,6 +369,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
           seen,
           focus,
           overshot,
+          fidelity: weakestFidelity(fidelities),
           reason: p.reason,
           summary: `no press could be delivered after ${presses} step(s)`,
         };
@@ -363,8 +378,11 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       await sleep(200);
       focus = await readFocusAt(cdpBase, 10_000);
       if (!focus.ok) {
+        // Delivered, and now unverifiable: the floor, not a claim it failed.
+        fidelities.push("wire-sent");
         return {
           ...base,
+          fidelity: weakestFidelity(fidelities),
           presses,
           seen,
           focus,
@@ -385,7 +403,14 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       // it onto the next real control. A changed label is exactly what an
       // internally-paged container changes, so it counts as movement here
       // even when the node itself does not.
-      if (focusKey(focus) === before && labelOf(focus) === beforeLabel) {
+      // The same comparison the stall check below needs, named once and used
+      // twice: a press that changed the focused node OR its accessible name
+      // routed to Steam. That is the evidence verify:true buys with an extra
+      // CDP round trip, and this loop has already paid for it.
+      const moved = !(focusKey(focus) === before && labelOf(focus) === beforeLabel);
+      fidelities.push(earnedFidelity(moved));
+
+      if (!moved) {
         stalls++;
         if (stalls >= stallLimit) {
           stalled = true;
@@ -400,7 +425,7 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       ...base,
       ok: true,
       found: false,
-      fidelity: presses > 0 ? "steam-routed" : null,
+      fidelity: weakestFidelity(fidelities),
       presses,
       seen,
       focus,

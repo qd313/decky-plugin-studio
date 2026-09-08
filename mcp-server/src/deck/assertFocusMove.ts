@@ -24,11 +24,17 @@ import { openCdpTunnel } from "./cdpTunnel.js";
 import { pressButton } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
 import { focusKey, describe } from "./focusKey.js";
+import { earnedFidelity, type Fidelity } from "./fidelity.js";
 
 export interface AssertFocusMoveResult {
   ok: boolean;
   reason?: string;
-  fidelity: "steam-routed" | null;
+  /**
+   * What this single press earned. `"steam-routed"` only when focus was
+   * actually observed to change; `"wire-sent"` when it did not. See
+   * fidelity.ts -- the floor is not a verdict that the press failed to route.
+   */
+  fidelity: Fidelity;
   press: string[];
   expect: string | null;
   before: ReadFocusResult | null;
@@ -183,7 +189,13 @@ export async function assertFocusMove(
 
     return {
       ok: true,
-      fidelity: "steam-routed",
+      // Earned from `moved`, which is the same before/after focus comparison
+      // pressButton's own `verify: true` makes -- the reads above already
+      // happened, so this costs nothing. Until 2026-09-08 this said
+      // "steam-routed" unconditionally, including down the !moved branch whose
+      // own diagnosis reads "press routed, focus did not move": it asserted
+      // routing while its own evidence denied it.
+      fidelity: earnedFidelity(moved),
       press,
       expect,
       before,

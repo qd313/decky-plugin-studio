@@ -390,6 +390,61 @@ test("an internally-paged container is not mistaken for a dead end", async () =>
     assert.equal(r.found, true, r.summary);
     assert.equal(r.matched, "Retry");
     assert.equal(r.presses, 5, "3 presses paging the strip, 1 genuine repeat, 1 that finally left it");
+    assert.equal(
+      r.fidelity,
+      "wire-sent",
+      "press 4 moved nothing, so the walk may not claim steam-routed for the run -- and note the fake press reports steam-routed at the wire, so this also pins that walkTo EARNS the value from its own focus reads rather than passing pressButton's through",
+    );
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a walk whose every press moved focus keeps steam-routed", async () => {
+  /*
+   * The companion to the chip-strip case above. Same seam, same fake press,
+   * but every read differs from the one before it -- so every press earned the
+   * stronger value and the fold has nothing to drag it down. Without this, a
+   * fold that simply always answered "wire-sent" would pass the test above.
+   */
+  const control = (label: string, y: number): unknown => ({
+    hasGpfocus: true,
+    elementCount: 300,
+    gpfocus: {
+      selector: `#control-${y}`,
+      selectorVerified: true,
+      tag: "BUTTON",
+      id: null,
+      classes: ["Focusable"],
+      ariaLabel: null,
+      text: label,
+      ownerText: label,
+      rect: { x: 10, y, w: 120, h: 40 },
+    },
+    gpfocusWithin: [],
+    activeElement: null,
+    agree: false,
+    quickAccessTab: "999",
+    deckyPluginRoot: true,
+  });
+  const reads = [
+    control("First", 10),
+    control("Second", 50),
+    control("Retry", 90),
+  ];
+  const fake = await startFakeCdp(["QuickAccess_uid2"], (_t, idx) => reads[Math.min(idx, reads.length - 1)]);
+  const fakePress = async (o: PressOptions): Promise<PressResult> => ({
+    ok: true,
+    fidelity: "steam-routed",
+    method: "test-seam",
+    buttons: o.buttons,
+    holdMs: o.holdMs ?? 80,
+  });
+  try {
+    const r = await walkTo({ direction: "DOWN", text: "Retry", cdpUrl: fake.base, pressFn: fakePress });
+    assert.equal(r.found, true, r.summary);
+    assert.equal(r.presses, 2);
+    assert.equal(r.fidelity, "steam-routed", "every press moved focus, so the run earned it");
   } finally {
     await fake.close();
   }

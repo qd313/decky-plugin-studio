@@ -39,6 +39,7 @@ import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned, WalkDirection } from "./walkTo.js";
 import { findCycle, CycleReport, Visit } from "./runSequence.js";
 import { pressButton } from "./pressButton.js";
+import { weakestFidelity, type Fidelity } from "./fidelity.js";
 import { getWorkspaceArtifactsDir, timestamp } from "../tools/captureOrchestrator.js";
 
 export type LaneButton = "LB" | "RB";
@@ -163,7 +164,7 @@ export interface SweepReport {
 }
 
 export interface SweepResult extends SweepReport {
-  fidelity: "steam-routed" | null;
+  fidelity: Fidelity;
   acquired: boolean;
   evidenceFile: string | null;
   durationMs: number;
@@ -263,6 +264,11 @@ export async function sweep(opts: SweepOptions = {}): Promise<SweepResult> {
   const stops: SweepStop[] = [];
   const legs: SweepLeg[] = [];
   let presses = 0;
+  // What each press earned, from the before/after reads assertFocusMove
+  // already makes. A sweep may claim only as much as its weakest press:
+  // nineteen presses that moved focus say nothing about a twentieth that
+  // did not, and that twentieth is the whole point of the distinction.
+  const fidelities: Fidelity[] = [];
   let pressRetries = 0;
   let acquired = false;
 
@@ -284,7 +290,7 @@ export async function sweep(opts: SweepOptions = {}): Promise<SweepResult> {
     };
     const result: SweepResult = {
       ...report,
-      fidelity: presses > 0 ? "steam-routed" : null,
+      fidelity: weakestFidelity(fidelities),
       acquired,
       evidenceFile: null,
       durationMs: Date.now() - started,
@@ -406,6 +412,7 @@ export async function sweep(opts: SweepOptions = {}): Promise<SweepResult> {
         };
       }
       presses++;
+      fidelities.push(r.fidelity);
       if (r.pressRetried) pressRetries++;
       if (r.moved && r.after) {
         stops.push(stopFrom(stops.length, lane, leg, button, r.after));

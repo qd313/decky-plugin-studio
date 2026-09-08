@@ -153,6 +153,11 @@ test("the chord over a surface that owns input, with no pane appearing afterward
     assert.equal(blind?.ok, false);
     assert.match(blind?.detail ?? "", /RunningApps is empty/);
     assert.ok(r.checklist?.length, "a refusal hands back the manual steps");
+    assert.equal(
+      r.fidelity,
+      "wire-sent",
+      "the chord went out and no pane appeared, so nothing established that it reached Steam -- until 2026-09-08 this path claimed steam-routed off a press count",
+    );
   } finally {
     await fake.close();
   }
