@@ -786,9 +786,12 @@ export const TOOLS: ToolDef[] = [
       "rather than reveal a real defect. Refuses if an earlier hold from this same tool was never " +
       "restored, naming when it was taken and pointing at deck_restorePowerSettings; that hold " +
       "also expires and restores itself automatically if nothing calls it first, so a forgotten " +
-      "restore costs battery for a bounded time rather than forever. UNVERIFIED ON HARDWARE: " +
-      "targets xset DPMS and systemd-logind's IdleActionSec over SSH, which have not yet been " +
-      "confirmed on a real Deck to be what actually governs sleep in the Gamescope session Steam runs.",
+      "restore costs battery for a bounded time rather than forever. DOES NOT ACTUALLY HOLD A " +
+      "STEAM DECK AWAKE -- measured on hardware 2026-09-08. It targets xset DPMS (this Deck's " +
+      "Xwayland reports no DPMS extension at all, so that half is a no-op) and systemd-logind's " +
+      "IdleActionSec (Game Mode sleep is owned by gamescope, not logind). It will report ok:true " +
+      "and hold nothing. Until its replacement lands, set Steam's own sleep timer to Never before " +
+      "a long unattended run, and do not treat this call as having done anything.",
     inputSchema: {
       type: "object",
       properties: {
@@ -808,7 +811,9 @@ export const TOOLS: ToolDef[] = [
       "Put back the screen-off and suspend timeouts deck_holdAwake disabled, exactly as they were " +
       "before. Safe to call when nothing was ever held (a clean no-op, not an error) and safe to " +
       "call twice (the second call is also a no-op). Call this at the end of every run that called " +
-      "deck_holdAwake -- the automatic expiry is a safety net, not the normal path.",
+      "deck_holdAwake -- the automatic expiry is a safety net, not the normal path. ALSO DOES NOT " +
+      "WORK: see deck_holdAwake. It additionally cannot tell a setting that was absent from one " +
+      "set to 0, so it can write back a value that was never there while reporting restored:true.",
     inputSchema: noArgs,
   },
   {

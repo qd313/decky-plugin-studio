@@ -177,14 +177,22 @@ Three rules keep that safe:
 ## Planned features
 
 ### Hold the Deck awake for a test run, then put the setting back
-> **Shipped 2026-09-07 (plan 09, lane 1) — desk-verified only, never run against a Deck.**
+> **Shipped 2026-09-07 (plan 09, lane 1), found broken on device 2026-09-08, back to planned.**
+> The tool exists on `main` and reports success. It controls nothing. What was measured is under
+> [Open bugs](#deck_holdawake-does-not-hold-a-steam-deck-awake).
 
-★★ · Planned — asked 2026-09-07
+★★★★ · Planned — asked 2026-09-07, re-scoped 2026-09-08
 - **Problem:** QA runs involve a lot of waiting (slow replies, game launches, a person reading results), and the Deck falls asleep mid-run. Presses land on a sleeping machine and get lost; reads come back empty — costing real time working out "did the Deck sleep" versus "did the thing under test break."
-- **What to build:** two paired calls. One turns off the screen/suspend timeouts and records their old values; the other restores exactly those values.
-- **Key risk:** leaving a Deck that never sleeps drains its battery. Mitigate by writing the old values to a run file the instant they're read (so a crashed session still leaves them recoverable), refusing to disable timeouts again if a previous run's values were never restored, and making the restore call safe to call even if nothing changed. Worth considering: an automatic restore after N minutes, so a forgotten restore fails toward "sleeps again" rather than "never sleeps."
-- **Not the same as** "Sleep the Deck and wake it again" below — that causes a sleep to test what happens after one; this prevents an unwanted sleep from interrupting everything else. They likely share the code that reads/writes the settings.
-- **Acceptance:** a long unattended run (several questions, a game launch, a game exit) completes with no lost press or empty read, and the Deck's sleep settings match their original values afterward.
+- **Why ★★★★ now and not ★★:** the first estimate priced this as "write two settings over SSH and put them back." That is exactly what shipped — and they were the wrong two settings. `xset dpms` targets a DPMS extension this Deck's Xwayland does not have at all, and logind's `IdleActionSec` is not what Game Mode consults. The work was never the writing; it is finding out what owns sleep on this hardware, and a genuinely possible answer is "nothing exposes a hook worth using." Research with an unknown answer, and a real chance of a null result, is what the extra two stars buy.
+- **Do the spike first — the deliverable of the first hour is an answer, not code.** Which of these actually stops *this* Deck sleeping, established by leaving it alone and watching it, in try-order:
+  1. **A systemd inhibitor lock** (`systemd-inhibit --what=idle:sleep:handle-lid-switch`). First by a distance, because it is a *lease* rather than a setting: there is nothing to restore and nothing to leak — drop the lock, or let the process holding it die, and the Deck reverts itself. That deletes the entire bug class that broke v1, rather than fixing one instance of it. ~10 minutes to try. The only open question is whether gamescope honours logind inhibitors.
+  2. **Steam's own sleep setting** (Settings → Power → *Sleep after…*), located wherever Steam persists it, and checked for whether a write is picked up without restarting the client. Truest to what a person actually does, and the setting v1 should have been aiming at.
+  3. **A gamescope-level control**, if one is exposed at all. Least likely to have a supported interface; look only if 1 and 2 both fail.
+  4. **No hook — say so.** A documented "set Steam's sleep timer to Never before a long run" plus a tool that refuses is a real, shippable outcome, and strictly better than what sits on `main` today.
+- **Fails closed, whatever the spike finds.** Until a method has been *watched working*, `deck_holdAwake` reports that it cannot hold this Deck awake. It must never again return `ok: true` for a hold it did not take — the same confident false success `bridgePortOpen` and `wire-sent` were introduced to delete, shipped by another lane on the same day.
+- **Two rules v1 got right; keep them.** Write whatever was read to a run file the instant it is read, so a crashed session still leaves it recoverable; and auto-expire toward "sleeps again" rather than "never sleeps." Add the one it got wrong: **"absent" and "0" are different answers**, and a reader that cannot tell them apart has not earned the right to restore anything.
+- **Not the same as** "Sleep the Deck and wake it again" below — that causes a sleep to test what happens after one; this prevents an unwanted sleep from interrupting everything else. They now share a research surface (what governs power on this Deck), so the spike is worth doing in the same sitting as that entry's wake experiment.
+- **Acceptance:** an unattended run of 20+ minutes with no input completes with no lost press and no empty read — watched, not assumed — and afterwards the Deck's power configuration is byte-identical to before, proven by reading it back rather than by the tool's own say-so.
 
 ### Sleep the Deck and wake it again
 ★★★ · Planned — asked 2026-09-05
@@ -327,9 +335,9 @@ Three rules keep that safe:
 ★★★ · Open — found 2026-09-08 on the plan-09 phase-2 device pass
 - **Problem:** the tool reports `ok: true`, "screen/suspend timeouts disabled", and `restored: true` — and controls nothing. Neither setting it targets governs Game Mode sleep.
 - **Measured on device:** `xset q` on `DISPLAY=:1` answers, but reports **"Server does not have the DPMS Extension"** — the whole `xset dpms`/`xset s` half is a no-op on this Deck's Xwayland. Sleep here is owned by **gamescope** (`start-gamescope-session`, `--xwayland-count 2`) with `upower`/`vpower`, not by systemd-logind's idle action, so `IdleActionSec` is the wrong knob even when it is written successfully.
-- **And restore does not restore.** Both reads collapse "could not read" into `0`, and `0` is also the value meaning "disabled". An **absent** `IdleActionSec` — where systemd's own default (30 min, per the commented line in `logind.conf`) applies — is therefore recorded as `previous: 0`, and restore writes back an explicit `IdleActionSec=0` that is never removed. The Deck is left in a state it was not in before, while the tool reports success. `/etc/systemd/logind.conf` on the QA Deck currently carries an uncommented `IdleActionSec=0` from this pass; removing it is a one-line `sudo sed -i '/^IdleActionSec=/d' /etc/systemd/logind.conf` if the original was absent.
+- **And restore does not restore.** Both reads collapse "could not read" into `0`, and `0` is also the value meaning "disabled". An **absent** `IdleActionSec` — where systemd's own default (30 min, per the commented line in `logind.conf`) applies — is therefore recorded as `previous: 0`, and restore writes back an explicit `IdleActionSec=0` that is never removed. The Deck is left in a state it was not in before, while the tool reports success. **Cleaned up 2026-09-08:** the QA Deck's `/etc/systemd/logind.conf` did carry an uncommented `IdleActionSec=0` from this pass — proven added by the tool rather than pre-existing (file mtime 00:19 on the night of the run, the line appended as the last line of an otherwise entirely commented stock file). It was removed, and the file is back to stock with `[Login]` as its only uncommented line; a copy of the modified version is at `/etc/systemd/logind.conf.dps-bak-20260908` on the Deck.
 - **Why the unit tests did not catch it:** the SSH layer is faked, so the fake answers whatever the test wrote — the "test mocks the thing under test" case the acceptance bar's honesty paragraph exists to surface. **The lane's own report predicted this precisely** and marked the feature device-unverified. The process worked; the feature does not.
-- **Fix:** read what Steam/gamescope actually consults for its own sleep timeout, and distinguish "absent" from "0" in both the read and the restore before either is trusted. Until then `deck_holdAwake` should refuse rather than report a hold it did not take — an unverified hold is exactly the confident false success `bridgePortOpen` and `wire-sent` were introduced to remove, in a tool shipped the same day.
+- **Fix:** re-scoped as a research spike rather than a patch — see [Hold the Deck awake for a test run, then put the setting back](#hold-the-deck-awake-for-a-test-run-then-put-the-setting-back) under Planned features, raised to ★★★★ on 2026-09-08. The first candidate there (a systemd inhibitor lock) would retire this bug's second half outright, since a lease has nothing to restore. Until the spike names a method that was watched working, `deck_holdAwake` must refuse rather than report a hold it did not take.
 
 ### Six tools still claim `fidelity: "steam-routed"` from a press count
 ★★ · Open — found 2026-09-07 (plan 09, lane 6)
@@ -337,13 +345,6 @@ Three rules keep that safe:
 - **Why it matters:** it is the same false claim the lane just removed, one level up and at a coarser grain — a whole sweep reports `steam-routed` on a dead path exactly as a single press used to. Fixing the leaf while leaving six callers asserting the same untruth buys less than it looks like.
 - **Not fixed in lane 6 on purpose:** outside the three-part brief; flagged rather than silently scope-crept.
 - **Fix:** have each of the six report the weakest fidelity any of its presses actually earned, rather than deriving one from a count.
-
-### Two different "build hash" implementations, both called the build hash
-★★ · Open — found 2026-09-07 (plan 09, merge review)
-- **Problem:** lanes 2 and 3 each needed to fingerprint "the files `deck_deploy` would ship" and each built its own. `deck/buildHash.ts` (lane 2) hashes each file, then hashes the sorted `path:sha256` lines; `checks/buildHash.ts` (lane 3) hashes `rel\0content\0` concatenated in one pass. Both read the same `listDeploySources()` manifest and **both are correct**; they simply produce different values for the same tree. Measured on `example-plugin`: `sha256:2f4ef12a…` (lane 3) versus `b70fcb14…` (lane 2).
-- **Why it matters:** `deck_checkReady` reports "the deployed build matches" against one, and `deck_saveCheck` stamps a check file with the other. Those two facts are most useful together — "this check passed against the build you are running" — and today they cannot be compared.
-- **Why it was not unified at merge:** lane 3's hash is **persisted inside saved check files**, so changing the algorithm silently invalidates every check already on disk. That is a file-format decision, not a merge cleanup.
-- **Fix:** pick one (lane 2's is the superset — it also hashes remotely over SSH), have the other call it, and bump the check file's `formatVersion` so old files are rejected with a clear message rather than silently mis-compared.
 
 ### The extension's 30s status poll opens COM7 and collides with presses
 ★ · Open — found 2026-08-31, mitigated
@@ -362,6 +363,15 @@ Three rules keep that safe:
 ---
 
 ## Fixed bugs
+
+### Fixed 2026-09-08
+
+**Two different "build hash" implementations, both called the build hash** · ★★ (found in the plan 09 merge review)
+- **Problem:** lanes 2 and 3 each needed to fingerprint "the files `deck_deploy` would ship", and each built its own. `deck/buildHash.ts` (lane 2) hashed every file, then hashed the sorted `path:sha256` lines; `checks/buildHash.ts` (lane 3) hashed `rel content ` concatenated in one pass. Both read the same `listDeploySources()` manifest and **both were correct** — they simply produced different values for the same tree. Measured on `example-plugin`: `sha256:2f4ef12a…` against `b70fcb14…`. So `deck_checkReady` reported "the deployed build matches" against one number while `deck_saveCheck` stamped the other into a check file, and those two facts — at their most useful together — could not be compared at all.
+- **Kept lane 2's, for a structural reason rather than a stylistic one.** Its two-stage shape is the only one that can also be computed *on the Deck*, where `sha256sum` hands back one digest per file and nothing can stream every file's bytes through a single hasher without shipping a script. Lane 3's one-pass stream could never answer "is the build on the Deck the one on my PC", so unifying the other way would have cost the remote comparison outright. `checks/buildHash.ts` is now a thin adapter over `deck/buildHash.ts`, keeping the two things worth keeping from its own side: the `sha256:` prefix, so a value sitting in a check file says what it is, and the input list, so a post-mortem can say what was fingerprinted.
+- **The migration is the part that made this a decision and not a cleanup.** The number a check file stores changed, so `CHECK_FORMAT_VERSION` went 1 → 2 in the same commit, and a version 1 file is now refused by name with advice to re-save it. The alternative was a saved check reporting a build mismatch for a build that never changed — precisely the false alarm the fingerprint exists to prevent.
+- **Preserved rather than dropped:** lane 3's hash tolerated an entry that vanished between listing and hashing, where lane 2's threw. That tolerance moved into `listFiles()`, because `checkRunner` fingerprints through it from two unguarded call sites.
+- **Not done here:** lane 2 keeps per-file digests, so a replay could name *which* file drifted. Today a mismatch still only says "different build".
 
 ### Fixed 2026-09-07 (plan 09 — eight parallel lanes)
 
