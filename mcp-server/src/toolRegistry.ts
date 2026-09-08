@@ -468,6 +468,100 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "deck_saveCheck",
+    description:
+      "Run a deck_sweep or deck_runSequence and, if it completes cleanly, save its landings as a NAMED CHECK FILE under checksDir (default '<workspace>/checks/<name>.json') in the consumer's own repo -- the file deck_replayChecks reruns later. This is how 'I just fixed this bug' becomes a check that keeps failing if it comes back, instead of a sweep report a person reads once and forgets. Only the fields that are actually facts about the plugin's landings are saved (labels, selectors, rects, focus identity, the visibility verdict, cycle/reachability findings) -- timing, press-retry counts and other run-to-run noise are stripped before saving, so a replay cannot fail for a reason that has nothing to do with the plugin. The check also records a hash of the plugin bundle it was saved against (see deck_replayChecks), NOT a version string or a timestamp. Refuses to save -- with a reason, no file written -- when the run itself did not complete cleanly (a press failed, the Deck was unreachable, the killswitch fired): a check records what 'right' looks like, and a broken run is not that.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Name for the check. Becomes checksDir/<name>.json (sanitized)." },
+        tool: {
+          type: "string",
+          enum: ["deck_sweep", "deck_runSequence"],
+          description: "Which tool to run and save the landings of.",
+        },
+        checksDir: {
+          type: "string",
+          description: "Directory the check file is written under. Defaults to '<workspace>/checks'.",
+        },
+        pluginRoot: {
+          type: "string",
+          description: "Plugin directory the build hash is computed from (the same files deck_deploy would ship). Defaults to the workspace root.",
+        },
+        sweep: {
+          type: "object",
+          description: "deck_sweep options, used when tool is 'deck_sweep'. Same shape as deck_sweep's own arguments.",
+          properties: {
+            direction: { type: "string", enum: ["UP", "DOWN", "LEFT", "RIGHT"], default: "DOWN" },
+            returnTrip: { type: "boolean", default: true },
+            lanes: { type: "number", default: 0 },
+            laneButton: { type: "string", enum: ["LB", "RB"], default: "RB" },
+            budget: { type: "number", default: 80 },
+            stallLimit: { type: "number", default: 2 },
+            acquireFocus: { type: "boolean", default: true },
+            port: { type: "string" },
+            cdpUrl: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        sequence: {
+          type: "object",
+          description: "deck_runSequence options, used when tool is 'deck_runSequence'. Same shape as deck_runSequence's own arguments.",
+          properties: {
+            steps: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  press: { oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
+                  expect: { type: "string" },
+                  label: { type: "string" },
+                  requireVisible: { type: "boolean" },
+                  holdMs: { type: "number" },
+                  settleTimeoutMs: { type: "number" },
+                },
+                required: ["press"],
+                additionalProperties: false,
+              },
+            },
+            stopOnFailure: { type: "boolean", default: true },
+            mustReachText: { type: "array", items: { type: "string" } },
+            requireVisible: { type: "boolean", default: false },
+            acquireFocus: { type: "boolean", default: true },
+            port: { type: "string" },
+            cdpUrl: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["name", "tool"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_replayChecks",
+    description:
+      "Rerun every saved check under checksDir (default '<workspace>/checks') against the CURRENT build and diff each against what it recorded when it passed -- the loop a person used to do by hand after every build. For each check, first compares a fresh hash of the plugin bundle (the same files deck_deploy would ship, from pluginRoot) against the hash recorded when the check was saved: a mismatch is reported as 'this check has never been verified against what is running now' -- distinct from a landing diff, and no landing comparison is even attempted in that case, because comparing across two different builds would not prove anything either way. When the build matches, a differing landing is named specifically -- which stop or step, which field, expected versus actual -- never just a pass/fail count. A malformed or truncated check file is reported by name under `errors` rather than crashing the rest of the replay. Pass `only` to replay a subset by name.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        checksDir: { type: "string", description: "Directory to read check files from. Defaults to '<workspace>/checks'." },
+        pluginRoot: {
+          type: "string",
+          description: "Plugin directory the current build hash is computed from. Defaults to the workspace root.",
+        },
+        only: {
+          type: "array",
+          items: { type: "string" },
+          description: "Replay only checks with these saved names. Default: every check file in checksDir.",
+        },
+        port: { type: "string", description: "Serial port of the bridge's COM side, for any deck_runSequence checks." },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel per check." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_pressButton",
     description:
       "Deliver a real controller press to the Deck through the ESP32 bridge board, which Steam sees as a USB gamepad and routes through Steam Input. This is the only press that proves anything about D-pad wiring; if the bridge is unavailable it refuses rather than falling back to a synthetic press, because a synthetic one proves a handler ran and nothing more. A list of buttons is a SIMULTANEOUS press -- one HID report with every bit set -- which is not a chord: [GUIDE, A] that way is read by Steam as a bare GUIDE press, so the Steam main menu opens and the A lands in whatever that menu is showing (measured 2026-08-26, when the mistake was one press away from launching a game). For a real chord such as the Quick Access Menu toggle -- hold GUIDE, tap A -- use deck_pressChord. To press AND check what happened, use deck_assertFocusMove instead.",

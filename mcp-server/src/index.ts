@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import readline from "readline";
+import path from "path";
 import {
   startIngestServer,
   stopIngestServer,
@@ -24,6 +25,7 @@ import { openPluginDriven } from "./deck/openPlugin.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
+import { saveCheck, replayChecks } from "./checks/checkRunner.js";
 import { loadPreviewConfig } from "./preview/previewConfig.js";
 import {
   stopAutomation,
@@ -224,6 +226,62 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
+      });
+
+    case "tools/deck_saveCheck": {
+      const name = String(params.name ?? "");
+      const tool = String(params.tool ?? "");
+      const pluginRoot = params.pluginRoot != null ? String(params.pluginRoot) : getWorkspaceRoot();
+      const checksDir = params.checksDir != null ? String(params.checksDir) : path.join(getWorkspaceRoot(), "checks");
+
+      if (tool === "deck_sweep") {
+        const s = (params.sweep as Record<string, unknown>) ?? {};
+        return saveCheck({
+          name,
+          tool: "deck_sweep",
+          checksDir,
+          pluginRoot,
+          sweepOptions: {
+            direction: s.direction != null ? (String(s.direction).toUpperCase() as WalkDirection) : undefined,
+            returnTrip: s.returnTrip != null ? Boolean(s.returnTrip) : undefined,
+            lanes: s.lanes != null ? Number(s.lanes) : undefined,
+            laneButton: s.laneButton != null ? (String(s.laneButton).toUpperCase() as LaneButton) : undefined,
+            budget: s.budget != null ? Number(s.budget) : undefined,
+            stallLimit: s.stallLimit != null ? Number(s.stallLimit) : undefined,
+            acquireFocus: s.acquireFocus != null ? Boolean(s.acquireFocus) : undefined,
+            port: s.port != null ? String(s.port) : undefined,
+            cdpUrl: s.cdpUrl != null ? String(s.cdpUrl) : undefined,
+          },
+        });
+      }
+      if (tool === "deck_runSequence") {
+        const seq = (params.sequence as Record<string, unknown>) ?? {};
+        return saveCheck({
+          name,
+          tool: "deck_runSequence",
+          checksDir,
+          pluginRoot,
+          sequenceOptions: {
+            steps: (seq.steps as SequenceStep[]) ?? [],
+            stopOnFailure: seq.stopOnFailure != null ? Boolean(seq.stopOnFailure) : undefined,
+            mustReachText: (seq.mustReachText as string[]) ?? undefined,
+            requireVisible: seq.requireVisible != null ? Boolean(seq.requireVisible) : undefined,
+            acquireFocus: seq.acquireFocus != null ? Boolean(seq.acquireFocus) : undefined,
+            port: seq.port != null ? String(seq.port) : undefined,
+            cdpUrl: seq.cdpUrl != null ? String(seq.cdpUrl) : undefined,
+          },
+        });
+      }
+      throw new Error(`deck_saveCheck: "tool" must be "deck_sweep" or "deck_runSequence", got ${JSON.stringify(params.tool)}`);
+    }
+
+    case "tools/deck_replayChecks":
+      return replayChecks({
+        checksDir: params.checksDir != null ? String(params.checksDir) : path.join(getWorkspaceRoot(), "checks"),
+        pluginRoot: params.pluginRoot != null ? String(params.pluginRoot) : getWorkspaceRoot(),
+        only: (params.only as string[]) ?? undefined,
+        port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
       });
 
     case "tools/deck_pressButton":
