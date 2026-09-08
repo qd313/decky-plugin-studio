@@ -17,6 +17,7 @@ import {
   previewCallTestHook,
   previewSetPermissions,
 } from "./previewHealth.js";
+import { withImage } from "../toolContent.js";
 
 export { previewHealth, previewCallTestHook, previewSetPermissions };
 
@@ -260,7 +261,18 @@ export async function previewSnapshotDom(params: {
   }
 }
 
-export async function previewCaptureScreenshot(params: { selector?: string } = {}) {
+/**
+ * Explicit return type on purpose: without it, TypeScript infers a union of
+ * the exact literal shape each branch returns, and when one of those
+ * branches returns through withImage() (a generic passthrough) instead of a
+ * bare literal, that branch's member misses the sibling-optional-property
+ * widening TS applies to plain literal returns -- so compareScreenshot.ts's
+ * `capture.error` access broke across a change that never touched it. One
+ * flat shape with optional fields sidesteps the inference quirk entirely.
+ */
+export async function previewCaptureScreenshot(
+  params: { selector?: string } = {}
+): Promise<{ path: string; error?: string; note?: string }> {
   const workspace = getWorkspaceRoot();
   const outDir = path.join(workspace, "screenshots", "preview");
   fs.mkdirSync(outDir, { recursive: true });
@@ -281,7 +293,9 @@ export async function previewCaptureScreenshot(params: { selector?: string } = {
     }
     if (response.result.pngBase64) {
       fs.writeFileSync(outPath, Buffer.from(response.result.pngBase64, "base64"));
-    } else if (response.result.htmlFallback) {
+      return withImage({ path: outPath }, { path: outPath });
+    }
+    if (response.result.htmlFallback) {
       const htmlPath = outPath.replace(/\.png$/, ".html");
       fs.writeFileSync(htmlPath, response.result.htmlFallback, "utf8");
       return { path: htmlPath, note: "PNG unavailable; wrote HTML fallback" };
