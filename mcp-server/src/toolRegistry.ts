@@ -71,7 +71,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_status",
     description:
-      "Snapshot of the whole dev environment: tunnel running, debug-ingest count and port, whether the Deck answers, whether Ollama is reachable, and whether the ESP32 controller bridge can open its configured COM port (bridgeReady/bridgePort/bridgeReason). Cheap — call this first when diagnosing why something is not working.",
+      "Snapshot of the whole dev environment: tunnel running, debug-ingest count and port, whether the Deck answers, whether Ollama is reachable, and whether the ESP32 controller bridge's COM port opens on THIS PC and its firmware answers (bridgePortOpen/bridgePort/bridgeReason). bridgePortOpen says nothing about whether the board's other USB lead reaches the Deck — a board plugged into the PC but unplugged from the Deck still reports it true. `bridgeReady` is the same value under its old, misleading name — deprecated, kept only for an existing consumer (bonsAI); use bridgePortOpen. Cheap — call this first when diagnosing why something is not working.",
     inputSchema: noArgs,
   },
   {
@@ -470,7 +470,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_pressButton",
     description:
-      "Deliver a real controller press to the Deck through the ESP32 bridge board, which Steam sees as a USB gamepad and routes through Steam Input. This is the only press that proves anything about D-pad wiring; if the bridge is unavailable it refuses rather than falling back to a synthetic press, because a synthetic one proves a handler ran and nothing more. A list of buttons is a SIMULTANEOUS press -- one HID report with every bit set -- which is not a chord: [GUIDE, A] that way is read by Steam as a bare GUIDE press, so the Steam main menu opens and the A lands in whatever that menu is showing (measured 2026-08-26, when the mistake was one press away from launching a game). For a real chord such as the Quick Access Menu toggle -- hold GUIDE, tap A -- use deck_pressChord. To press AND check what happened, use deck_assertFocusMove instead.",
+      "Deliver a real controller press to the Deck through the ESP32 bridge board, which Steam sees as a USB gamepad and routes through Steam Input. If the bridge is unavailable it refuses rather than falling back to a synthetic press, because a synthetic one proves a handler ran and nothing more. By default this reports `fidelity: \"wire-sent\"` on success -- the firmware acknowledged the command, which is ALL that is known; it does NOT mean the Deck received anything (a board plugged into this PC but unplugged from the Deck still acks). Set verify:true to earn `fidelity: \"steam-routed\"`: it reads Steam's gamepad focus before and after the press over CDP and reports the stronger fidelity only when that focus actually changed, otherwise an honest ok:false. verify costs a CDP round trip on top of the press. A list of buttons is a SIMULTANEOUS press -- one HID report with every bit set -- which is not a chord: [GUIDE, A] that way is read by Steam as a bare GUIDE press, so the Steam main menu opens and the A lands in whatever that menu is showing (measured 2026-08-26, when the mistake was one press away from launching a game). For a real chord such as the Quick Access Menu toggle -- hold GUIDE, tap A -- use deck_pressChord. To press AND get a full moved/matched diagnosis, use deck_assertFocusMove instead.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -482,6 +482,13 @@ export const TOOLS: ToolDef[] = [
         },
         holdMs: { type: "number", default: 80, description: "How long to hold the press." },
         port: { type: "string", description: "Serial port of the bridge's COM side, e.g. COM7." },
+        verify: {
+          type: "boolean",
+          default: false,
+          description:
+            "Earn fidelity:\"steam-routed\" by reading Steam's gamepad focus before and after the press over CDP, reporting it only when focus actually changed. Costs a CDP round trip; off by default, in which case fidelity never exceeds \"wire-sent\".",
+        },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint for verify; omit to open a temporary tunnel." },
       },
       required: ["buttons"],
       additionalProperties: false,
@@ -652,7 +659,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "preview_start",
     description:
-      "Start the in-IDE QAM preview (Vite sandbox plus the Python sidecar that serves real main.py RPC).",
+      "Confirm the in-IDE QAM preview (Vite sandbox plus the Python sidecar that serves real main.py RPC) is up, and sync its RPC allowlist. This does NOT launch the preview process itself -- run 'Decky: Open Preview' for that. It verifies the configured preview URL actually answers before reporting running:true; a stale or never-started URL comes back as running:false with a reason, not a false positive.",
     inputSchema: noArgs,
   },
   {

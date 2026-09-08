@@ -164,3 +164,41 @@ test("the DPS_NO_BRIDGE guard stops probeBridge before it ever calls findPad or 
     assert.equal(result.bridgeReady, false);
     assert.match(result.reason ?? "", /DPS_NO_BRIDGE/);
   }));
+
+// ---- bridgePortOpen: the honest name, with bridgeReady kept as a deprecated
+// alias carrying the identical value so bonsAI (an existing consumer reading
+// the old field) does not break on the rename. See the module doc comment on
+// BridgeProbeResult for why "ready" was the wrong word in the first place. ----
+
+test("bridgePortOpen and the deprecated bridgeReady agree, true case", () =>
+  withBridgeGuard(undefined, async () => {
+    const result = await probeBridge({
+      findPad: () => "C:/fake/bridge/tools/pad.py",
+      run: () => ({ ok: true }),
+    });
+
+    assert.equal(result.bridgePortOpen, true);
+    assert.equal(result.bridgeReady, true);
+    assert.equal(result.bridgePortOpen, result.bridgeReady, "the alias must carry the same value, not just the same truthiness by coincidence");
+  }));
+
+test("bridgePortOpen and the deprecated bridgeReady agree, false case (board unplugged)", () =>
+  withBridgeGuard(undefined, async () => {
+    const result = await probeBridge({
+      findPad: () => "C:/fake/bridge/tools/pad.py",
+      run: () => ({ ok: false, reason: "could not open port 'COM7': FileNotFoundError" }),
+    });
+
+    assert.equal(result.bridgePortOpen, false);
+    assert.equal(result.bridgeReady, false);
+    assert.equal(result.bridgePortOpen, result.bridgeReady);
+  }));
+
+test("bridgePortOpen and the deprecated bridgeReady agree when pad.py is entirely missing", () =>
+  withBridgeGuard(undefined, async () => {
+    const result = await probeBridge({ findPad: () => null, run: () => ({ ok: true }) });
+
+    assert.equal(result.bridgePortOpen, false);
+    assert.equal(result.bridgeReady, false);
+    assert.equal(result.bridgePortOpen, result.bridgeReady);
+  }));

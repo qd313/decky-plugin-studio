@@ -43,10 +43,47 @@ function syncPreviewUrlFromState(): void {
   if (state.url) previewUrl = state.url;
 }
 
-export function previewStart(): { running: boolean; url?: string; rpcAllowlist?: unknown } {
-  previewRunning = true;
+/**
+ * Does anything actually answer at this URL? `previewStart` used to set
+ * `running: true` and return unconditionally -- a stale URL left over from a
+ * closed preview panel, or one that had never started, was reported as
+ * running with nobody ever having asked it a question. Same defect class as
+ * bridgeReady/steam-routed on the Deck side, just here on the preview side.
+ *
+ * A response of any kind (even a 404) means a process is listening; only a
+ * connection failure (nothing there) counts as "not running".
+ */
+async function previewUrlAnswers(url: string, timeoutMs = 2500): Promise<boolean> {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function previewStart(): Promise<{
+  running: boolean;
+  url?: string;
+  rpcAllowlist?: unknown;
+  reason?: string;
+}> {
   syncPreviewUrlFromState();
-  previewUrl = previewUrl || process.env.DECKY_PREVIEW_URL || "http://127.0.0.1:5173";
+  const url = previewUrl || process.env.DECKY_PREVIEW_URL || "http://127.0.0.1:5173";
+
+  if (!(await previewUrlAnswers(url))) {
+    previewRunning = false;
+    return {
+      running: false,
+      url,
+      reason:
+        `Nothing answered at ${url}. This call only confirms a preview that is already up -- it ` +
+        "does not start one. Run 'Decky: Open Preview' first, then call preview_start again.",
+    };
+  }
+
+  previewUrl = url;
+  previewRunning = true;
   const rpcSnap = syncRpcAllowlistToSandbox(getWorkspaceRoot());
   return { running: true, url: previewUrl, rpcAllowlist: rpcSnap };
 }
