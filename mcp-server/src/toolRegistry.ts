@@ -775,6 +775,79 @@ export const TOOLS: ToolDef[] = [
     },
   },
 
+  // ---- Deck: hold-awake and settings snapshot (session hygiene) ---------
+  {
+    name: "deck_holdAwake",
+    description:
+      "Disable the Deck's screen-off and suspend timeouts for the length of a QA run, recording " +
+      "their previous values first so deck_restorePowerSettings can put them back exactly. Use " +
+      "this before a run with a lot of waiting -- slow replies, a game launch, a person reading " +
+      "results -- where the Deck falling asleep would swallow presses and empty-read the rest, " +
+      "rather than reveal a real defect. Refuses if an earlier hold from this same tool was never " +
+      "restored, naming when it was taken and pointing at deck_restorePowerSettings; that hold " +
+      "also expires and restores itself automatically if nothing calls it first, so a forgotten " +
+      "restore costs battery for a bounded time rather than forever. UNVERIFIED ON HARDWARE: " +
+      "targets xset DPMS and systemd-logind's IdleActionSec over SSH, which have not yet been " +
+      "confirmed on a real Deck to be what actually governs sleep in the Gamescope session Steam runs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ttlMinutes: {
+          type: "number",
+          default: 30,
+          description: "Auto-restore after this many minutes if deck_restorePowerSettings is never called.",
+        },
+        note: { type: "string", description: "Freeform note recorded in the run file, e.g. why this hold was taken." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_restorePowerSettings",
+    description:
+      "Put back the screen-off and suspend timeouts deck_holdAwake disabled, exactly as they were " +
+      "before. Safe to call when nothing was ever held (a clean no-op, not an error) and safe to " +
+      "call twice (the second call is also a no-op). Call this at the end of every run that called " +
+      "deck_holdAwake -- the automatic expiry is a safety net, not the normal path.",
+    inputSchema: noArgs,
+  },
+  {
+    name: "deck_snapshotSettings",
+    description:
+      "Copy the plugin's settings directory on the Deck (~/homebrew/settings/<name>), and " +
+      "optionally its data directory (~/homebrew/data/<name>), into a local run file over SSH " +
+      "before a test round changes anything. Replaces the hand-made settings.json.bak-preQA files " +
+      "QA sessions have been leaving on the Deck. Refuses if an earlier snapshot from this tool " +
+      "was never restored, naming when it was taken and pointing at deck_restoreSettings; it also " +
+      "expires and restores itself automatically after ttlMinutes if nothing calls restore first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        includeData: {
+          type: "boolean",
+          default: false,
+          description: "Also snapshot ~/homebrew/data/<name>, not just the settings directory.",
+        },
+        ttlMinutes: {
+          type: "number",
+          default: 30,
+          description: "Auto-restore after this many minutes if deck_restoreSettings is never called.",
+        },
+        note: { type: "string", description: "Freeform note recorded in the run file." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "deck_restoreSettings",
+    description:
+      "Put back exactly the settings (and data, if it was included) that deck_snapshotSettings " +
+      "copied off the Deck, verifying the saved archive's checksum before sending anything so a " +
+      "truncated or tampered run file is refused rather than pushed. Safe to call when nothing was " +
+      "ever snapshotted (a clean no-op, not an error) and safe to call twice.",
+    inputSchema: noArgs,
+  },
+
   // ---- Plugin: build & validation ---------------------------------------
   {
     name: "plugin_detect",

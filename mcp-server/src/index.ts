@@ -28,6 +28,8 @@ import { readPage, waitFor } from "./deck/readPage.js";
 import { closeSharedCdpTunnel } from "./deck/cdpTunnel.js";
 import { saveCheck, replayChecks } from "./checks/checkRunner.js";
 import { checkDeckReady, DeclaredState } from "./deck/checkReady.js";
+import { holdAwake, restorePowerSettings } from "./deck/holdAwake.js";
+import { snapshotSettings, restoreSettings } from "./deck/settingsSnapshot.js";
 import { loadPreviewConfig } from "./preview/previewConfig.js";
 import {
   stopAutomation,
@@ -389,6 +391,25 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
 
     case "tools/deck_getEnv":
       return deckAutonomy.getEnv();
+
+    case "tools/deck_holdAwake":
+      return holdAwake({
+        ttlMinutes: params.ttlMinutes != null ? Number(params.ttlMinutes) : undefined,
+        note: params.note != null ? String(params.note) : undefined,
+      });
+
+    case "tools/deck_restorePowerSettings":
+      return restorePowerSettings();
+
+    case "tools/deck_snapshotSettings":
+      return snapshotSettings({
+        includeData: params.includeData != null ? Boolean(params.includeData) : undefined,
+        ttlMinutes: params.ttlMinutes != null ? Number(params.ttlMinutes) : undefined,
+        note: params.note != null ? String(params.note) : undefined,
+      });
+
+    case "tools/deck_restoreSettings":
+      return restoreSettings();
 
     case "tools/plugin_diffRpc":
       return diffRpc();
