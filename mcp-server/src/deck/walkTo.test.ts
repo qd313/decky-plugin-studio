@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
 import { walkTo, labelOf } from "./walkTo.js";
+import type { PressOptions, PressResult } from "./pressButton.js";
 
 /** A page whose ring sits on a control with the given label. */
 function pageWith(text: string, ownerText = ""): unknown {
@@ -293,6 +294,102 @@ test("a walk that cannot press says so rather than reporting a miss", async () =
     assert.match(r.reason ?? "", /DPS_NO_BRIDGE/);
     assert.match(r.summary, /no press could be delivered/);
     assert.deepEqual(r.seen, ["Save chat to Desktop"], "it still reports what it did see");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("an internally-paged container is not mistaken for a dead end", async () => {
+  /*
+   * The stall check used to compare only focusKey -- the focused element's
+   * DOM identity -- between presses. A container that handles its own
+   * direction presses internally (a context-chip strip, say) keeps the ring
+   * on that SAME element while paging what it announces, so every press
+   * "moved" nothing as far as focusKey was concerned even though the plugin
+   * was responding correctly. Measured shape: walkTo reported stalled: true
+   * after 3 presses when 2 more would have walked out of the strip onto the
+   * next real control, which reads as a focus-trap bug in the plugin under
+   * test when the plugin is fine.
+   *
+   * This uses the pressFn test seam (new, alongside AcquireFocusOptions'
+   * existing one) to drive the walk's own loop through a scripted sequence
+   * of reads without a bridge board -- the general stall test above could
+   * only pin the "cannot press" refusal, because pressButton() itself always
+   * refuses under DPS_NO_BRIDGE with no way to substitute it. That is an
+   * honest tradeoff to flag: this test exercises the exact comparison the
+   * fix changed (focusKey() and labelOf(), the shared accessible-name
+   * resolver), over a fake CDP server, but the presses themselves are
+   * simulated, not sent through pad.py -- the happy path still wants
+   * confirming on a Deck against a real chip strip.
+   */
+  const STRIP_SELECTOR = "#chip-strip .chip";
+  const STRIP_RECT = { x: 10, y: 20, w: 300, h: 40 };
+  const chipPage = (label: string): unknown => ({
+    hasGpfocus: true,
+    elementCount: 300,
+    gpfocus: {
+      selector: STRIP_SELECTOR,
+      selectorVerified: true,
+      tag: "DIV",
+      id: null,
+      classes: ["Focusable", "chip-strip"],
+      ariaLabel: label,
+      text: label,
+      ownerText: label,
+      rect: STRIP_RECT,
+    },
+    gpfocusWithin: [],
+    activeElement: null,
+    agree: false,
+    quickAccessTab: "999",
+    deckyPluginRoot: true,
+  });
+  const nextControlPage: unknown = {
+    hasGpfocus: true,
+    elementCount: 300,
+    gpfocus: {
+      selector: "#retry-button",
+      selectorVerified: true,
+      tag: "BUTTON",
+      id: null,
+      classes: ["Focusable"],
+      ariaLabel: null,
+      text: "Retry",
+      ownerText: "Retry",
+      rect: { x: 10, y: 80, w: 120, h: 40 },
+    },
+    gpfocusWithin: [],
+    activeElement: null,
+    agree: false,
+    quickAccessTab: "999",
+    deckyPluginRoot: true,
+  };
+  // Read sequence: idx0 is the read before the first press, one more per
+  // press after that. The strip announces chips 1..4 (same node, changing
+  // label -- movement) then repeats chip 4 once for real (no change at all --
+  // a genuine stall), before the ring finally leaves the strip.
+  const reads = [
+    chipPage("Chip 1 of 4"), // idx0: initial read
+    chipPage("Chip 2 of 4"), // idx1: after press 1
+    chipPage("Chip 3 of 4"), // idx2: after press 2
+    chipPage("Chip 4 of 4"), // idx3: after press 3 -- old code stalls HERE
+    chipPage("Chip 4 of 4"), // idx4: after press 4 -- a real repeat (1 stall)
+    nextControlPage, // idx5: after press 5 -- escaped the strip
+  ];
+  const fake = await startFakeCdp(["QuickAccess_uid2"], (_title, idx) => reads[Math.min(idx, reads.length - 1)]);
+  const fakePress = async (o: PressOptions): Promise<PressResult> => ({
+    ok: true,
+    fidelity: "steam-routed",
+    method: "test-seam",
+    buttons: o.buttons,
+    holdMs: o.holdMs ?? 80,
+  });
+  try {
+    const r = await walkTo({ direction: "RIGHT", text: "Retry", cdpUrl: fake.base, pressFn: fakePress });
+    assert.equal(r.stalled, false, "a label change on the same node must count as movement, not a stall");
+    assert.equal(r.found, true, r.summary);
+    assert.equal(r.matched, "Retry");
+    assert.equal(r.presses, 5, "3 presses paging the strip, 1 genuine repeat, 1 that finally left it");
   } finally {
     await fake.close();
   }

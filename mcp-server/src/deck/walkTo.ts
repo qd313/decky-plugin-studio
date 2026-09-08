@@ -65,6 +65,15 @@ export interface WalkToOptions {
   acquireFocus?: boolean;
   port?: string;
   cdpUrl?: string;
+  /**
+   * Test-only seam: substitutes the press used for every step of the walk,
+   * so the loop -- including stall detection -- can be exercised with the
+   * fake CDP server and no bridge board. Production code always leaves this
+   * unset and gets the real bridge press. Same idea as
+   * AcquireFocusOptions.pressFn, which does the same for the single placing
+   * press before the walk begins.
+   */
+  pressFn?: typeof pressButton;
 }
 
 export interface WalkToResult {
@@ -245,6 +254,8 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
   let stalled = false;
   let overshot = false;
 
+  const press = opts.pressFn ?? pressButton;
+
   try {
     let focus = await readFocusAt(cdpBase, 10_000);
     let acquired = false;
@@ -332,7 +343,11 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       if (presses >= budget) break;
 
       const before = focusKey(focus);
-      const p = await pressButton({ buttons: [direction], port: opts.port });
+      // `label` (above) is this same read's accessible name, resolved by the
+      // one shared resolver (labelOfElement, via labelOf) so this cannot drift
+      // from what runSequence and openPlugin call "the same control".
+      const beforeLabel = label;
+      const p = await press({ buttons: [direction], port: opts.port });
       if (!p.ok) {
         return {
           ...base,
@@ -360,8 +375,17 @@ export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
       }
 
       // A ring that stops moving is at a dead end. Spending the rest of the
-      // budget on it costs a round trip per press and learns nothing.
-      if (focusKey(focus) === before) {
+      // budget on it costs a round trip per press and learns nothing -- but
+      // "stops moving" has to mean the DOM node AND its accessible name are
+      // both unchanged. A container that handles its own direction presses
+      // internally -- a context-chip strip, say -- keeps the ring on the same
+      // element (same focusKey) while paging what that element announces, so
+      // checking focusKey alone reported a real, responding control as a dead
+      // end after stallLimit presses when a few more would have walked out of
+      // it onto the next real control. A changed label is exactly what an
+      // internally-paged container changes, so it counts as movement here
+      // even when the node itself does not.
+      if (focusKey(focus) === before && labelOf(focus) === beforeLabel) {
         stalls++;
         if (stalls >= stallLimit) {
           stalled = true;
