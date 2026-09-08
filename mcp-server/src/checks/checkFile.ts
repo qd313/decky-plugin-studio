@@ -39,7 +39,15 @@ import type {
 } from "../deck/runSequence.js";
 import type { Visibility } from "../deck/readFocus.js";
 
-export const CHECK_FORMAT_VERSION = 1 as const;
+/**
+ * Bumped 1 -> 2 on 2026-09-08, when `buildHash` changed meaning: checks/buildHash.ts
+ * stopped computing its own fingerprint and now delegates to deck/buildHash.ts, which
+ * produces a different (equally correct) number for the same tree. A version 1 file
+ * therefore carries a hash that cannot be compared with anything this build computes,
+ * and replaying one would report a build mismatch for a build that never changed.
+ * Rejecting it loudly is the point of this constant.
+ */
+export const CHECK_FORMAT_VERSION = 2 as const;
 
 export type CheckedTool = "deck_sweep" | "deck_runSequence";
 
@@ -286,8 +294,16 @@ export function validateCheckFile(parsed: unknown, sourceLabel = "check file"): 
     );
   }
   if (c.formatVersion !== CHECK_FORMAT_VERSION) {
+    // Version 1 is the one case worth naming, because the file is not corrupt and
+    // the reader can fix it in one call -- silently comparing its old-algorithm hash
+    // would look like a build regression rather than a format change.
+    const advice =
+      c.formatVersion === 1
+        ? " Version 1 recorded a different build fingerprint, so its buildHash cannot be " +
+          "compared with anything this build computes. Re-save the check with deck_saveCheck."
+        : "";
     throw new CheckFileError(
-      `${sourceLabel} has formatVersion ${JSON.stringify(c.formatVersion)}; this build only reads ${CHECK_FORMAT_VERSION}.`,
+      `${sourceLabel} has formatVersion ${JSON.stringify(c.formatVersion)}; this build only reads ${CHECK_FORMAT_VERSION}.${advice}`,
     );
   }
   if (typeof c.name !== "string" || !c.name.trim()) {

@@ -12,22 +12,38 @@
  * actually determines what deck_sweep or deck_runSequence will see is the
  * bytes that get deployed.
  *
- * So this hashes exactly the files `deck_deploy` would copy to the Deck --
- * {@link listDeploySources}, the same list the deploy path already uses, not a
- * second guess at what "the build" means -- sorted for a stable order and
- * fed through one sha256 as (relative path, NUL, content, NUL) triples so a
- * renamed-but-identical file and a same-name-different-content file both
- * change the digest.
+ * The fingerprint itself lives in ../deck/buildHash.ts; this file is a thin
+ * adapter onto it. That was not true at first. This module and that one were
+ * written in the same session by two lanes that each needed "hash the files
+ * deck_deploy would ship", and each produced a correct-but-different number
+ * for the same tree -- measured on example-plugin, sha256:2f4ef12a... here
+ * against b70fcb14... there. Two fingerprints that disagree are worse than
+ * one that is imperfect: deck_checkReady would report "the deployed build
+ * matches" while deck_saveCheck stamped a different value for the same bytes,
+ * and those two facts are at their most useful together ("this check passed
+ * against the build you are running").
+ *
+ * ../deck/buildHash.ts won for a structural reason, not a stylistic one. Its
+ * two-stage shape -- hash each file, then hash the sorted `path:sha256` lines
+ * -- is the only one that can also be computed *on the Deck*, where
+ * `sha256sum` hands back one digest per file and there is no way to stream
+ * every file's bytes through a single hasher without shipping a script. This
+ * module's one-pass stream could never answer "is the build on the Deck the
+ * one on my PC", so unifying the other way would have cost that comparison
+ * outright. Kept from this side: the `sha256:` prefix, so a value sitting in
+ * a check file says what it is, and the input list, so a post-mortem can say
+ * what was fingerprinted.
+ *
+ * Because the number changed, CHECK_FORMAT_VERSION went to 2 in the same
+ * commit. A check file written before this carries the old algorithm's hash
+ * and would otherwise report a build mismatch for a build that never changed
+ * -- the exact false alarm this fingerprint exists to prevent.
  *
  * Deliberately NOT included: file mtimes (touch a file without changing it
  * and the hash must not move), and anything outside DEPLOY_COPY_ENTRIES plus
  * the root .py helpers (a README edit must not invalidate every check).
  */
-import crypto from "crypto";
-import fs from "fs";
-import path from "path";
-
-import { listDeploySources } from "../deploy/copyManifest.js";
+import { combineManifest, localBuildManifest } from "../deck/buildHash.js";
 
 export interface BuildHashResult {
   /** "sha256:<hex>" -- prefixed so a check file's `buildHash` is self-describing. */
@@ -36,45 +52,18 @@ export interface BuildHashResult {
   inputs: string[];
 }
 
-/** Depth-first, alphabetical file listing under `pluginRoot`, relative paths only. */
-function collectFiles(pluginRoot: string, rel: string, out: string[]): void {
-  const abs = path.join(pluginRoot, rel);
-  let st: fs.Stats;
-  try {
-    st = fs.statSync(abs);
-  } catch {
-    return; // a listed entry that vanished between listing and hashing: skip, don't crash
-  }
-  if (st.isDirectory()) {
-    for (const entry of fs.readdirSync(abs).sort()) {
-      collectFiles(pluginRoot, path.join(rel, entry), out);
-    }
-  } else if (st.isFile()) {
-    out.push(rel);
-  }
-}
-
 /**
  * Fingerprint of everything `deck_deploy` would ship for `pluginRoot`.
  *
  * Pure with respect to anything but the filesystem: same files, same bytes,
- * same hash, on any machine, any run, any time of day.
+ * same hash, on any machine, any run, any time of day. Paths come back
+ * forward-slashed from the manifest, so a check saved on Windows and replayed
+ * on Linux fingerprints and reads identically.
  */
 export function computeBuildHash(pluginRoot: string): BuildHashResult {
-  const files: string[] = [];
-  for (const entry of listDeploySources(pluginRoot)) {
-    collectFiles(pluginRoot, entry, files);
-  }
-  files.sort((a, b) => a.localeCompare(b));
-
-  const digest = crypto.createHash("sha256");
-  for (const rel of files) {
-    // Forward slashes so the hash does not change just because a check was
-    // saved on Windows and replayed on Linux or vice versa.
-    digest.update(rel.split(path.sep).join("/"));
-    digest.update("\0");
-    digest.update(fs.readFileSync(path.join(pluginRoot, rel)));
-    digest.update("\0");
-  }
-  return { hash: `sha256:${digest.digest("hex")}`, inputs: files };
+  const manifest = localBuildManifest(pluginRoot);
+  return {
+    hash: `sha256:${combineManifest(manifest)}`,
+    inputs: manifest.map((entry) => entry.path),
+  };
 }

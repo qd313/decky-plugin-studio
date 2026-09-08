@@ -38,7 +38,18 @@ function toPosix(rel: string): string {
 /** Every file under one deploy-source entry, relative to pluginRoot. */
 function listFiles(pluginRoot: string, rel: string): string[] {
   const abs = path.join(pluginRoot, rel);
-  const stat = fs.statSync(abs);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(abs);
+  } catch {
+    // An entry that vanished between listDeploySources() and here -- skip it
+    // rather than crash. checks/buildHash.ts fingerprints through this
+    // function from two unguarded call sites in checkRunner, and a mid-build
+    // race is not worth an exception there. A tree that is unreadable in its
+    // entirety still fails safe: an empty manifest, which verifyDeployedBuild
+    // reports as `matches: null`, never as a match.
+    return [];
+  }
   if (!stat.isDirectory()) return [toPosix(rel)];
   const out: string[] = [];
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {

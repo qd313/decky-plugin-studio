@@ -309,11 +309,36 @@ test("an unknown formatVersion is rejected rather than misread", () => {
   );
 });
 
+test("a version 1 check is refused with advice, not silently mis-compared", () => {
+  assert.throws(
+    () =>
+      validateCheckFile(
+        {
+          formatVersion: 1,
+          name: "x",
+          tool: "deck_sweep",
+          buildHash: "sha256:2f4ef12a",
+          runOptions: {},
+          expected: { stops: [], legs: [], totals: {} },
+        },
+        "checks/v1.json",
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof CheckFileError);
+      const msg = (err as Error).message;
+      assert.match(msg, /formatVersion 1/);
+      assert.match(msg, /different build fingerprint/);
+      assert.match(msg, /deck_saveCheck/);
+      return true;
+    },
+  );
+});
+
 test("an unknown tool name is rejected", () => {
   assert.throws(
     () =>
       validateCheckFile(
-        { formatVersion: 1, name: "x", tool: "deck_launchGame", buildHash: "sha256:a", runOptions: {}, expected: {} },
+        { formatVersion: CHECK_FORMAT_VERSION, name: "x", tool: "deck_launchGame", buildHash: "sha256:a", runOptions: {}, expected: {} },
         "checks/wrong-tool.json",
       ),
     /unknown tool "deck_launchGame"/,
@@ -324,7 +349,7 @@ test("a deck_sweep check missing its expected shape is rejected", () => {
   assert.throws(
     () =>
       validateCheckFile(
-        { formatVersion: 1, name: "x", tool: "deck_sweep", buildHash: "sha256:a", runOptions: {}, expected: { onlyThis: true } },
+        { formatVersion: CHECK_FORMAT_VERSION, name: "x", tool: "deck_sweep", buildHash: "sha256:a", runOptions: {}, expected: { onlyThis: true } },
         "checks/shapeless.json",
       ),
     /missing stops\/legs\/totals/,

@@ -17,7 +17,7 @@ import path from "node:path";
 
 import { saveCheck, replayChecks, loadCheckFile, checkFilePath } from "./checkRunner.js";
 import { computeBuildHash } from "./buildHash.js";
-import { diffCheck } from "./checkFile.js";
+import { CHECK_FORMAT_VERSION, diffCheck } from "./checkFile.js";
 import type { SweepResult, SweepStop, SweepLeg } from "../deck/sweep.js";
 import type { RunSequenceResult, StepResult } from "../deck/runSequence.js";
 import type { Visibility } from "../deck/readFocus.js";
@@ -189,7 +189,7 @@ test("a saved check round-trips through the filesystem", async () => {
     assert.ok(fs.existsSync(saved.filePath!));
 
     const loaded = loadCheckFile(saved.filePath!);
-    assert.equal(loaded.formatVersion, 1);
+    assert.equal(loaded.formatVersion, CHECK_FORMAT_VERSION);
     assert.equal(loaded.name, "carousel-down");
     assert.equal(loaded.tool, "deck_sweep");
     assert.equal(loaded.buildHash, saved.check!.buildHash);
