@@ -73,13 +73,28 @@ export function execScpRecursive(
   }
 }
 
+/*
+ * This used to try `systemctl --user restart plugin_loader.service` first,
+ * falling back to `sudo systemctl restart` on failure in one `A || B` remote
+ * command. Decky installs plugin_loader.service under /etc/systemd/system --
+ * system scope, never user scope (see LOADER_READINESS_REMOTE's comment,
+ * which reads the same unit with plain `is-active`) -- so the `--user`
+ * attempt always failed and the fallback always ran. With `stdio: "inherit"`
+ * that meant systemctl's own "Failed to restart plugin_loader.service: ..."
+ * from the doomed first half printed on the console of every SUCCESSFUL
+ * restart, training people to read that line as noise -- which is exactly
+ * the line that matters the one time the fallback also fails. Calling the
+ * system-scope restart directly removes the half that never had a chance,
+ * without changing how a real failure (the `sudo` restart itself failing) is
+ * reported: it still throws via runWithRetry, from the same execSync call.
+ */
 export function sshRestartLoader(user: string, host: string): void {
   const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
   runWithRetry("plugin_loader restart", () => {
-    proc.execSync(
-      `ssh ${user}@${host} "systemctl --user restart plugin_loader.service || sudo systemctl restart plugin_loader.service"`,
-      { stdio: "inherit", shell }
-    );
+    proc.execSync(`ssh ${user}@${host} "sudo systemctl restart plugin_loader.service"`, {
+      stdio: "inherit",
+      shell,
+    });
   });
 }
 
@@ -254,13 +269,20 @@ const PERMISSION_SIGNS =
  *
  * On failure this throws a diagnostic naming the target and the owner
  * problem, rather than letting the caller surface the raw failed command.
+ *
+ * `sources` is the deploy manifest (`listDeploySources()`'s return value) --
+ * the exact top-level entries that were staged into `tempDir` and are about
+ * to be copied into `targetDir`. It is what scopes the final chown: see the
+ * comment below the copy for why `chown -R root:root <targetDir>` used to
+ * re-own the whole installed directory instead.
  */
 export function moveDeployedPluginIntoPlace(
   user: string,
   host: string,
   tempDir: string,
   targetDir: string,
-  pluginName: string
+  pluginName: string,
+  sources: string[]
 ): void {
   const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
   // The parent is spelled out rather than computed with `$(dirname ...)`: this
@@ -315,10 +337,33 @@ export function moveDeployedPluginIntoPlace(
    * on purpose: +x for directories and already-executable files, never for a
    * plain .py.
    */
+  /*
+   * SCOPE THE CHOWN TO WHAT WAS STAGED, NOT THE WHOLE INSTALLED DIRECTORY.
+   *
+   * This used to be `sudo chown -R root:root ${target}` -- the *installed*
+   * directory, walked whole. That re-owns everything already there as well
+   * as what this deploy just copied in, including content this deploy never
+   * touches: bonsAI's `data/` (seed packs, kb seeds, rag_seed) is written by
+   * the plugin at runtime, not shipped by a deploy, and the merge-not-replace
+   * copy above deliberately leaves it alone. Silently changing its owner to
+   * root is harmless while the plugin only reads it, breaks it the moment
+   * anything writes there, and blocks a later plain `scp` from ever
+   * overwriting those files again -- exactly the problem this function
+   * exists to work around, now inflicted on directories nobody deployed.
+   *
+   * `sources` is the same manifest execScpRecursive just used to build the
+   * upload (`listDeploySources()`), so it names precisely the top-level
+   * entries staged in `temp` and about to land in `target`. Chowning each of
+   * those -- not `target` itself -- re-owns what was written and nothing
+   * else.
+   */
+  const stagedTargets = sources.map((entry) => quoteRemotePath(`${targetDir}/${entry}`));
+  const chownCmd =
+    stagedTargets.length > 0 ? `sudo chown -R root:root ${stagedTargets.join(" ")}` : "true";
   const remoteCmd =
     `chmod -R u+rwX,go+rX ${temp} && ` +
     `sudo mkdir -p ${target} && sudo cp -a ${temp}/. ${target}/ && ` +
-    `sudo rm -rf ${temp} && sudo chown -R root:root ${target}`;
+    `sudo rm -rf ${temp} && ${chownCmd}`;
   try {
     proc.execSync(`ssh ${user}@${host} "${remoteCmd}"`, { stdio: "pipe", encoding: "utf8", shell });
   } catch (err: unknown) {

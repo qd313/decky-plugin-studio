@@ -34,6 +34,7 @@ import {
   proc,
   quoteRemotePath,
   moveDeployedPluginIntoPlace,
+  sshRestartLoader,
   waitForLoaderReady,
   parseLoaderReadiness,
   loaderReadinessCommand,
@@ -315,7 +316,11 @@ test("the elevated move quotes every path and never uses local command substitut
     return "";
   }) as typeof proc.execSync;
   try {
-    moveDeployedPluginIntoPlace("deck", "1.2.3.4", "/tmp/stage-1", "~/homebrew/plugins/bonsAI", "bonsAI");
+    moveDeployedPluginIntoPlace("deck", "1.2.3.4", "/tmp/stage-1", "~/homebrew/plugins/bonsAI", "bonsAI", [
+      "dist",
+      "main.py",
+      "plugin.json",
+    ]);
   } finally {
     proc.execSync = realExec;
   }
@@ -330,6 +335,38 @@ test("the elevated move quotes every path and never uses local command substitut
   // `$(dirname ...)` here would be run by a POSIX shell on the LOCAL side,
   // before ssh ever saw the string.
   assert.ok(!cmd.includes("$("), "no command substitution in the ssh argument");
+});
+
+test("the elevated move chowns only what this deploy staged, never the whole installed directory", () => {
+  // `sources` is listDeploySources()'s manifest -- the exact top-level
+  // entries staged into tempDir and about to be copied into targetDir. This
+  // used to be `sudo chown -R root:root <targetDir>`, which walks the WHOLE
+  // installed directory: harmless while pre-existing content there (bonsAI's
+  // `data/`, seeded at install time and written by the plugin at runtime,
+  // never shipped by a deploy) is only read, a silent problem the moment
+  // anything writes to it, and it blocks a later plain `scp` from ever
+  // overwriting those files again.
+  const calls: string[] = [];
+  const realExec = proc.execSync;
+  proc.execSync = ((cmd: string) => {
+    calls.push(cmd);
+    return "";
+  }) as typeof proc.execSync;
+  const target = "~/homebrew/plugins/bonsAI";
+  const sources = ["dist", "main.py", "plugin.json"];
+  try {
+    moveDeployedPluginIntoPlace("deck", "1.2.3.4", "/tmp/stage-1", target, "bonsAI", sources);
+  } finally {
+    proc.execSync = realExec;
+  }
+  assert.equal(calls.length, 1);
+  const cmd = calls[0];
+  const expectedChown = `sudo chown -R root:root ${sources.map((s) => quoteRemotePath(`${target}/${s}`)).join(" ")}`;
+  assert.ok(cmd.includes(expectedChown), `expected a chown scoped to the staged entries, got: ${cmd}`);
+  assert.ok(
+    !cmd.includes(`chown -R root:root ${quoteRemotePath(target)}`),
+    `chown must not target the whole installed directory (that re-owns pre-existing content like data/): ${cmd}`
+  );
 });
 
 test("the elevated move normalises the staged modes before copying them into place", () => {
@@ -359,7 +396,7 @@ test("the elevated move normalises the staged modes before copying them into pla
     return "";
   }) as typeof proc.execSync;
   try {
-    moveDeployedPluginIntoPlace("deck", "1.2.3.4", "/tmp/stage-1", "~/homebrew/plugins/bonsAI", "bonsAI");
+    moveDeployedPluginIntoPlace("deck", "1.2.3.4", "/tmp/stage-1", "~/homebrew/plugins/bonsAI", "bonsAI", ["dist"]);
   } finally {
     proc.execSync = realExec;
   }
@@ -377,6 +414,34 @@ test("the elevated move normalises the staged modes before copying them into pla
   assert.ok(
     !/chmod[^&]*homebrew/.test(cmd),
     "the chmod belongs on the staging dir, not on the installed directory's pre-existing content",
+  );
+});
+
+test("sshRestartLoader targets the system-scope unit directly, with no doomed --user attempt first", () => {
+  // plugin_loader.service is installed under /etc/systemd/system (system
+  // scope) -- never user scope -- so a `systemctl --user restart` attempt
+  // always fails. Chaining it first as `A || B` with stdio:"inherit" meant
+  // systemctl's own "Failed to restart plugin_loader.service: ..." from that
+  // doomed half printed on the console of every SUCCESSFUL restart, training
+  // people to read that line as noise -- exactly the line that matters the
+  // one time the real (sudo) restart also fails.
+  const calls: string[] = [];
+  const realExec = proc.execSync;
+  proc.execSync = ((cmd: string) => {
+    calls.push(cmd);
+    return "";
+  }) as typeof proc.execSync;
+  try {
+    sshRestartLoader("deck", "1.2.3.4");
+  } finally {
+    proc.execSync = realExec;
+  }
+  assert.equal(calls.length, 1, "one ssh call, not a retry, since the fake never throws");
+  const cmd = calls[0];
+  assert.match(cmd, /sudo systemctl restart plugin_loader\.service/);
+  assert.ok(
+    !cmd.includes("--user"),
+    "the unit is system-scope; a --user attempt always fails and only trains people to ignore its failure line"
   );
 });
 

@@ -365,7 +365,7 @@ export async function deployRemote(
     execScpRecursive(pluginRoot, sources, `${user}@${host}:${tempDir}`);
   });
 
-  moveDeployedPluginIntoPlace(user, host, tempDir, targetDir, pluginName);
+  moveDeployedPluginIntoPlace(user, host, tempDir, targetDir, pluginName, sources);
 
   sshRestartLoader(user, host);
 
