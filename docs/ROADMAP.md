@@ -323,6 +323,14 @@ Three rules keep that safe:
 
 ## Open bugs
 
+### `deck_holdAwake` does not hold a Steam Deck awake
+★★★ · Open — found 2026-09-08 on the plan-09 phase-2 device pass
+- **Problem:** the tool reports `ok: true`, "screen/suspend timeouts disabled", and `restored: true` — and controls nothing. Neither setting it targets governs Game Mode sleep.
+- **Measured on device:** `xset q` on `DISPLAY=:1` answers, but reports **"Server does not have the DPMS Extension"** — the whole `xset dpms`/`xset s` half is a no-op on this Deck's Xwayland. Sleep here is owned by **gamescope** (`start-gamescope-session`, `--xwayland-count 2`) with `upower`/`vpower`, not by systemd-logind's idle action, so `IdleActionSec` is the wrong knob even when it is written successfully.
+- **And restore does not restore.** Both reads collapse "could not read" into `0`, and `0` is also the value meaning "disabled". An **absent** `IdleActionSec` — where systemd's own default (30 min, per the commented line in `logind.conf`) applies — is therefore recorded as `previous: 0`, and restore writes back an explicit `IdleActionSec=0` that is never removed. The Deck is left in a state it was not in before, while the tool reports success. `/etc/systemd/logind.conf` on the QA Deck currently carries an uncommented `IdleActionSec=0` from this pass; removing it is a one-line `sudo sed -i '/^IdleActionSec=/d' /etc/systemd/logind.conf` if the original was absent.
+- **Why the unit tests did not catch it:** the SSH layer is faked, so the fake answers whatever the test wrote — the "test mocks the thing under test" case the acceptance bar's honesty paragraph exists to surface. **The lane's own report predicted this precisely** and marked the feature device-unverified. The process worked; the feature does not.
+- **Fix:** read what Steam/gamescope actually consults for its own sleep timeout, and distinguish "absent" from "0" in both the read and the restore before either is trusted. Until then `deck_holdAwake` should refuse rather than report a hold it did not take — an unverified hold is exactly the confident false success `bridgePortOpen` and `wire-sent` were introduced to remove, in a tool shipped the same day.
+
 ### Six tools still claim `fidelity: "steam-routed"` from a press count
 ★★ · Open — found 2026-09-07 (plan 09, lane 6)
 - **Problem:** lane 6 made `deck_pressButton` honest (`"wire-sent"` unless `verify: true` earns `"steam-routed"`), but `assertFocusMove.ts`, `walkTo.ts`, `sweep.ts`, `openPlugin.ts`, `runSequence.ts` and `gameSession.ts` each independently hardcode `fidelity: "steam-routed"` based purely on `presses > 0`, and none of them reads the field `pressButton()` now returns.
@@ -356,6 +364,16 @@ Three rules keep that safe:
 ## Fixed bugs
 
 ### Fixed 2026-09-07 (plan 09 — eight parallel lanes)
+
+> **Phase-2 device pass, 2026-09-08.** Verified on hardware: `bridgePortOpen`, `wire-sent` vs an
+> earned `steam-routed`, the shared CDP tunnel (one ssh process across 8 reads, ~4.2x, and a
+> **real** killed tunnel detected and rebuilt in 408 ms), the image content block resolving from a
+> **packaged** build with no source-tree fallback, `deck_checkReady` reporting `unknown` rather
+> than passing, and a save/replay round trip that ignored genuinely different press counts and
+> durations. Not verified: lane 6's dead-path repro (needs a human to unplug a USB lead), lane 5's
+> chip-strip walk (could not reproduce the container in the state the Deck was in) and lane 5's
+> deploy chown (not run — it restarts the loader on a live consumer Deck). Lane 1 **failed**: see
+> Open bugs.
 
 Landed desk-verified only: unit tests green, **no on-device pass yet**. See
 [09-parallel-feature-session.md](planning/09-parallel-feature-session.md) § Phase 2.
