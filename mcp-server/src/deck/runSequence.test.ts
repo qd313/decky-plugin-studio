@@ -319,6 +319,31 @@ test("an empty step list is refused rather than reported as a pass", async () =>
   assert.match(r.reason ?? "", /No steps given/);
 });
 
+test("a step with a guessed field name is refused cleanly, not thrown as a TypeError", async () => {
+  // The exact shape an agent guesses when it misremembers deck_runSequence's
+  // step schema: {"buttons": ["DOWN"]} instead of {"press": "DOWN"}. Before
+  // validation this reached assertFocusMove's
+  // `(Array.isArray(opts.press) ? opts.press : [opts.press]).map(b => b.trim())`
+  // with press undefined, throwing a raw
+  // "TypeError: Cannot read properties of undefined (reading 'trim')"
+  // instead of returning a clean, actionable result -- and it never got that
+  // far anyway, because nothing checked the shape before the tunnel opened.
+  const fake = await startFakeCdp(["QuickAccess_uid2"], () => focusedPage);
+  try {
+    const r = await runSequence({
+      steps: [{ buttons: ["DOWN"] } as any],
+      cdpUrl: fake.base,
+      writeEvidence: false,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.ranSteps, 0, "a malformed step must be caught before anything is pressed");
+    assert.match(r.reason ?? "", /step 1/, "the error must name which step");
+    assert.match(r.reason ?? "", /press/, "the error must name the missing field");
+  } finally {
+    await fake.close();
+  }
+});
+
 test("an unreachable Deck stops before any press", async () => {
   const r = await runSequence({
     steps: [{ press: "DOWN" }],

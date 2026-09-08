@@ -294,6 +294,63 @@ function matchesText(el: FocusElement | null, needle: string): boolean {
   return label.toLowerCase().includes(needle.toLowerCase());
 }
 
+function describeShape(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "an array";
+  return typeof v;
+}
+
+/**
+ * Reject a malformed step before anything is pressed, naming the exact step
+ * and field.
+ *
+ * The tool schema (toolRegistry.ts's `deck_runSequence` entry) already
+ * documents that a step needs `press`, but that schema is descriptive only --
+ * nothing on the dispatch path enforces it (src/index.ts's
+ * `tools/deck_runSequence` case hands `params.steps` straight through as a
+ * bare cast). A caller that guesses a field name -- `{"buttons": ["DOWN"]}`
+ * instead of `{"press": "DOWN"}`, the shape an agent reaches for when it
+ * misremembers this schema -- used to sail past every check here and land in
+ * assertFocusMove's `(Array.isArray(opts.press) ? opts.press :
+ * [opts.press]).map(b => b.trim())` with `press: undefined`, throwing a raw
+ * `TypeError: Cannot read properties of undefined (reading 'trim')`. The
+ * caller is nearly always an agent, not a person: a validation error naming
+ * the expected shape sends it back to the schema, a TypeError sends it
+ * debugging the server.
+ */
+function validateSteps(steps: SequenceStep[]): string | null {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i] as unknown;
+    const where = `step ${i + 1}`;
+    if (step === null || typeof step !== "object" || Array.isArray(step)) {
+      return `${where}: expected an object with a "press" field, got ${describeShape(step)}.`;
+    }
+    const press = (step as { press?: unknown }).press;
+    if (press === undefined) {
+      const fields = Object.keys(step as Record<string, unknown>);
+      return (
+        `${where}: missing required field "press" (e.g. {"press": "DOWN"}).` +
+        (fields.length > 0 ? ` Got fields: ${fields.join(", ")}.` : "")
+      );
+    }
+    if (typeof press === "string") {
+      if (!press.trim()) return `${where}.press: must not be empty.`;
+      continue;
+    }
+    if (Array.isArray(press)) {
+      if (press.length === 0) return `${where}.press: array must not be empty.`;
+      for (let j = 0; j < press.length; j++) {
+        if (typeof press[j] !== "string" || !(press[j] as string).trim()) {
+          return `${where}.press[${j}]: must be a non-empty string, got ${describeShape(press[j])}.`;
+        }
+      }
+      continue;
+    }
+    return `${where}.press: must be a string or an array of strings, got ${describeShape(press)}.`;
+  }
+  return null;
+}
+
 export async function runSequence(opts: RunSequenceOptions): Promise<RunSequenceResult> {
   const started = Date.now();
   const steps = opts.steps ?? [];
@@ -322,6 +379,18 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
 
   if (steps.length === 0) {
     return { ...base, reason: "No steps given.", summary: "nothing to run" };
+  }
+
+  // Checked before anything else, including the killswitch latch: a
+  // malformed step is a caller mistake, not a run, and should never cost a
+  // tunnel or a press before it is reported.
+  const shapeError = validateSteps(steps);
+  if (shapeError) {
+    return {
+      ...base,
+      reason: shapeError,
+      summary: `refused: ${shapeError}`,
+    };
   }
 
   // Checked before the tunnel is opened, not just before the first press: a
