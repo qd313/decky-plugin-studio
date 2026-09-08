@@ -4,6 +4,7 @@ Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) l
 
 - [Deferred / shelved](#deferred--shelved) — out of scope for now, with reasons
 - [In progress](#in-progress) — partially shipped
+- [Session plan](#session-plan) — the seven parallel lanes next, and the solo order after them
 - [Planned features](#planned-features) — not yet built
 - [Open bugs](#open-bugs) — known issues, not yet fixed
 - [Fixed bugs](#fixed-bugs) — grouped by fix date, newest first
@@ -65,6 +66,95 @@ Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) l
 - **First real finding:** the sweep's first run found 4 chips that are focused but not visible (expected was 0), reproduced byte-for-byte across two runs. Reported to bonsAI as a consumer bug.
 - **Honest limit:** this is a DOM hit-test, not real eyes — wrong colors or compositing artifacts still need screenshots or a human. It only guarantees that focused-but-occluded and focused-but-offscreen can't pass silently anymore.
 - **Full design:** [06-visibility-oracle-and-free-play-sweep.md](planning/06-visibility-oracle-and-free-play-sweep.md)
+
+---
+
+## Session plan
+
+Written 2026-09-07. Work splits into two shapes, and the dividing line is hardware, not
+difficulty: there is one Deck, one bridge board, one COM port and one focus ring. Anything
+whose risk lives at the desk can run in parallel. Anything whose hard part is "what does this
+particular hardware actually do" is an experiment before it is a feature, and runs alone.
+
+The split is not theoretical. Almost every serious bug in [Fixed bugs](#fixed-bugs) passed its
+unit tests and was caught on device anyway — the bridge status timeout set to 3000ms when a
+healthy board answers in 3312ms, the visibility inset that had to become a quarter of the short
+side, two `deck_openPlugin` fixes "found only once tested on hardware," and a keydown intercept
+that was "dead code on hardware and alive under vitest, which is the recurrence engine."
+
+### Next: parallel feature session — seven lanes
+
+Each lane is one subagent in its own worktree. Lanes are grouped by which files they own, so
+they do not collide. Every lane is chosen because it can be *proven* at the desk; the Deck is
+the bottleneck, so nothing that needs it goes here.
+
+| Lane | What it covers | Device time |
+|------|----------------|-------------|
+| **L1 — Put the Deck back** | *Hold the Deck awake* + *Save and restore the plugin's settings*. One lane on purpose: they are the same state machine (snapshot, write the run file immediately, refuse a second snapshot while one is unrestored, restore safe to call twice, auto-expire toward "sleeps again"). Two lanes would build it twice and drift. | ~30 min |
+| **L2 — Don't start blind** | *Check the Deck is ready before a run starts.* Composes existing readers, does not refactor them. | ~15 min |
+| **L3 — Pin a check, replay it** | *Save a passing check and replay it after every deploy.* File format plus a diff loop; sweep reports already reproduce byte-for-byte. | ~20 min |
+| **L4 — Make the preview lie less** | *Make the preview behave more like Steam* — the two lint rules plus dropping DOM keydown for D-pad. Highest value per star on the board: the rules alone are ★ and would have caught both multi-fix recurring bugs before deploy. | **none** |
+| **L5 — Three small honest fixes** | *`deck_runSequence` crashes on a malformed step*, *deploy re-owns content / loader cries wolf*, *`deck_walkTo` calls a stay-put a stall.* | ~20 min |
+| **L6 — Say what you actually know** | *`bridgeReady` and `fidelity: "steam-routed"` report success down a dead path.* | ~15 min |
+| **L7 — One tunnel, not one per read** | *Every CDP read opens and tears down its own SSH tunnel.* Earns its slot twice: 2–3× on read-heavy runs, and every device session after it is shorter — including this plan's own. | ~10 min |
+
+**L6's compatibility call:** add `bridgePortOpen` and keep `bridgeReady` beside it as a
+deprecated alias for one version, so bonsAI does not break on a rename. Do *not* alias the
+`fidelity` value — an unverified press stops claiming `steam-routed` outright, because keeping
+the lying value available is the whole thing being fixed.
+
+**Out of this session:** *A self-check for DPS itself* was considered and cut for capacity, not
+merit. It is ★, needs no Deck and collides with nothing — drop it into any later session with
+room.
+
+### Then: solo season, in this order
+
+1. **Only one driver at a time.** First because it is cross-cutting — it would fight all seven
+   lanes above — and because every solo session after it is safer for having it: a second chat
+   session cannot sneak a press into someone else's run. It also root-fixes *the 30s status poll
+   opens COM7*, which the seven lanes will still be living with. Build it as a guard at the
+   dispatch seam in `index.ts`, not as an edit inside twenty tools.
+2. **Sleep the Deck and wake it again.** An experiment before it is a feature — the deliverable
+   of the first hour is "which wake method works on this Deck," not code. Try the wake alarm
+   first: no hardware, ~10 minutes, and it is the safety net that makes a failed bridge-keyboard
+   wake cost a minute instead of the session. Never sleep without a proven way back.
+3. **Type text on the Deck.** Immediately after 2, because they share the bridge board's
+   keyboard interface and the same "does the extra USB interface disturb Steam's view of the
+   controller" check. Build that firmware once.
+4. **Run the same check through every way into the plugin.** Five of the six paths exist today;
+   this sits here so it ships with the suspend path from 2 rather than shipping twice.
+5. **Find and launch games from the library, not the Recent shelf.** Needs a live Steam client
+   to learn the `SharedJSContext` shape for installed titles and non-Steam shortcuts — not
+   specifiable in advance, which is exactly why it is not a parallel lane.
+6. **Measure colours inside a control.** Needs the capture helper working on device and
+   thresholds tuned against real pixels. After 5, so a running game is available as a test
+   surface — highlighted words are where the colour bugs actually live.
+7. **Keep a log of every run automatically.** Last of the tool-shaped work: it wraps every
+   `deck_*` tool, so it wants a tool set that has stopped moving. Same trick as 1 — build it at
+   the dispatch seam, not inside each tool.
+8. **Time a run the way a person sees it.** Wants the lease from 1 in place, or a foreign presser
+   can pollute a timing run and the numbers lie again — which is the failure this feature exists
+   to end.
+
+Cheap enough to slot into any of the above with spare capacity: *A self-check for DPS itself* (★,
+no Deck). Waiting on work above rather than on scheduling: *One D-pad test, two runners* (needs
+L4), *Automated issue triage agent* (needs *Studio issue intake*), *Pluckable studio*.
+
+### How this lands
+
+Lane work happens in per-lane worktrees, then merges to `main` as **one squashed commit per
+lane**, so a bad feature backs out with a single `git revert` instead of an archaeology session.
+Three rules keep that safe:
+
+- **No lane touches `ROADMAP.md`, `CHANGELOG.md`, `MCP_TOOLS.md` or `AGENTS.md`.** Those are
+  written once at the end. Hand-resolved doc merges are a known recurring cost.
+- **No version bump until after the on-device pass.** A push to `main` only triggers
+  [build-vsix.yml](../.github/workflows/build-vsix.yml) when `extension/package.json` or
+  `package.json` changes — and when it does, it auto-publishes a GitHub Release. Leaving the
+  version alone is what makes landing unverified features on `main` harmless.
+- **Every lane answers one question in its report:** what could this test pass while the real
+  thing is broken? If the honest answer is "everything," the feature is marked device-unverified
+  rather than counted as done.
 
 ---
 
