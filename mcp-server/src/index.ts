@@ -24,6 +24,7 @@ import { openPluginDriven } from "./deck/openPlugin.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
+import { closeSharedCdpTunnel } from "./deck/cdpTunnel.js";
 import { loadPreviewConfig } from "./preview/previewConfig.js";
 import {
   stopAutomation,
@@ -484,13 +485,17 @@ rl.on("line", async (line) => {
 });
 
 // MCP clients shut the server down by closing stdin rather than calling a
-// shutdown method.
+// shutdown method. The shared CDP tunnel (cdpTunnel.ts) now outlives any
+// single call, so it has to be released here explicitly -- unlike the old
+// per-call tunnel, nothing else closes it on the way out.
 rl.on("close", () => {
   stopIngestServer();
+  closeSharedCdpTunnel();
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
   stopIngestServer();
+  closeSharedCdpTunnel();
   process.exit(0);
 });
