@@ -20,3 +20,6 @@ screenshots/
 
 # deck_runSequence evidence files -- per-run focus logs, not source
 runs/
+
+# Agent worktrees -- transient, and they were once committed as stray gitlinks
+.claude/worktrees/
