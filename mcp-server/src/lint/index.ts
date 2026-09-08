@@ -15,6 +15,8 @@ import { findFocusStops, NotAnalyzed } from "./focusables.js";
 import { buildGraph } from "./graph.js";
 import { checkActivation } from "./rules/activation.js";
 import { checkBanned } from "./rules/banned.js";
+import { checkCrossRealmInstanceof } from "./rules/crossRealm.js";
+import { checkKeydownRouting } from "./rules/keydown.js";
 import { checkReachable } from "./rules/reachable.js";
 import { checkReveal } from "./rules/reveal.js";
 import { checkReversibility } from "./rules/reversibility.js";
@@ -44,6 +46,8 @@ export function lintFocus(pluginRoot?: string): FocusLintResult {
     ...checkActivation(stops),
     ...checkBanned(root, stops),
     ...checkReveal(root),
+    ...checkKeydownRouting(root),
+    ...checkCrossRealmInstanceof(root),
   ];
 
   const notAnalyzed = [...allGaps, ...reachability.notAnalyzed];

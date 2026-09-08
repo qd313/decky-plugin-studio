@@ -9,7 +9,7 @@
 import { FocusStop } from "./focusables.js";
 import { Direction } from "./graph.js";
 
-export type RuleId = "R1" | "R2" | "R3" | "R4" | "R5" | "R11" | "R12";
+export type RuleId = "R1" | "R2" | "R3" | "R4" | "R5" | "R11" | "R12" | "R13" | "R14";
 
 export interface Finding {
   rule: RuleId;
