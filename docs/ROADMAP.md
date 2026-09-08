@@ -4,7 +4,7 @@ Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) l
 
 - [Deferred / shelved](#deferred--shelved) — out of scope for now, with reasons
 - [In progress](#in-progress) — partially shipped
-- [Session plan](#session-plan) — the seven parallel lanes next, and the solo order after them
+- [Session plan](#session-plan) — the eight parallel lanes next, and the solo order after them
 - [Planned features](#planned-features) — not yet built
 - [Open bugs](#open-bugs) — known issues, not yet fixed
 - [Fixed bugs](#fixed-bugs) — grouped by fix date, newest first
@@ -82,11 +82,13 @@ healthy board answers in 3312ms, the visibility inset that had to become a quart
 side, two `deck_openPlugin` fixes "found only once tested on hardware," and a keydown intercept
 that was "dead code on hardware and alive under vitest, which is the recurrence engine."
 
-### Next: parallel feature session — seven lanes
+### Next: parallel feature session — eight lanes
 
 Each lane is one subagent in its own worktree. Lanes are grouped by which files they own, so
 they do not collide. Every lane is chosen because it can be *proven* at the desk; the Deck is
 the bottleneck, so nothing that needs it goes here.
+
+**Full plan, with the verbatim lane prompts:** [09-parallel-feature-session.md](planning/09-parallel-feature-session.md)
 
 | Lane | What it covers | Device time |
 |------|----------------|-------------|
@@ -95,24 +97,38 @@ the bottleneck, so nothing that needs it goes here.
 | **L3 — Pin a check, replay it** | *Save a passing check and replay it after every deploy.* File format plus a diff loop; sweep reports already reproduce byte-for-byte. | ~20 min |
 | **L4 — Make the preview lie less** | *Make the preview behave more like Steam* — the two lint rules plus dropping DOM keydown for D-pad. Highest value per star on the board: the rules alone are ★ and would have caught both multi-fix recurring bugs before deploy. | **none** |
 | **L5 — Three small honest fixes** | *`deck_runSequence` crashes on a malformed step*, *deploy re-owns content / loader cries wolf*, *`deck_walkTo` calls a stay-put a stall.* | ~20 min |
-| **L6 — Say what you actually know** | *`bridgeReady` and `fidelity: "steam-routed"` report success down a dead path.* | ~15 min |
+| **L6 — Say what you actually know** | *`bridgeReady` and `fidelity: "steam-routed"` report success down a dead path* — plus `preview_start`, which returns `running: true` without checking that anything is running. Same family, one line. | ~15 min |
 | **L7 — One tunnel, not one per read** | *Every CDP read opens and tears down its own SSH tunnel.* Earns its slot twice: 2–3× on read-heavy runs, and every device session after it is shorter — including this plan's own. | ~10 min |
+| **L8 — Let the model actually see** | Capture tools return an `image` content block, not just a file path, so any MCP client sees the pixels — plus a resolution test that runs against a *packaged* VSIX rather than a source tree. | ~10 min |
+
+**Why L8 is not optional:** every `tools/call` today returns exactly one text block
+(`index.ts`, the `tools/call` case), and there is no `image` content block anywhere in the
+server. `deck_captureScreenshot` returns a path, so a model can only see the picture if it also
+happens to own a file-reading tool pointed at the same machine — and nothing in the tool
+description tells it to look. Two consequences: the pixels never reach an agent that is not
+Claude Code, and *Measure colours inside a control* in the solo season below cannot meet its own
+acceptance ("a number with a crop attached") until this lands. The resolution half is here
+because this seam has broken three times — the build not copying capture scripts into `dist`,
+the Windows drive-letter path join, and the VSIX not bundling `bridge/tools/` — and no test yet
+proves resolution from a packaged build.
 
 **L6's compatibility call:** add `bridgePortOpen` and keep `bridgeReady` beside it as a
 deprecated alias for one version, so bonsAI does not break on a rename. Do *not* alias the
 `fidelity` value — an unverified press stops claiming `steam-routed` outright, because keeping
 the lying value available is the whole thing being fixed.
 
-**Out of this session:** *A self-check for DPS itself* was considered and cut for capacity, not
-merit. It is ★, needs no Deck and collides with nothing — drop it into any later session with
-room.
+**Out of this session:** *A self-check for DPS itself* was cut for capacity, not merit — it is ★,
+needs no Deck and collides with nothing, so drop it into any later session with room. Preview
+parity for agents running outside VS Code is deliberately not chased: the preview drive tools
+need the extension's IPC bridge, and that work belongs with *One D-pad test, two runners*, which
+needs the same headless preview anyway.
 
 ### Then: solo season, in this order
 
-1. **Only one driver at a time.** First because it is cross-cutting — it would fight all seven
+1. **Only one driver at a time.** First because it is cross-cutting — it would fight all eight
    lanes above — and because every solo session after it is safer for having it: a second chat
    session cannot sneak a press into someone else's run. It also root-fixes *the 30s status poll
-   opens COM7*, which the seven lanes will still be living with. Build it as a guard at the
+   opens COM7*, which the eight lanes will still be living with. Build it as a guard at the
    dispatch seam in `index.ts`, not as an edit inside twenty tools.
 2. **Sleep the Deck and wake it again.** An experiment before it is a feature — the deliverable
    of the first hour is "which wake method works on this Deck," not code. Try the wake alarm
@@ -242,6 +258,7 @@ Three rules keep that safe:
 - **What to build:** given a selector or the focused element, capture the screen, sample N points inside its rect, return the colours and a cropped PNG, and compare against a saved baseline (`preview.compareScreenshot` does this for the preview only).
 - **Why four stars:** needs the capture helper (sudo, gamescope) on every read, and colour thresholds are easy to get wrong in both directions.
 - **Acceptance:** "is the focus ring the right colour and uncovered" is a number with a crop attached, reproducible across two runs on the same build.
+- **Depends on:** L8 in the [session plan](#session-plan). The crop in that acceptance line cannot reach a model today — every tool result is a single text block, so a returned PNG is a filename, not a picture.
 
 ### Type text on the Deck
 ★★★★ · Planned — asked 2026-09-07
