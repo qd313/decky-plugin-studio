@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { spawnSync } from "child_process";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extRoot = path.join(__dirname, "..");
@@ -43,6 +43,32 @@ fs.cpSync(path.join(repoRoot, "mcp-server", "dist", "scripts"), path.join(mcpDes
  * ESM by sniffing syntax, which it warns about and is not obliged to keep doing.
  */
 fs.copyFileSync(path.join(repoRoot, "mcp-server", "package.json"), path.join(mcpDest, "package.json"));
+
+/*
+ * Prove the capture scripts actually resolve from where they just landed.
+ *
+ * This has broken three times, each caught by hand after someone ran the
+ * installed extension: the build not copying capture scripts into dist at
+ * all; a POSIX-style path join applied to a Windows drive letter producing
+ * `\c:\Users\...`, a path nothing could ever open (issue #2); and separately
+ * bridge/tools/ never being bundled (checked below). verifyPackagedScripts()
+ * runs the server's own resolution arithmetic against the compiled
+ * captureOrchestrator.js this bundle just got, and needs no Deck -- reading
+ * the script files it finds is proof enough. Importing straight from the
+ * copy in `mcpDest` (rather than mcp-server/dist) means this checks what
+ * actually ships, and it runs before the slow `npm install` below so a
+ * missing script fails fast.
+ */
+const captureOrchestratorEntry = path.join(mcpDest, "dist", "tools", "captureOrchestrator.js");
+const { verifyPackagedScripts } = await import(pathToFileURL(captureOrchestratorEntry).href);
+const scriptsCheck = verifyPackagedScripts(mcpDest);
+if (!scriptsCheck.ok) {
+  console.error("The packaged MCP server cannot find its own capture scripts.");
+  console.error(JSON.stringify(scriptsCheck, null, 2));
+  console.error("deck_captureScreenshot and deck_record would fail from an installed extension.");
+  process.exit(1);
+}
+console.log(`Capture scripts resolve at ${scriptsCheck.scriptsDir}`);
 
 console.log("Installing MCP server dependencies for VSIX bundle...");
 const mcpInstall = spawnSync("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], {

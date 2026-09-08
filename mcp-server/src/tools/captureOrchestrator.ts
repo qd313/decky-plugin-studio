@@ -2,7 +2,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { getWorkspaceRoot } from "../config.js";
 
 const RECORD_RESULT_RE =
@@ -123,6 +123,52 @@ export function resolveScriptsDir(candidates: string[]): string {
 
 export function getScriptsDir(): string {
   return resolveScriptsDir(scriptsDirCandidates());
+}
+
+/** Relative to the resolved scripts directory. Both are read by
+ * `bundleDeckScript()` for every capture and every recording. */
+const REQUIRED_SCRIPT_FILES = [
+  path.join("deck", "studio-capture-common.sh"),
+  path.join("deck", "studio-capture.sh"),
+  path.join("deck", "studio-record.sh"),
+];
+
+export type PackagedScriptsCheck =
+  | { ok: true; scriptsDir: string }
+  | { ok: false; scriptsDir?: string; missing?: string[]; error?: string };
+
+/**
+ * Prove that a packaged mcp-server tree -- the VSIX bundle at
+ * `extension/resources/mcp-server`, or anything shaped like it -- can still
+ * find its own capture scripts once relocated there, without needing a Deck:
+ * resolving and reading the script files is proof enough.
+ *
+ * This is the same resolution arithmetic `getScriptsDir()` runs at call time
+ * (`scriptsDirCandidatesFrom` + `resolveScriptsDir`), fed the path a REAL
+ * compiled `dist/tools/captureOrchestrator.js` would have inside
+ * `mcpServerRoot` -- not a synthetic URL. Every prior packaging failure here
+ * (dist/scripts never copied; issue #2's lower-case drive letter; a directory
+ * that resolves but is missing a required file) surfaces as `ok: false` with
+ * enough detail to fix it. `bundle-for-vsix.mjs` calls this against the
+ * bundle it just produced and fails the build when it does not pass -- see
+ * the comment there.
+ */
+export function verifyPackagedScripts(mcpServerRoot: string): PackagedScriptsCheck {
+  const compiledEntry = path.join(mcpServerRoot, "dist", "tools", "captureOrchestrator.js");
+  const candidates = scriptsDirCandidatesFrom(pathToFileURL(compiledEntry).href);
+
+  let scriptsDir: string;
+  try {
+    scriptsDir = resolveScriptsDir(candidates);
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+
+  const missing = REQUIRED_SCRIPT_FILES.filter((rel) => !fs.existsSync(path.join(scriptsDir, rel)));
+  if (missing.length > 0) {
+    return { ok: false, scriptsDir, missing };
+  }
+  return { ok: true, scriptsDir };
 }
 
 export function isLocalSteamOS(): boolean {

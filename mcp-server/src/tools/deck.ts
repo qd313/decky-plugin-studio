@@ -34,6 +34,7 @@ import {
   steamosRwFlag,
   timestamp,
 } from "./captureOrchestrator.js";
+import { withImage } from "../toolContent.js";
 
 let tunnelProcess: ReturnType<typeof spawn> | null = null;
 /** Registry id of the live ingest tunnel, so the killswitch can reach it. */
@@ -182,12 +183,15 @@ export async function captureScreenshot(
         fs.copyFileSync(parsed.path, outPath);
       }
       const stat = fs.statSync(outPath);
-      return {
-        path: outPath,
-        bytes: stat.size,
-        mode: parsed.mode ?? mode,
-        method: parsed.method ?? "unknown",
-      };
+      return withImage(
+        {
+          path: outPath,
+          bytes: stat.size,
+          mode: parsed.mode ?? mode,
+          method: parsed.method ?? "unknown",
+        },
+        { path: outPath }
+      );
     }
     throw new Error(
       `Screenshot failed (method=${parsed.method ?? "unknown"}, bytes=${parsed.bytes ?? 0}). Open QAM + plugin first.`
@@ -212,14 +216,20 @@ export async function captureScreenshot(
   cleanupRemote(user, host, [remoteFile, remoteDiag, remoteResult, remoteScript]);
 
   const stat = fs.statSync(outPath);
-  return {
-    path: outPath,
-    bytes: stat.size,
-    mode: parsed.mode ?? mode,
-    method: parsed.method ?? "unknown",
-  };
+  return withImage(
+    {
+      path: outPath,
+      bytes: stat.size,
+      mode: parsed.mode ?? mode,
+      method: parsed.method ?? "unknown",
+    },
+    { path: outPath }
+  );
 }
 
+// deck_record returns a video, not an image -- withImage() is intentionally
+// never called here, so `tools/call` always gives it back as a path (see
+// toolContent.ts's buildToolCallContent()), the same as every other tool.
 export async function recordDeck(
   seconds: string,
   mode: string,

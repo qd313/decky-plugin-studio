@@ -32,6 +32,7 @@ import {
   StopSource,
 } from "./deck/killswitch.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
+import { buildToolCallContent, buildToolErrorContent } from "./toolContent.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.10" };
@@ -430,14 +431,17 @@ async function handleMcp(method: string, params: Record<string, unknown>): Promi
       }
       try {
         const result = await handle(`tools/${name}`, args);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result ?? null, null, 2) }],
-        };
+        // A tool that has a picture (deck_captureScreenshot,
+        // preview_captureScreenshot) called withImage() on its return value;
+        // buildToolCallContent() is the one place that knows to look for it,
+        // so a picture-returning tool never needs a case of its own here.
+        return { content: buildToolCallContent(result) };
       } catch (err) {
         // Tool failures go back as content with isError, per MCP convention, so
         // the calling model can read and react to them. A protocol-level error
-        // would be invisible to it.
-        return { content: [{ type: "text", text: String(err) }], isError: true };
+        // would be invisible to it. Always one text block, never an image --
+        // see buildToolErrorContent().
+        return buildToolErrorContent(err);
       }
     }
 
