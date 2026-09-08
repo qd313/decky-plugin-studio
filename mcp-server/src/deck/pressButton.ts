@@ -18,11 +18,30 @@
  * three no-op fixes this whole effort exists to stop. A tool that sometimes
  * says "I cannot verify this right now" is worth more than one that is
  * occasionally, silently wrong.
+ *
+ * TWO FIDELITY TIERS, found 2026-08-27 the hard way. With the bridge board
+ * plugged into this PC but its OTHER USB lead unplugged from the Deck, the
+ * firmware still opens its serial port and still acknowledges every `press`
+ * command -- it has no way to know whether its HID side ever reached
+ * anything. Every press used to report `fidelity: "steam-routed"` off that
+ * acknowledgement alone, which is exactly the false "success" this rig exists
+ * to catch, just one layer further down than deck_status's bridgeReady.
+ *
+ * So a plain press now reports `"wire-sent"`: true, and the only thing an ack
+ * proves -- the command went down the wire to the board and it answered.
+ * `"steam-routed"` is no longer reachable that way. It is EARNED only by
+ * `verify: true`, which reads Steam's gamepad focus before and after the
+ * press over CDP and reports `"steam-routed"` solely when that focus actually
+ * changed -- proof the Deck, not just the board, received something. Costs a
+ * CDP round trip on top of the press, so it is opt-in.
  */
 import { spawn } from "child_process";
 
 import { findBridgeTool, findPadTool } from "./bridgeTools.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
+import { openCdpTunnel } from "./cdpTunnel.js";
+import { readFocusAt } from "./readFocus.js";
+import { focusKey } from "./focusKey.js";
 
 /** Names the firmware accepts. Anything else is refused rather than guessed at. */
 export const BRIDGE_BUTTONS = [
@@ -46,8 +65,14 @@ export const BRIDGE_BUTTONS = [
 export interface PressResult {
   ok: boolean;
   reason?: string;
-  /** Only ever "steam-routed" -- there is no weaker tier, by design. */
-  fidelity: "steam-routed" | null;
+  /**
+   * "wire-sent" -- the bridge firmware acknowledged the command; nothing more
+   * is known, in particular NOT whether the Deck received anything.
+   * "steam-routed" -- earned only when `verify: true` was requested and a
+   * before/after focus read over CDP confirmed Steam's gamepad focus actually
+   * changed. null when no press was sent at all (validation error, refusal).
+   */
+  fidelity: "wire-sent" | "steam-routed" | null;
   method: string;
   buttons: string[];
   holdMs: number;
@@ -59,6 +84,8 @@ export interface PressResult {
    * a run log can show the collision rather than hide it.
    */
   retried?: boolean;
+  /** Present only when `verify` was requested: whether a focus check actually ran. */
+  verified?: boolean;
 }
 
 /**
@@ -100,7 +127,29 @@ export interface PressOptions {
   /** Serial port of the bridge's COM side. Defaults to the tool's own default. */
   port?: string;
   timeoutMs?: number;
+  /**
+   * Opt-in. Earns `fidelity: "steam-routed"` by reading Steam's gamepad focus
+   * over CDP before the press and again after it, and reporting the stronger
+   * fidelity only when that focus actually changed. Costs a CDP round trip on
+   * top of the press itself, so it defaults off -- with it off, the result
+   * never claims more than "wire-sent" (see PressResult.fidelity).
+   */
+  verify?: boolean;
+  /** CDP endpoint for `verify`. Default opens its own SSH forward and closes it when done. */
+  cdpUrl?: string;
+  /** Upper bound, in ms, on waiting for focus to settle after a verified press. Default 1500. */
+  verifySettleMs?: number;
+  /**
+   * TEST SEAM, same idea as openPlugin's `pressFn` and deckAutonomy's
+   * `findPad`/`run`: `child_process`'s exports are non-configurable, so a
+   * test cannot mock `spawn` directly. Production never sets this; tests
+   * inject a fake so `verify`'s before/press/after orchestration can be
+   * pinned without a board. Defaults to the real bridge-spawning delivery.
+   */
+  sendRaw?: (opts: PressOptions) => Promise<PressResult>;
 }
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Re-exported so every existing importer keeps working. The implementation
@@ -152,7 +201,18 @@ export function bridgeDisabled(): string | null {
   return null;
 }
 
-export async function pressButton(opts: PressOptions): Promise<PressResult> {
+/**
+ * The real bridge-spawning delivery: validate, refuse if disabled, spawn
+ * pad.py, retry once on a port collision. This is what `pressButton` calls by
+ * default, and what `verify` calls to actually put the press on the wire --
+ * the two paths must share one implementation so a fix here is not a fix in
+ * only one of them.
+ *
+ * Success here is `fidelity: "wire-sent"`, never `"steam-routed"`: an ack from
+ * the firmware proves the command reached the board, nothing about whether
+ * the board's other USB lead reaches the Deck. See the module doc comment.
+ */
+async function deliverPress(opts: PressOptions): Promise<PressResult> {
   const holdMs = opts.holdMs ?? 80;
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const buttons = opts.buttons.map((b) => b.trim().toUpperCase());
@@ -235,7 +295,7 @@ export async function pressButton(opts: PressOptions): Promise<PressResult> {
         } catch {
           return finish({ ...base, reason: `${REFUSAL} (unparseable acknowledgement: ${ack})` });
         }
-        finish({ ...base, ok: true, fidelity: "steam-routed", ack });
+        finish({ ...base, ok: true, fidelity: "wire-sent", ack });
       });
     });
 
@@ -256,6 +316,113 @@ export async function pressButton(opts: PressOptions): Promise<PressResult> {
   return second.ok
     ? { ...result, retried: true }
     : { ...result, reason: `${result.reason} -- and again after a 350ms retry (first: ${first.detail})` };
+}
+
+/**
+ * deliver a press, and -- when `verify` is set -- earn `"steam-routed"` by
+ * reading Steam's gamepad focus over CDP before the press and again after it.
+ *
+ * Without `verify` this is exactly `deliverPress`: `"wire-sent"` on success,
+ * nothing claimed about the Deck. With it, `"steam-routed"` is reported ONLY
+ * when the before/after focus actually differs -- the one fact an ack from
+ * the board's serial side cannot supply, and the whole reason the 2026-08-27
+ * incident (board plugged into the PC, unplugged from the Deck) went
+ * unnoticed at every layer, this one included.
+ */
+export async function pressButton(opts: PressOptions): Promise<PressResult> {
+  const send = opts.sendRaw ?? deliverPress;
+  if (!opts.verify) return send(opts);
+
+  const holdMs = opts.holdMs ?? 80;
+  const buttons = opts.buttons.map((b) => b.trim().toUpperCase());
+  const base: PressResult = {
+    ok: false,
+    fidelity: null,
+    method: "usb-hid:bridge",
+    buttons,
+    holdMs,
+    verified: false,
+  };
+
+  // Validate and check the gates BEFORE opening a CDP tunnel: a bad button
+  // name or a stopped rig must refuse here exactly as an unverified press
+  // does, not after paying for an SSH forward that was always going nowhere.
+  if (buttons.length === 0) {
+    return { ...base, reason: "No buttons given." };
+  }
+  const unknown = buttons.filter((b) => !(BRIDGE_BUTTONS as readonly string[]).includes(b));
+  if (unknown.length > 0) {
+    return {
+      ...base,
+      reason: `Unknown button(s): ${unknown.join(", ")}. Known: ${BRIDGE_BUTTONS.join(", ")}.`,
+    };
+  }
+  const disabled = bridgeDisabled();
+  if (disabled) return { ...base, reason: disabled };
+
+  let cdpBase = opts.cdpUrl;
+  let closeTunnel: (() => void) | null = null;
+  if (!cdpBase) {
+    try {
+      const tunnel = await openCdpTunnel();
+      cdpBase = tunnel.base;
+      closeTunnel = tunnel.close;
+    } catch (err) {
+      return {
+        ...base,
+        reason:
+          `verify was requested but the Deck's CDP endpoint could not be reached, so nothing ` +
+          `could be confirmed: ${(err as Error).message}`,
+      };
+    }
+  }
+
+  try {
+    const before = await readFocusAt(cdpBase, 10_000);
+    if (!before.ok) {
+      return {
+        ...base,
+        reason:
+          `verify was requested but focus could not be read before the press, so nothing could ` +
+          `be confirmed: ${before.reason}`,
+      };
+    }
+
+    const pressed = await send(opts);
+    if (!pressed.ok) return { ...pressed, verified: false };
+
+    const beforeKey = focusKey(before);
+    const settleMs = Math.max(0, opts.verifySettleMs ?? 1500);
+    const started = Date.now();
+    let after = before;
+    for (;;) {
+      await sleep(120);
+      after = await readFocusAt(cdpBase, 10_000);
+      if (focusKey(after) !== beforeKey) break;
+      if (Date.now() - started > settleMs) break;
+    }
+
+    if (focusKey(after) !== beforeKey) {
+      return { ...pressed, fidelity: "steam-routed", verified: true };
+    }
+
+    // The press went out and the board acknowledged it (pressed.ok is true),
+    // but Steam's own focus never moved. This is the exact dead-board shape:
+    // do not claim steam-routed, and do not claim ok either -- verify was
+    // asked to confirm delivery and it could not.
+    return {
+      ...pressed,
+      ok: false,
+      fidelity: "wire-sent",
+      verified: true,
+      reason:
+        "The press was sent down the wire and the bridge acknowledged it, but Steam's gamepad " +
+        "focus did not change, so this cannot confirm the Deck actually received it. Check that " +
+        "the board's USB lead is plugged into the Deck, not just this PC.",
+    };
+  } finally {
+    closeTunnel?.();
+  }
 }
 
 /**
@@ -331,7 +498,10 @@ export async function pressChord(
         const detail = (err.trim() || out.trim() || "no output").slice(0, 300);
         return finish({ ...base, reason: `${REFUSAL} (chord.py exit ${code}: ${detail})` });
       }
-      finish({ ...base, ok: true, fidelity: "steam-routed", ack: "chord sent" });
+      // Same honesty fix as deliverPress, same reason: an ack from the board
+      // proves the chord went down the wire, nothing about the Deck's side.
+      // No `verify` support here (out of scope) -- just no longer a lie.
+      finish({ ...base, ok: true, fidelity: "wire-sent", ack: "chord sent" });
     });
   });
 }

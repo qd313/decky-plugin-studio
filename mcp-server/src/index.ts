@@ -74,6 +74,9 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         automationArmed: automation.armed,
         automationStoppedSince: automation.stoppedSince,
         automationStoppedBy: automation.stoppedBy,
+        bridgePortOpen: bridge.bridgePortOpen,
+        // Deprecated: use bridgePortOpen. Same value, kept so an existing
+        // consumer (bonsAI) reading this name does not break on the rename.
         bridgeReady: bridge.bridgeReady,
         bridgePort: bridge.port,
         bridgeReason: bridge.reason,
@@ -231,6 +234,8 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         buttons: (params.buttons as string[]) ?? [],
         holdMs: params.holdMs != null ? Number(params.holdMs) : undefined,
         port: params.port != null ? String(params.port) : undefined,
+        verify: params.verify != null ? Boolean(params.verify) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
       });
 
     case "tools/deck_pressChord":

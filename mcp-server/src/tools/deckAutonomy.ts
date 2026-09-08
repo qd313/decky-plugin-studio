@@ -265,6 +265,22 @@ const DEFAULT_BRIDGE_PROBE_TIMEOUT_MS = 10_000;
 const DEFAULT_BRIDGE_PORT = "COM7";
 
 export interface BridgeProbeResult {
+  /**
+   * Does the bridge board's COM port open on THIS PC, and does the firmware
+   * answer a status query? That is ALL this measures. It says nothing about
+   * whether the board's other USB lead -- the HID side -- reaches the Deck:
+   * found 2026-08-27, a board plugged into the PC but unplugged from the Deck
+   * still opens its port and still answers, so this was `true` the whole time
+   * a live session sat completely unable to move anything.
+   */
+  bridgePortOpen: boolean;
+  /**
+   * @deprecated Same value as `bridgePortOpen`, kept only so an existing
+   * consumer (bonsAI) reading this field name does not break on a rename. Use
+   * `bridgePortOpen` -- the name this alias carries was the false-success bug
+   * reported 2026-08-27: a `true` here was read as "the Deck is reachable",
+   * which it never meant.
+   */
   bridgeReady: boolean;
   port: string;
   reason?: string;
@@ -337,21 +353,36 @@ export async function probeBridge(
   // query, so this probe can be unit-tested and CI-run with zero hardware risk.
   const disabledReason = bridgeDisabled();
   if (disabledReason) {
-    return { bridgeReady: false, port, reason: disabledReason };
+    return { bridgePortOpen: false, bridgeReady: false, port, reason: disabledReason };
   }
 
   const pad = findPad();
   if (!pad) {
-    return { bridgeReady: false, port, reason: `bridge/tools/pad.py not found from ${import.meta.url}` };
+    return {
+      bridgePortOpen: false,
+      bridgeReady: false,
+      port,
+      reason: `bridge/tools/pad.py not found from ${import.meta.url}`,
+    };
   }
 
   try {
     const result = run(pad, port, timeoutMs);
     if (!result.ok) {
-      return { bridgeReady: false, port, reason: result.reason ?? "bridge status probe failed" };
+      return {
+        bridgePortOpen: false,
+        bridgeReady: false,
+        port,
+        reason: result.reason ?? "bridge status probe failed",
+      };
     }
-    return { bridgeReady: true, port };
+    return { bridgePortOpen: true, bridgeReady: true, port };
   } catch (err) {
-    return { bridgeReady: false, port, reason: `bridge status probe threw: ${(err as Error).message}` };
+    return {
+      bridgePortOpen: false,
+      bridgeReady: false,
+      port,
+      reason: `bridge status probe threw: ${(err as Error).message}`,
+    };
   }
 }
