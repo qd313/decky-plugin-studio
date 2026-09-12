@@ -404,8 +404,12 @@ export const TOOLS: ToolDef[] = [
           description:
             "Labels that must show up somewhere during the run, matched case-insensitively against each visited control's accessible name (own aria-label, then its text, then a labelled ancestor's). The cheap way to express 'Retry must stay reachable'.",
         },
-        runName: { type: "string", description: "Name for the evidence file. Defaults to a timestamp." },
-        writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        runName: { type: "string", description: "Name for the evidence file under runs/. Naming a run is what makes it write one." },
+        writeEvidence: {
+          type: "boolean",
+          description:
+            "Write the evidence file. Default: only when runName is given, so unnamed exploratory runs leave nothing behind. true forces a write, false skips it.",
+        },
         acquireFocus: {
           type: "boolean",
           default: true,

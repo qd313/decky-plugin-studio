@@ -137,7 +137,11 @@ export interface RunSequenceOptions {
   cdpUrl?: string;
   /** Name for the evidence file. Defaults to a timestamp. */
   runName?: string;
-  /** Set false to skip writing an evidence file. Default true. */
+  /**
+   * Write the evidence file under runs/. Default: only when runName is given, so an
+   * unnamed exploratory run leaves nothing behind (464 throwaway files were once
+   * committed to a plugin repo this way). true forces a write, false skips it.
+   */
   writeEvidence?: boolean;
   /**
    * When nothing owns the ring, spend one press placing it before the run
@@ -618,7 +622,8 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     summary: parts.join("; "),
   };
 
-  if (opts.writeEvidence !== false) {
+  const wantEvidence = opts.writeEvidence ?? Boolean(opts.runName);
+  if (wantEvidence) {
     try {
       const dir = getWorkspaceArtifactsDir("runs");
       const name = (opts.runName ?? `run_${timestamp()}`).replace(/[^A-Za-z0-9._-]/g, "_");
