@@ -198,7 +198,7 @@ Three rules keep that safe:
   ```
 - **Why this retires the whole v1 bug class rather than fixing one instance of it:** it is a *lease*, not a setting. Nothing is read, nothing is written, so there is nothing to restore and nothing to leak — the "absent versus 0" confusion that made v1's restore corrupt `logind.conf` cannot arise, because no config file is touched. If the unit dies, the host crashes, or the TTL expires, the inhibitor is released and the Deck sleeps again: every failure falls toward the safe state on its own.
 - **And it can be verified rather than asserted**, which is the actual fix for v1's dishonesty: `systemd-inhibit --list` shows the hold, so `deck_holdAwake` can *prove* it took one before reporting success, and report an honest failure when it did not.
-- **Honest limit:** the spike drove `SuspendPC()` directly rather than waiting out the 60-minute idle timer. Both produce the identical logind message from the identical Steam process, so they are almost certainly the same path — but "almost certainly" is not "watched", and the first unattended run longer than an hour is what settles it.
+- **Honest limit:** the spike drove `SuspendPC()` directly rather than waiting out the 60-minute idle timer. Both produce the identical logind message from the identical Steam process, so they are almost certainly the same path — but "almost certainly" is not "watched", and the first unattended run longer than an hour is what settles it. **Narrowed 2026-09-23, reported by the bonsAI plan-64 session rather than measured here:** a 480-minute hold was taken and read back as `sleep 28800`, and held for the run — so the TTL reaches the Deck correctly at the top of its clamp, and a hold survives far longer than the 60-minute idle timer in practice. That is a long-run report from a consumer, not a controlled test of the idle path, so the limit is smaller but not gone.
 - **Acceptance:** an unattended run of 60+ minutes with no input completes with no lost press and no empty read, with `systemd-inhibit --list` showing the hold throughout; afterwards the Deck's configuration is byte-identical to before (trivially — nothing was written), and the Deck sleeps normally again.
 
 ### Sleep the Deck and wake it again
@@ -357,6 +357,12 @@ Three rules keep that safe:
 ## Fixed bugs
 
 ### Fixed 2026-09-08
+
+> **Reported by the bonsAI plan-64 session, 2026-09-23 (not measured here).** `deck_checkReady`'s
+> build-match check **passed against a real Deck for the first time** — the first device confirmation
+> of the unified fingerprint below, whose remote half (`deck/buildHash.ts`, hashing the deployed tree
+> over SSH) had until then only ever been exercised at the desk or seen reporting a mismatch. Same
+> session: `deck_holdAwake` held for a full 480-minute lease, read back as `sleep 28800`.
 
 **`deck_holdAwake` held nothing, and its restore changed the Deck** · ★★★ (opened on the plan-09 phase-2 device pass, rebuilt and verified 2026-09-08)
 - **Problem:** the tool reported `ok: true`, "screen/suspend timeouts disabled" and `restored: true`, and controlled nothing. `xset q` on this Deck's Xwayland answers *"Server does not have the DPMS Extension"*, so that half was a no-op on every call, and Game Mode sleep is not governed by logind's idle action, so `IdleActionSec` was the wrong knob even when written successfully. Both reads also collapsed "could not read" into `0` — which is *also* the value meaning "disabled" — so an **absent** `IdleActionSec` was recorded as `previous: 0` and the restore wrote back an explicit `IdleActionSec=0` that was never removed. It reported success while leaving the machine changed.
