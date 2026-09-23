@@ -338,6 +338,12 @@ Three rules keep that safe:
 
 ## Open bugs
 
+### `preview.test.ts` fails intermittently under the full suite
+★ · Open — found 2026-09-23
+- **Problem:** *"previewStart reports running:true only once the configured URL actually answers"* failed once in a full `pnpm -r test` run, then passed 5/5 when the file was run on its own, and passed on the next full run. Timing- or port-sensitive under parallel load rather than a real regression.
+- **Why it is worth an entry rather than a shrug:** this repo has already paid for this once. `npm test` failing on a clean checkout for an incidental reason cost four of the eight parallel lanes real time in plan 09, and the note written then still applies — a check that goes red for a reason unrelated to the code teaches people to read red as noise, which is the same disease as a check that goes green when it should not.
+- **Fix idea:** bind the probe to an ephemeral port chosen at test time rather than a fixed one, and assert on the observed transition instead of a timeout window.
+
 ### The extension's 30s status poll opens COM7 and collides with presses
 ★ · Open — found 2026-08-31, mitigated
 - **Problem:** the extension polls `deck_status` every 30s ([extension.ts](../extension/src/extension.ts) `pollStatus`), which opens the same serial port a live press is trying to use. Every early `deck_sweep` run died around press 10–22 with `PermissionError: could not open port 'COM7'`.
@@ -355,6 +361,17 @@ Three rules keep that safe:
 ---
 
 ## Fixed bugs
+
+### Fixed 2026-09-23
+
+**A saved check could never replay after a deploy, which is the only moment replay is for** · ★★ (found by the bonsAI plan-64 session)
+- **Problem, as reported:** `deck_replayChecks` refused to replay a check saved earlier the same evening, saying it was saved against a different build fingerprint — and the fingerprint included the plugin's `__pycache__` files, which change on every deploy.
+- **Confirmed, and it is two bugs, not one.** `py_modules` is in `DEPLOY_COPY_ENTRIES` and the fingerprint walk recurses, so every `__pycache__` entry was hashed. A `.pyc` embeds the source's mtime and size in its header, so it is rewritten whenever the `.py` is rewritten — even when the source is byte identical. The hash therefore moved on every build with no source change at all. That also broke this module's own stated rule, which says mtimes must not move the hash: a `.pyc` is an mtime wearing a content disguise.
+- **The second bug is worse and was not visible from the outside.** `diffCheck` returned early on any hash mismatch with `diffs: []` — but `replayChecks` has already run the sweep or sequence by then. The presses were sent and the time on hardware was spent, and then the answer was thrown away. The reporting session re-pressed the same twelve buttons by hand to recover what the tool had just computed and discarded. And since a replay is *for* the moment after a deploy, and a deploy is exactly when the build has legitimately changed, "refuse whenever the build differs" refuses always: the feature could not meet its own acceptance line.
+- **Fixed both ways.** Derived Python artifacts (`__pycache__/`, `*.pyc`, `*.pyo`) are excluded from the fingerprint, and the comparison is now always computed and always reported.
+- **The exclusion had to be applied remotely too**, and that is load-bearing rather than tidy: Python writes `__pycache__` on the Deck at import time, so skipping it locally while still hashing it over SSH would have produced a `deck_checkReady` build mismatch that no redeploy could ever clear. `remoteHashCommand`'s `find` prunes the same set.
+- **`ok` deliberately did not change.** It still requires the build to match AND no landing to differ, so anything keying on it behaves exactly as before; the summary now says plainly that a difference may be the change you just made rather than a regression. Labelling uncertainty rather than withholding the measurement is the same call `deck_checkReady` makes when it reports `unknown` instead of refusing to answer.
+- **Not changed:** `deck_deploy` still *ships* `__pycache__` to the Deck (`copyEntry` copies directories wholesale). Harmless — Python regenerates bytecode when the source is newer — but it is wasted transfer, and worth cleaning up the next time the deploy manifest is touched.
 
 ### Fixed 2026-09-08
 

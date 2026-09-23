@@ -261,16 +261,33 @@ test("an incidental field changing does not fail the check", () => {
   assert.equal(seqOutcome.ok, true, "settleMs/settled/diagnosis are excluded from the comparison entirely");
 });
 
-test("replaying a check saved against a different build hash says so, without pretending to have diffed anything", () => {
+test("a replay against a different build is UNVERIFIED, and still reports what it measured", () => {
+  /*
+   * Changed 2026-09-23. This used to return early with diffs: [] on any build
+   * mismatch. Two things were wrong with that, both found by the bonsAI
+   * plan-64 session: replayChecks has already run the sweep on hardware by the
+   * time diffCheck is called, so refusing here spent every press and threw the
+   * answer away; and since a replay is for the moment after a deploy --
+   * exactly when the build has changed -- "refuse on mismatch" refuses always.
+   */
   const stops = [sweepStop()];
   const check = sweepCheck(stops);
   const outcome = diffCheck(check, "sha256:different-build", sweepReport(stops));
   assert.equal(outcome.buildHashMatch, false);
-  assert.equal(outcome.ok, false);
-  assert.deepEqual(outcome.diffs, [], "no landing diff is computed across two different builds");
+  assert.equal(outcome.ok, false, "a different build has NOT verified this check, whatever the landings did");
   assert.match(outcome.summary, /saved against build sha256:aaaa/);
   assert.match(outcome.summary, /current build is sha256:different-build/);
-  assert.match(outcome.summary, /never been verified against what is running now/);
+  assert.match(outcome.summary, /may be the change you just made rather than a regression/);
+  assert.match(outcome.summary, /every landing matches/, "the measurement is reported, not withheld");
+});
+
+test("ok stays strict on a build mismatch even when every landing matches", () => {
+  // The compatibility guarantee for the change above: anything keying on `ok`
+  // sees exactly what it saw before, so nothing downstream loosens silently.
+  const stops = [sweepStop()];
+  const outcome = diffCheck(sweepCheck(stops), "sha256:different-build", sweepReport(stops));
+  assert.equal(outcome.diffs.length, 0);
+  assert.equal(outcome.ok, false);
 });
 
 // ---------------------------------------------------------------------------

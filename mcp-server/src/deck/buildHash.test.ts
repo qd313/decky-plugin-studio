@@ -108,7 +108,12 @@ test("remoteHashCommand cds into the quoted target dir and finds only the given 
   const cmd = remoteHashCommand("deck", "203.0.113.5", "~/homebrew/plugins/bonsAI", ["dist", "main.py", "plugin.json"]);
   assert.match(cmd, /^ssh .*deck@203\.0\.113\.5 "/);
   assert.match(cmd, /cd ~\/'homebrew\/plugins\/bonsAI' 2>\/dev\/null/);
-  assert.match(cmd, /find dist main\.py plugin\.json -type f -exec sha256sum \{\} \+/);
+  assert.match(cmd, /find dist main\.py plugin\.json -type f .*-exec sha256sum \{\} \+/);
+  // Load-bearing, not cosmetic: Python writes __pycache__ on the Deck at import
+  // time, so hashing it remotely while skipping it locally would report a
+  // deployed-build mismatch that no redeploy could ever clear.
+  assert.match(cmd, /-not -path '\*\/__pycache__\/\*'/);
+  assert.match(cmd, /-not -name '\*\.pyc'/);
 });
 
 test("parseHashOutput strips a leading ./ and ignores blank or garbage lines", () => {

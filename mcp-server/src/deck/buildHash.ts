@@ -35,6 +35,34 @@ function toPosix(rel: string): string {
   return rel.split(path.sep).join("/");
 }
 
+/**
+ * Derived Python artifacts, excluded from the fingerprint on BOTH sides.
+ *
+ * A `.pyc` is not a source: CPython writes the source's mtime and size into
+ * its header, so the bytes move whenever the `.py` is rewritten even if its
+ * content is identical. `py_modules` is in DEPLOY_COPY_ENTRIES and this walk
+ * recurses, so before 2026-09-23 every `__pycache__` file was fingerprinted --
+ * and since a build rewrites sources, the hash moved on every build with no
+ * source change at all. A check saved before a deploy could therefore never
+ * replay after one, which is the only moment a replay is for. Found by the
+ * bonsAI plan-64 session, whose check refused to replay against a build that
+ * had not meaningfully changed.
+ *
+ * That also makes this the same rule the module header already claims: mtimes
+ * must not move the hash. A `.pyc` is an mtime wearing a content disguise.
+ *
+ * It must be applied remotely too. Python regenerates `__pycache__` on the
+ * Deck at import time, so excluding locally while hashing it remotely would
+ * guarantee a permanent, unfixable "the deployed build differs".
+ */
+export function isDerivedPythonArtifact(posixPath: string): boolean {
+  return (
+    posixPath.split("/").includes("__pycache__") ||
+    posixPath.endsWith(".pyc") ||
+    posixPath.endsWith(".pyo")
+  );
+}
+
 /** Every file under one deploy-source entry, relative to pluginRoot. */
 function listFiles(pluginRoot: string, rel: string): string[] {
   const abs = path.join(pluginRoot, rel);
@@ -50,12 +78,22 @@ function listFiles(pluginRoot: string, rel: string): string[] {
     // reports as `matches: null`, never as a match.
     return [];
   }
-  if (!stat.isDirectory()) return [toPosix(rel)];
+  if (!stat.isDirectory()) {
+    const posix = toPosix(rel);
+    return isDerivedPythonArtifact(posix) ? [] : [posix];
+  }
   const out: string[] = [];
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
     const childRel = path.join(rel, entry.name);
-    if (entry.isDirectory()) out.push(...listFiles(pluginRoot, childRel));
-    else out.push(toPosix(childRel));
+    // Prune the whole directory rather than each file under it: a
+    // __pycache__ can hold hundreds of entries and none of them are sources.
+    if (entry.isDirectory()) {
+      if (entry.name === "__pycache__") continue;
+      out.push(...listFiles(pluginRoot, childRel));
+    } else {
+      const posix = toPosix(childRel);
+      if (!isDerivedPythonArtifact(posix)) out.push(posix);
+    }
   }
   return out;
 }
@@ -113,7 +151,14 @@ export function remoteHashCommand(user: string, host: string, targetDir: string,
   // root-level *.py filenames off the plugin's own disk -- escaped defensively
   // rather than trusted, since the second half is not a fixed list.
   const list = entries.map((e) => e.replace(/(["\\$`])/g, "\\$1")).join(" ");
-  const remote = `cd ${quoteRemotePath(targetDir)} 2>/dev/null && find ${list} -type f -exec sha256sum {} + 2>/dev/null`;
+  // The same exclusion isDerivedPythonArtifact() applies locally, and it is
+  // load-bearing here rather than cosmetic: Python writes __pycache__ on the
+  // Deck at import time, so hashing it remotely while skipping it locally
+  // would report a build mismatch that no redeploy could ever clear.
+  const prune = "-not -path '*/__pycache__/*' -not -name '*.pyc' -not -name '*.pyo'";
+  const remote =
+    `cd ${quoteRemotePath(targetDir)} 2>/dev/null && ` +
+    `find ${list} -type f ${prune} -exec sha256sum {} + 2>/dev/null`;
   return `ssh -o BatchMode=yes -o ConnectTimeout=8 ${user}@${host} "${remote}"`;
 }
 

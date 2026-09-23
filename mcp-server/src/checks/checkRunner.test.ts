@@ -366,7 +366,7 @@ test("a malformed check file is rejected with a clear message and does not stop 
   }
 });
 
-test("replaying a check saved against a different build hash says so, and does not run a landing diff", async () => {
+test("a rebuild does not throw away the landing comparison the replay already paid for", async () => {
   const pluginRoot = makePluginRoot("// v1");
   const checksDir = makeChecksDir();
   try {
@@ -388,19 +388,24 @@ test("replaying a check saved against a different build hash says so, and does n
     const replay = await replayChecks({
       checksDir,
       pluginRoot,
-      // Landings would in fact differ here too, but that must not even be
-      // examined once the build hash disagrees.
+      // The landings differ too. The sweep has already been run by the time
+      // the build hash is consulted, so this difference is reported rather
+      // than discarded -- labelled unverified, not withheld.
       runSweep: async () => sweepResultFixture(sweepStops({ label: "totally different" })),
     });
 
     assert.equal(replay.checked.length, 1);
     const outcome = replay.checked[0];
     assert.equal(outcome.buildHashMatch, false);
-    assert.equal(outcome.ok, false);
-    assert.deepEqual(outcome.diffs, []);
+    assert.equal(outcome.ok, false, "a changed build means unverified, always");
+    assert.ok(outcome.diffs.length > 0, "the diff the run already paid for must reach the caller");
+    assert.ok(
+      outcome.messages.some((m) => m.includes("totally different")),
+      `the changed landing must be named: ${outcome.messages.join(" | ")}`,
+    );
     assert.equal(outcome.savedBuildHash, savedHash);
     assert.equal(outcome.currentBuildHash, newHash);
-    assert.match(outcome.summary, /never been verified against what is running now/);
+    assert.match(outcome.summary, /may be the change you just made rather than a regression/);
   } finally {
     cleanup(pluginRoot, checksDir);
   }

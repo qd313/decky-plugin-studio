@@ -460,34 +460,34 @@ export interface ReplayOutcome {
 /**
  * Compare a saved check against a fresh result for the SAME tool call.
  *
- * When the build hash does not match, no landing-level diff is computed at
- * all: comparing a check's expectations against a DIFFERENT build's result
- * would produce diffs that say nothing about whether the plugin regressed --
- * exactly the "this was never true here" case the design calls out. The
- * caller gets that fact plainly instead, and can re-save the check once this
- * build is trusted.
+ * A build-hash mismatch makes the replay UNVERIFIED, not uninformative, and
+ * those are different things. Until 2026-09-23 this returned early on a
+ * mismatch with `diffs: []`, on the reasoning that a diff across builds says
+ * nothing about a regression. Two problems with that, both found by the
+ * bonsAI plan-64 session:
+ *
+ *   1. `replayChecks` has ALREADY run the sweep or sequence by the time this
+ *      is called -- the presses were sent, the time on hardware was spent --
+ *      so refusing here paid the entire cost of the run and then threw the
+ *      answer away. Their driver re-pressed the same twelve buttons by hand
+ *      to get back what the tool had just computed and discarded.
+ *   2. It made the feature unable to meet its own purpose. A replay is FOR
+ *      the moment after a deploy, and a deploy is exactly when the build has
+ *      changed, so "refuse whenever the build differs" refuses always.
+ *
+ * So the comparison is always computed and always reported. `ok` stays strict
+ * -- it requires the build to match AND no landing to differ, unchanged for
+ * anything keying on it -- and the summary says plainly that a difference may
+ * be the change you just made rather than a regression. Labelling uncertainty
+ * beats withholding the measurement, the same call `deck_checkReady` makes
+ * when it reports `unknown` rather than refusing to answer.
  */
 export function diffCheck(
   check: CheckFile,
   currentBuildHash: string,
   actualResult: SweepResult | SweepReport | RunSequenceResult,
 ): ReplayOutcome {
-  if (check.buildHash !== currentBuildHash) {
-    return {
-      name: check.name,
-      tool: check.tool,
-      buildHashMatch: false,
-      savedBuildHash: check.buildHash,
-      currentBuildHash,
-      ok: false,
-      diffs: [],
-      messages: [],
-      summary:
-        `"${check.name}" was saved against build ${check.buildHash}, but the current build is ${currentBuildHash}. ` +
-        "This replay cannot say whether the plugin changed -- only that this check has never been verified " +
-        "against what is running now. Re-save it once you trust this build.",
-    };
-  }
+  const buildHashMatch = check.buildHash === currentBuildHash;
 
   const diffs: CheckDiffEntry[] = [];
   if (check.tool === "deck_sweep") {
@@ -496,18 +496,28 @@ export function diffCheck(
     deepDiff(check.expected, normalizeRunSequenceResult(actualResult as RunSequenceResult), "", diffs);
   }
   const messages = diffs.map((d) => describeDiff(check, d));
+  const landingSummary =
+    diffs.length === 0
+      ? "every landing matches the saved check"
+      : `${diffs.length} difference(s) from the saved check -- ${messages[0]}${diffs.length > 1 ? ` (+${diffs.length - 1} more)` : ""}`;
+
   return {
     name: check.name,
     tool: check.tool,
-    buildHashMatch: true,
+    buildHashMatch,
     savedBuildHash: check.buildHash,
     currentBuildHash,
-    ok: diffs.length === 0,
+    // `ok` stays strict: a replay against a different build has NOT verified
+    // this check, whatever the landings did. Consumers keying on `ok` see
+    // exactly what they saw before this changed.
+    ok: buildHashMatch && diffs.length === 0,
     diffs,
     messages,
-    summary:
-      diffs.length === 0
-        ? `"${check.name}": no diff -- every landing matches the saved check`
-        : `"${check.name}": ${diffs.length} difference(s) from the saved check -- ${messages[0]}${diffs.length > 1 ? ` (+${diffs.length - 1} more)` : ""}`,
+    summary: buildHashMatch
+      ? `"${check.name}": ${diffs.length === 0 ? "no diff -- " : ""}${landingSummary}`
+      : `"${check.name}" was saved against build ${check.buildHash}, and the current build is ` +
+        `${currentBuildHash}. A difference here may be the change you just made rather than a ` +
+        `regression, so this does NOT count as verified -- but the comparison ran and is reported ` +
+        `rather than discarded: ${landingSummary}. Re-save the check once you trust this build.`,
   };
 }
