@@ -1,6 +1,7 @@
 # Plan 08 — Parallel VM QA farm for bonsAI (planning only, not implementing)
 
-**Raised 2026-09-05 by the maintainer.** Status: **SHELVED 2026-09-05 — blocked, see § 6.**
+**Raised 2026-09-05 by the maintainer.** Status: **UNSHELVED 2026-09-23 — see § 7.** (Was shelved
+2026-09-05, blocked, see § 6.)
 Nothing here is authorized for implementation. Discovery stopped after round 1 and its follow-ups;
 rounds 2 and 3 were never asked. Resume from § 6 when the blocker moves.
 
@@ -138,3 +139,41 @@ real Gaming Mode UI without an account.
 4-5 max on this PC; Ollama on the host GPU over the LAN; no hypervisor preference (Windows Home,
 so VirtualBox / VMware Workstation / QEMU, not Hyper-V); the single ESP32 is not a real factor
 because VMs would use a virtual gamepad instead.
+
+## 7. Unshelved 2026-09-23: what changed
+
+A new planning chat in bonsAI reopened this. The full plan now lives in bonsAI's plan 67
+(`docs/planning/67-stand-in-decks.md` in the bonsAI repo): phases, decisions, and the PC's measured
+budget. This section records only what moved and what DPS owns.
+
+**Both halves of the § 6 blocker were relaxed, which is the first of § 6's three ways out:**
+- **One Steam login per stand-in is now allowed.** Each stand-in signs in once with the one existing
+  account, saves the password, and runs in Steam's offline mode from then on. Only one machine is
+  ever online. The maintainer gets a warning before each sign-in. Whether a cloned stand-in keeps
+  its offline sign-in is one of the things bonsAI's Phase 0 tests.
+- **A split verdict is now accepted.** A stand-in doesn't have to do everything a Deck does. Rows
+  needing a game, the hardware, the Deck's own Ollama timing, or Steam online stay on the real Deck.
+  bonsAI's Phase 1 measures which kinds of row agree between a stand-in and the Deck.
+
+**Other calls made 2026-09-23:**
+- **Bazzite** on the stand-ins (the Deck edition, which boots into game mode). Heavier is fine.
+- **Four stand-ins, tight**, three if four don't fit. Windows is to be squeezed to about 5 GB.
+- **Stay on Windows 11 Home first** (Route A). If game mode won't run without a graphics card, a
+  Linux dual boot is acceptable (Route B), where the stand-ins could share the RX 9070 XT.
+- **Roles:** a *test lead* over several *rig leads*, one per machine (the real Deck included), each
+  with *testers* under it. Models per role are still open. § 5's sketch is an input to that.
+- **Two session styles:** every machine tests one build split between them, or each rig lead
+  tests its own branch and the test lead merges.
+
+**Measured on the host 2026-09-23 (differs from § 2):** WSL is no longer installed. Virtualization
+is reported **off in the BIOS**, which blocks any VM until it is turned on. Windows reports the memory
+at 2133 on a 3600 kit, which is being checked. 418 GB free on E:.
+
+**What DPS has to build** (none of it before bonsAI's Phase 0 passes):
+1. **A list of machines**, each with its address, and every `deck_*` call naming which one it drives.
+   Or, as a stopgap, one MCP server per machine.
+2. **Stand-in or real Deck**, reported by the tools, so a verdict always says where it came from.
+3. **A virtual gamepad inside each stand-in** (uinput or similar). The ESP32 bridge on COM7 can only
+   ever press buttons on one machine, as § 4 already noted.
+4. ***Only one driver at a time*** (ROADMAP, Planned features), per machine, so two rig leads can
+   never drive the same stand-in.

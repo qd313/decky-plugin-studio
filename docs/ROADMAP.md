@@ -40,7 +40,7 @@ Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) l
 - **Status:** v0.2 shipped richer shims, but on-device QA is still required for anything visual.
 
 ### Parallel VM QA farm for bonsAI
-★★★★★★ · Shelved 2026-09-05
+★★★★★★ · Shelved 2026-09-05 — **unshelved 2026-09-23:** now [*Drive several Decks at once*](#drive-several-decks-at-once-stand-in-decks-for-bonsai) under Planned features. Kept here as the record of why it was shelved.
 - **What:** Several SteamOS VMs running in parallel, each drained by a subagent, to speed up QA.
 - **Why shelved:** A VM has to behave exactly like a real Deck, including Gaming Mode — but Gaming Mode won't start without a logged-in Steam client, and no Steam login may ever touch a VM. That's a contradiction as scoped.
 - **Details:** host budget (3 VMs comfortable on an i7-12700K / 32GB), a model-mix sketch, and two cheaper alternate shapes (★★★★★ with one golden login; ★★★ for Ask/backend-only rows in plain Linux VMs) are in [planning/08](planning/08-parallel-vm-qa-farm.md).
@@ -333,6 +333,13 @@ Three rules keep that safe:
 - **What:** a GitHub agent with two tiers. Tier 1 (automatic, read-only): classify the issue's surface, dedupe it, check it against `main`, comment with a `file:line` confirmation, label `agent-triaged`. Tier 2 (only when a maintainer adds `agent-fix`): branch, fix, test, open a draft PR — never touches `main`, never releases.
 - **Guardrails:** issue text is untrusted public input; anything needing hardware to confirm (`needs-hardware`) must stop and ask rather than guess. Depends on the issue-intake feature above for good signal.
 - **Plan:** [01-dpad-focus-oracle-and-issue-intake.md](planning/01-dpad-focus-oracle-and-issue-intake.md) § Part C
+
+### Drive several Decks at once: stand-in Decks for bonsAI
+★★★★★ · Planned — unshelved 2026-09-23 (shelved 2026-09-05 as *Parallel VM QA farm for bonsAI*)
+- **What:** up to four virtual Decks (Bazzite) on the maintainer's PC, each driven by its own AI session at the same time, so bonsAI's test rows stop queuing for the one real Deck.
+- **Why it's unshelved:** both halves of the old blocker were relaxed on 2026-09-23. One Steam account may sign in once per stand-in and then stay offline. And a stand-in no longer has to pass everything a Deck passes: hardware, game-running and timing rows stay on the real Deck.
+- **What DPS has to build:** a list of machines with their addresses, with every call naming which one it drives; a way to tell a stand-in from the real Deck; a virtual gamepad inside each stand-in, because the one bridge board can only press buttons on one machine; and *Only one driver at a time* above, per machine.
+- **Plans:** [planning/08](planning/08-parallel-vm-qa-farm.md) (the 2026-09-05 discovery, now with a § 7 on what changed) and bonsAI's plan 67, `docs/planning/67-stand-in-decks.md` in the bonsAI repo (phases, decisions, the machine's measured budget). bonsAI's Phase 0 (can one stand-in run game mode at all) comes before any DPS work.
 
 ---
 
