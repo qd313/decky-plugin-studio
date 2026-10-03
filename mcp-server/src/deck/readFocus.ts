@@ -128,6 +128,15 @@ export type VisibilityVerdict = "visible" | "partial" | "covered" | "offscreen";
  * decorative scrim does not register as a coverer while an interactive dock
  * does -- no plugin's dock is special-cased here.
  *
+ * Words decide, when there are words (plan 81, 2026-10-03). A control that
+ * has text is sampled where its TEXT LINES are (a Range over its text nodes,
+ * getClientRects), not across its box: a floating corner icon may overlap the
+ * box of a button whose words are clear of it, and a person reads that button
+ * fine. Two bonsAI controls (Retry, Copy) read 78% / 89% "partial" on every
+ * walk because of it. A control with no text (an icon, a toggle) keeps the box
+ * sample, and so does one whose text reports no line boxes. `sample` says which
+ * decided.
+ *
  * Honest limit: this is a DOM hit-test, not eyes. It cannot see a control in
  * the wrong colour or a compositing artifact; those still need a screenshot or
  * a human. The claim is exactly that focused-but-occluded and
@@ -135,13 +144,18 @@ export type VisibilityVerdict = "visible" | "partial" | "covered" | "offscreen";
  */
 export interface Visibility {
   verdict: VisibilityVerdict;
-  /** Sampled: visible points out of nine, as a percentage. */
+  /** Sampled: visible points out of those sampled (nine for a box), as a percentage. */
   visiblePercent: number;
   /** The most frequent element found ON TOP of a sampled point, when any was. */
   coveredBy: string | null;
   /** The most frequent ANCESTOR hit instead of the element -- an overflow clip. */
   clippedBy: string | null;
   points: { visible: number; covered: number; clipped: number; offscreen: number };
+  /**
+   * What was sampled: the control's text lines ("text") or its box ("box").
+   * Absent in payloads from before plan 81.
+   */
+  sample?: "text" | "box";
 }
 
 /**
@@ -504,11 +518,73 @@ export function pageExpression(expect?: string): string {
    * visible -> covered if anything was found on top, else offscreen; otherwise
    * partial.
    *
+   * When the element has words, the same hit-test runs on its text line boxes
+   * instead of the 3x3 grid (see textLineRects and the Visibility type); the
+   * verdict rule is unchanged, over however many points were sampled.
+   *
    * No fallback to rect overlap anywhere in here, on purpose: elementFromPoint
    * skipping pointer-events:none is what keeps a decorative scrim from counting
    * as a coverer, and any geometric second opinion would bring the scrim back.
    */
   var INSET_MIN = 2, INSET_MAX = 12, INSET_RATIO = 0.25;
+
+  /*
+   * The line boxes of an element's words: a Range over each non-blank text node
+   * below it, getClientRects, as plain rects. Sub-3px rects are dropped (a
+   * screen-reader-only label is laid out 1px wide and is not a word anyone
+   * sees), and so is text inside anything display:none, visibility:hidden or
+   * opacity:0. More than TEXT_MAX_LINES lines are thinned evenly. Empty when
+   * the element has no readable text or the page cannot make a Range -- the
+   * caller then samples the box.
+   */
+  var TEXT_MIN = 3, TEXT_INSET = 2, TEXT_MAX_LINES = 24, TEXT_MAX_NODES = 80;
+
+  function textShown(n) {
+    try {
+      if (typeof getComputedStyle !== 'function') return true;
+      var cs = getComputedStyle(n);
+      if (!cs) return true;
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return false;
+      if (cs.opacity === '0') return false;
+    } catch (e) { return true; }
+    return true;
+  }
+
+  function textLineRects(el) {
+    var rects = [], nodes = 0;
+    function walk(n, depth) {
+      if (depth > 12 || nodes > TEXT_MAX_NODES) return;
+      var kids = n.childNodes;
+      if (!kids || !textShown(n)) return;
+      for (var i = 0; i < kids.length; i++) {
+        var k = kids[i];
+        if (k.nodeType === 3) {
+          if (!k.textContent || !k.textContent.trim()) continue;
+          nodes++;
+          var range = document.createRange();
+          range.selectNodeContents(k);
+          var rs = range.getClientRects();
+          for (var r = 0; rs && r < rs.length; r++) {
+            var q = rs[r];
+            if (q.width >= TEXT_MIN && q.height >= TEXT_MIN) {
+              rects.push({ left: q.left, top: q.top, width: q.width, height: q.height });
+            }
+          }
+        } else if (k.nodeType === 1) {
+          walk(k, depth + 1);
+        }
+      }
+    }
+    try { walk(el, 0); } catch (e) { return []; }
+    if (rects.length > TEXT_MAX_LINES) {
+      var thin = [];
+      for (var t = 0; t < TEXT_MAX_LINES; t++) {
+        thin.push(rects[Math.floor((t * rects.length) / TEXT_MAX_LINES)]);
+      }
+      rects = thin;
+    }
+    return rects;
+  }
 
   function visibilityOf(el) {
     if (!el) return null;
@@ -517,7 +593,8 @@ export function pageExpression(expect?: string): string {
       visiblePercent: 0,
       coveredBy: null,
       clippedBy: null,
-      points: { visible: 0, covered: 0, clipped: 0, offscreen: 0 }
+      points: { visible: 0, covered: 0, clipped: 0, offscreen: 0 },
+      sample: 'box'
     };
     var b = null;
     try { b = el.getBoundingClientRect(); } catch (e) { b = null; }
@@ -528,36 +605,57 @@ export function pageExpression(expect?: string): string {
       return out;
     }
     var vp = viewport();
-    var x0 = b.left, x1 = b.left + b.width, y0 = b.top, y1 = b.top + b.height;
-    var inset = Math.min(INSET_MAX, Math.max(INSET_MIN, Math.min(b.width, b.height) * INSET_RATIO));
-    // A box thinner than twice the inset samples its centre line instead.
-    var ix = b.width > 2 * inset ? inset : b.width / 2;
-    var iy = b.height > 2 * inset ? inset : b.height / 2;
-    var xs = [x0 + ix, (x0 + x1) / 2, x1 - ix];
-    var ys = [y0 + iy, (y0 + y1) / 2, y1 - iy];
     var coverers = {}, clippers = {};
-    for (var yi = 0; yi < 3; yi++) {
-      for (var xi = 0; xi < 3; xi++) {
-        var x = xs[xi], y = ys[yi];
-        if (x < 0 || y < 0 || x >= vp.w || y >= vp.h) { out.points.offscreen++; continue; }
-        var hit = null;
-        try { hit = document.elementFromPoint(x, y); } catch (e) { hit = null; }
-        if (!hit) { out.points.offscreen++; continue; }
-        if (hit === el || (el.contains && el.contains(hit))) { out.points.visible++; continue; }
-        var name = describeCoverer(hit, el);
-        if (hit.contains && hit.contains(el)) {
-          out.points.clipped++;
-          clippers[name] = (clippers[name] || 0) + 1;
-        } else {
-          out.points.covered++;
-          coverers[name] = (coverers[name] || 0) + 1;
-        }
+
+    // Put one point through the hit-test and tally what it found.
+    function samplePoint(x, y) {
+      if (x < 0 || y < 0 || x >= vp.w || y >= vp.h) { out.points.offscreen++; return; }
+      var hit = null;
+      try { hit = document.elementFromPoint(x, y); } catch (e) { hit = null; }
+      if (!hit) { out.points.offscreen++; return; }
+      if (hit === el || (el.contains && el.contains(hit))) { out.points.visible++; return; }
+      var name = describeCoverer(hit, el);
+      if (hit.contains && hit.contains(el)) {
+        out.points.clipped++;
+        clippers[name] = (clippers[name] || 0) + 1;
+      } else {
+        out.points.covered++;
+        coverers[name] = (coverers[name] || 0) + 1;
       }
     }
-    out.visiblePercent = Math.round((out.points.visible / 9) * 100);
+
+    var lines = textLineRects(el);
+    if (lines.length) {
+      // Words decide: three points along the middle of each line box. A point
+      // inside the box but outside every line (padding, line spacing) is not
+      // sampled, so an icon over the padding no longer counts as covering.
+      out.sample = 'text';
+      for (var li = 0; li < lines.length; li++) {
+        var L = lines[li];
+        var tin = Math.min(TEXT_INSET, L.width / 4);
+        var ty = L.top + L.height / 2;
+        samplePoint(L.left + tin, ty);
+        samplePoint(L.left + L.width / 2, ty);
+        samplePoint(L.left + L.width - tin, ty);
+      }
+    } else {
+      out.sample = 'box';
+      var x0 = b.left, x1 = b.left + b.width, y0 = b.top, y1 = b.top + b.height;
+      var inset = Math.min(INSET_MAX, Math.max(INSET_MIN, Math.min(b.width, b.height) * INSET_RATIO));
+      // A box thinner than twice the inset samples its centre line instead.
+      var ix = b.width > 2 * inset ? inset : b.width / 2;
+      var iy = b.height > 2 * inset ? inset : b.height / 2;
+      var xs = [x0 + ix, (x0 + x1) / 2, x1 - ix];
+      var ys = [y0 + iy, (y0 + y1) / 2, y1 - iy];
+      for (var yi = 0; yi < 3; yi++) {
+        for (var xi = 0; xi < 3; xi++) samplePoint(xs[xi], ys[yi]);
+      }
+    }
+    var total = out.points.visible + out.points.covered + out.points.clipped + out.points.offscreen;
+    out.visiblePercent = total ? Math.round((out.points.visible / total) * 100) : 0;
     out.coveredBy = mostFrequent(coverers);
     out.clippedBy = mostFrequent(clippers);
-    if (out.points.visible === 9) out.verdict = 'visible';
+    if (out.points.visible === total) out.verdict = 'visible';
     else if (out.points.visible === 0) out.verdict = out.points.covered > 0 ? 'covered' : 'offscreen';
     else out.verdict = 'partial';
     return out;

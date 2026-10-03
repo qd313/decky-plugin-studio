@@ -33,6 +33,12 @@ interface ElSpec {
   attrs?: Record<string, string>;
   /** This element's OWN text node, not its descendants'. */
   text?: string;
+  /**
+   * Where a browser would lay out that text's lines (what `Range.getClientRects`
+   * returns for the text node). Absent means the fake reports no line boxes, as
+   * jsdom does, and the page code falls back to the element's box.
+   */
+  textRects?: Array<{ x: number; y: number; width: number; height: number }>;
   rect?: { x: number; y: number; width: number; height: number };
   /** `pointer-events: none` -- the fake elementFromPoint skips it, as a browser does. */
   pointerEvents?: "none";
@@ -54,6 +60,7 @@ class FakeEl {
   className: string;
   attrs: Record<string, string>;
   ownText: string;
+  textRects: Array<{ x: number; y: number; width: number; height: number }>;
   rect: { x: number; y: number; width: number; height: number };
   pointerEvents: "none" | undefined;
   zIndex: number;
@@ -71,6 +78,7 @@ class FakeEl {
     this.className = spec.className ?? "";
     this.attrs = spec.attrs ?? {};
     this.ownText = spec.text ?? "";
+    this.textRects = spec.textRects ?? [];
     this.rect = spec.rect ?? { x: 0, y: 0, width: 0, height: 0 };
     this.pointerEvents = spec.pointerEvents;
     this.zIndex = spec.zIndex ?? 0;
@@ -91,9 +99,9 @@ class FakeEl {
   }
 
   /** Own text node first, then element children -- the order a browser gives. */
-  get childNodes(): Array<{ nodeType: number; textContent: string }> {
-    const nodes: Array<{ nodeType: number; textContent: string }> = [];
-    if (this.ownText) nodes.push({ nodeType: 3, textContent: this.ownText });
+  get childNodes(): Array<{ nodeType: number; textContent: string; rects?: FakeEl["textRects"] }> {
+    const nodes: Array<{ nodeType: number; textContent: string; rects?: FakeEl["textRects"] }> = [];
+    if (this.ownText) nodes.push({ nodeType: 3, textContent: this.ownText, rects: this.textRects });
     return nodes.concat(this.children as unknown as typeof nodes);
   }
 
@@ -199,6 +207,7 @@ interface PageShape {
     coveredBy: string | null;
     clippedBy: string | null;
     points: { visible: number; covered: number; clipped: number; offscreen: number };
+    sample?: "text" | "box";
   } | null;
   scrollPane: { selector: string | null; scrollTop: number; scrollHeight: number; clientHeight: number } | null;
 }
@@ -247,6 +256,23 @@ function runPageExpression(spec: ElSpec, expect?: string): PageShape {
     querySelectorAll: (s: string) => (s === "*" ? all : all.filter((el) => matchesSelector(el, s))),
     getElementById: (id: string) => all.find((el) => el.id === id) ?? null,
     elementFromPoint: (x: number, y: number) => elementFromPoint(all, x, y),
+    // Range over a text node: the line boxes the fixture declared for it.
+    createRange: () => {
+      let node: { rects?: FakeEl["textRects"] } | null = null;
+      return {
+        selectNodeContents: (n: { rects?: FakeEl["textRects"] }) => {
+          node = n;
+        },
+        getClientRects: () =>
+          (node?.rects ?? []).map((r) => ({
+            ...r,
+            left: r.x,
+            top: r.y,
+            right: r.x + r.width,
+            bottom: r.y + r.height,
+          })),
+      };
+    },
   };
   const CSS = { escape: (s: string) => s };
 
@@ -630,4 +656,139 @@ test("scrollPane: the nearest scrolling ancestor and its offset are reported", (
   assert.equal(page.scrollPane?.scrollHeight, 2000);
   assert.equal(page.scrollPane?.clientHeight, 700);
   assert.match(page.scrollPane?.selector ?? "", /Panel/);
+});
+
+// ---------------------------------------------------------------------------
+// Visibility is decided from where the WORDS are (plan 81, 2026-10-03). Two
+// bonsAI controls (Retry, Copy) are built so their box overlaps a floating
+// corner icon while their words stay clear, and the box sample read them as
+// 78% / 89% "partial" on every walk with nothing wrong.
+// ---------------------------------------------------------------------------
+
+/** A small floating corner icon: interactive, later in document order, so on top. */
+function cornerIcon(rect: { x: number; y: number; width: number; height: number }): ElSpec {
+  return { tag: "button", className: "Focusable bonsai-corner-icon", rect };
+}
+
+test("visibility: the question-row shape -- an icon over the box's corner, words clear of it -- reads VISIBLE", () => {
+  /*
+   * The box is 300x40 at (20,100). A 28x28 icon sits over its top-left corner
+   * (x 14..42, y 96..124). The words start 6px past the icon's right edge, so a
+   * person sees every letter. Sampling the box finds two of nine points under
+   * the icon (78%); sampling the words finds none.
+   */
+  const page = runPageExpression(
+    paneWith(
+      {
+        rect: { x: 20, y: 100, width: 300, height: 40 },
+        text: "Ask about this question",
+        textRects: [{ x: 48, y: 108, width: 200, height: 24 }],
+      },
+      cornerIcon({ x: 14, y: 96, width: 28, height: 28 }),
+    ),
+  );
+  assert.equal(page.visibility?.verdict, "visible");
+  assert.equal(page.visibility?.visiblePercent, 100);
+  assert.equal(page.visibility?.coveredBy, null);
+  assert.equal(page.visibility?.sample, "text", "and it says the words decided it");
+});
+
+test("visibility: the last-section shape -- an icon touching only the last line's spacing -- reads VISIBLE", () => {
+  /*
+   * Two lines of words (y 108..128 and 130..150) in a box that runs to y=180.
+   * The icon (x 14..44, y 160..190) sits in the box's padding below the last
+   * line, over the bottom-left sample, never over a letter.
+   */
+  const page = runPageExpression(
+    paneWith(
+      {
+        rect: { x: 20, y: 100, width: 300, height: 80 },
+        text: "Copy the whole section to the clipboard",
+        textRects: [
+          { x: 30, y: 108, width: 260, height: 20 },
+          { x: 30, y: 130, width: 120, height: 20 },
+        ],
+      },
+      cornerIcon({ x: 14, y: 160, width: 30, height: 30 }),
+    ),
+  );
+  assert.equal(page.visibility?.verdict, "visible");
+  assert.equal(page.visibility?.visiblePercent, 100);
+  assert.equal(page.visibility?.sample, "text");
+});
+
+test("visibility: words really under the dock still read COVERED even when the top of the box is clear", () => {
+  /*
+   * The box runs y 500..700 and only its top edge is above the dock (554). The
+   * words are the lower line, at y 600..620, wholly under the dock. A person
+   * cannot read them.
+   */
+  const page = runPageExpression(
+    paneWith(
+      {
+        rect: { x: 20, y: 500, width: 300, height: 200 },
+        text: "Retry",
+        textRects: [{ x: 30, y: 600, width: 80, height: 20 }],
+      },
+      dock(554),
+    ),
+  );
+  assert.equal(page.visibility?.verdict, "covered");
+  assert.equal(page.visibility?.visiblePercent, 0);
+  assert.equal(page.visibility?.coveredBy, "div.bonsai-main-tab-dock > button.Focusable.bonsai-chip");
+  assert.equal(page.visibility?.sample, "text");
+});
+
+test("visibility: one line of words clear and one under the dock reads PARTIAL, dock named", () => {
+  const page = runPageExpression(
+    paneWith(
+      {
+        rect: { x: 20, y: 500, width: 300, height: 100 },
+        text: "Two lines of words",
+        textRects: [
+          { x: 30, y: 510, width: 200, height: 20 },
+          { x: 30, y: 570, width: 200, height: 20 },
+        ],
+      },
+      dock(554),
+    ),
+  );
+  assert.equal(page.visibility?.verdict, "partial");
+  assert.equal(page.visibility?.visiblePercent, 50);
+  assert.equal(page.visibility?.coveredBy, "div.bonsai-main-tab-dock > button.Focusable.bonsai-chip");
+});
+
+test("visibility: words below the viewport read OFFSCREEN", () => {
+  const page = runPageExpression(
+    paneWith({
+      rect: { x: 20, y: 760, width: 300, height: 100 },
+      text: "Below",
+      textRects: [{ x: 30, y: 830, width: 80, height: 20 }],
+    }),
+  );
+  assert.equal(page.visibility?.verdict, "offscreen");
+  assert.equal(page.visibility?.sample, "text");
+});
+
+test("visibility: a control with no text keeps the box sample, so an icon button covered at its corner is still partial", () => {
+  const page = runPageExpression({
+    tag: "div",
+    id: "quickaccess_content_999",
+    rect: { x: 0, y: 0, width: 400, height: 800 },
+    children: [
+      { tag: "span", text: "bonsAI" },
+      { tag: "button", className: "Focusable gpfocus", rect: { x: 20, y: 100, width: 300, height: 40 } },
+      cornerIcon({ x: 14, y: 96, width: 28, height: 28 }),
+    ],
+  });
+  assert.equal(page.visibility?.verdict, "partial");
+  assert.equal(page.visibility?.visiblePercent, 78);
+  assert.equal(page.visibility?.sample, "box");
+});
+
+test("visibility: words the browser reports no line boxes for fall back to the box sample", () => {
+  // Same shape as the dock-covered box test earlier, with text but no line boxes declared.
+  const page = runPageExpression(paneWith({ rect: { x: 20, y: 600, width: 300, height: 40 } }, dock(554)));
+  assert.equal(page.visibility?.verdict, "covered");
+  assert.equal(page.visibility?.sample, "box");
 });
