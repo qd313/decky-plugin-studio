@@ -2,14 +2,10 @@ import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
 import { getWorkspaceRoot } from "../config.js";
-import {
-  copyPluginToLocal,
-  detectLocalSteamOs,
-  getHomebrewPluginsDir,
-  restartLoaderLocal,
-} from "../deploy/local.js";
+import { copyPluginToLocal, restartLoaderLocal, waitForLoaderReadyLocal } from "../deploy/local.js";
 import { deployRemote, DeployRemoteOptions } from "./deck.js";
 import { runPreDeployHook } from "../deploy/deployHelpers.js";
+import { currentMachine, DEFAULT_CDP_PORT } from "../machines.js";
 
 export function detectPlugin() {
   const root = getWorkspaceRoot();
@@ -132,19 +128,28 @@ export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto", o
 
   runPreDeployHook(info.root!);
 
-  const localInfo = detectLocalSteamOs();
-  const homebrew = getHomebrewPluginsDir();
-  const canLocal =
-    localInfo.isSteamOsLike &&
-    (fs.existsSync(homebrew) || fs.mkdirSync(homebrew, { recursive: true }) === undefined);
-
+  // Where the deploy goes is the current machine's `local` flag, not a guess
+  // from the host's /etc/os-release (plan 10 § 3: a DPS server on a Bazzite
+  // host used to deploy into the host's own Decky folder). An explicit mode
+  // still wins, as it always did.
+  const m = currentMachine();
   let deployMode = mode;
-  if (mode === "auto") deployMode = canLocal ? "local" : "remote";
+  if (mode === "auto") deployMode = m.local ? "local" : "remote";
 
   if (deployMode === "local") {
-    const target = copyPluginToLocal(info.root!, localPluginDirName(info.name));
-    const restartMethod = await restartLoaderLocal();
-    return { mode: "local", target, restartMethod };
+    const target = copyPluginToLocal(info.root!, localPluginDirName(info.name), m.pluginsDir);
+    const restartMethod = await restartLoaderLocal(undefined, m);
+    // Same window after the restart as the remote path (issue #3): return
+    // when the loader and Steam's UI pages are back, and say so if not.
+    const loader =
+      opts.waitForLoader === false
+        ? null
+        : await waitForLoaderReadyLocal({
+            cdpBase: `http://127.0.0.1:${m.cdpPort ?? DEFAULT_CDP_PORT}`,
+            timeoutMs: opts.loaderTimeoutMs,
+            pollMs: opts.loaderPollMs,
+          });
+    return { mode: "local", target, restartMethod, loader };
   }
 
   const remote = await deployRemote(info.root!, remotePluginDirName(info.name), opts);

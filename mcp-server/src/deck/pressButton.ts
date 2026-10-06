@@ -39,9 +39,11 @@ import { spawn } from "child_process";
 
 import { findBridgeTool, findPadTool } from "./bridgeTools.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
-import { openCdpTunnel } from "./cdpTunnel.js";
+import { openCdpTunnel, openPadEndpoint } from "./cdpTunnel.js";
 import { readFocusAt } from "./readFocus.js";
 import { focusKey } from "./focusKey.js";
+import { currentMachine, currentMachineIfAny, Machine } from "../machines.js";
+import { ackLine, padChord, padPress } from "./padClient.js";
 
 /** Names the firmware accepts. Anything else is refused rather than guessed at. */
 export const BRIDGE_BUTTONS = [
@@ -165,6 +167,54 @@ const REFUSAL =
   "side) and into the Deck (its USB side), and that python with pyserial is on PATH.";
 
 /**
+ * The same refusal for a stand-in's virtual pad (plan 10 § 5 item 4). Same
+ * posture: no synthetic fallback, ever. The daemon is bridge/tools/vpad.py.
+ */
+function vpadRefusal(m: Machine): string {
+  return (
+    `The virtual gamepad on machine "${m.name}" (${m.press}) is not available, so no press can be ` +
+    "delivered that Steam would route. Refusing rather than falling back to a synthetic press. " +
+    `Start it on that machine with "python3 bridge/tools/vpad.py serve" (scripts/standin/ has the ` +
+    "service file and the Windows start script), then check deck_status."
+  );
+}
+
+/** The `method` string a press on `m` reports. The board is the historical default. */
+function methodFor(m: Machine | null): string {
+  if (!m || m.press === "bridge") return "usb-hid:bridge";
+  if (m.press === "none") return "none";
+  return `virtual-pad:${m.press}`;
+}
+
+/** The current machine, or a refusal reason when the registry itself cannot be read. */
+function machineOrReason(): { ok: true; m: Machine } | { ok: false; reason: string } {
+  try {
+    return { ok: true, m: currentMachine() };
+  } catch (err) {
+    return { ok: false, reason: `No press can be delivered: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * Press through a stand-in's virtual pad. An ack means the daemon wrote the
+ * events to its device: `wire-sent`, the same fact an ack from the board
+ * means, and no more. Whether Steam saw the device is what `verify` is for.
+ */
+async function deliverVirtualPress(m: Machine, buttons: string[], holdMs: number): Promise<PressResult> {
+  const base: PressResult = { ok: false, fidelity: null, method: methodFor(m), buttons, holdMs };
+  let ep;
+  try {
+    ep = await openPadEndpoint();
+  } catch (err) {
+    return { ...base, reason: `${vpadRefusal(m)} (${(err as Error).message})` };
+  }
+  const x = await padPress(ep, buttons, holdMs);
+  if (!x.ack) return { ...base, reason: `${vpadRefusal(m)} (${x.failure ?? "no acknowledgement"})` };
+  if (!x.ack.ok) return { ...base, reason: `${vpadRefusal(m)} (daemon refused: ${ackLine(x)})` };
+  return { ...base, ok: true, fidelity: "wire-sent", ack: ackLine(x) };
+}
+
+/**
  * The one gate every press passes through. Two ways to be forbidden.
  *
  * DPS_NO_BRIDGE -- a hard stop for automated suites. Every press here reaches a
@@ -196,7 +246,9 @@ export function bridgeDisabled(): string | null {
       "Unset it to drive hardware."
     );
   }
-  const stopped = automationStopped();
+  // The stop-all latch, and -- inside a dispatched call -- the current
+  // machine's own latch (plan 10: a stand-in can be stopped on its own).
+  const stopped = automationStopped(currentMachineIfAny()?.name);
   if (stopped) return stoppedMessage(stopped);
   return null;
 }
@@ -220,7 +272,7 @@ async function deliverPress(opts: PressOptions): Promise<PressResult> {
   const base: PressResult = {
     ok: false,
     fidelity: null,
-    method: "usb-hid:bridge",
+    method: methodFor(currentMachineIfAny()),
     buttons,
     holdMs,
   };
@@ -241,13 +293,30 @@ async function deliverPress(opts: PressOptions): Promise<PressResult> {
   const disabled = bridgeDisabled();
   if (disabled) return { ...base, reason: disabled };
 
+  // Which way does this machine take a press? Resolved once at the seam
+  // (machines.ts); read here, never guessed from the host.
+  const which = machineOrReason();
+  if (!which.ok) return { ...base, reason: which.reason };
+  const m = which.m;
+  if (m.press === "none") {
+    return {
+      ...base,
+      method: methodFor(m),
+      reason:
+        `Machine "${m.name}" has no press transport (press: "none"), so nothing can press a button ` +
+        'there. Set press to "bridge", "uinput" or "vigem" on its entry (deck_configure with machine).',
+    };
+  }
+  if (m.press !== "bridge") return deliverVirtualPress(m, buttons, holdMs);
+
   const pad = findPadTool();
   if (!pad) {
     return { ...base, reason: `${REFUSAL} (bridge/tools/pad.py not found from ${import.meta.url})` };
   }
 
   const args = [pad, "press", ...buttons, "--ms", String(holdMs)];
-  if (opts.port) args.push("--port", opts.port);
+  const port = opts.port ?? m.bridgePort;
+  if (port) args.push("--port", port);
 
   const attempt = (): Promise<PressResult & { detail?: string }> =>
     new Promise((resolve) => {
@@ -338,7 +407,7 @@ export async function pressButton(opts: PressOptions): Promise<PressResult> {
   const base: PressResult = {
     ok: false,
     fidelity: null,
-    method: "usb-hid:bridge",
+    method: methodFor(currentMachineIfAny()),
     buttons,
     holdMs,
     verified: false,
@@ -448,7 +517,7 @@ export async function pressChord(
   const base: PressResult = {
     ok: false,
     fidelity: null,
-    method: "usb-hid:bridge:chord",
+    method: `${methodFor(currentMachineIfAny())}:chord`,
     buttons: [H, T],
     holdMs: 0,
   };
@@ -461,13 +530,34 @@ export async function pressChord(
   const chordDisabled = bridgeDisabled();
   if (chordDisabled) return { ...base, reason: chordDisabled };
 
+  const which = machineOrReason();
+  if (!which.ok) return { ...base, reason: which.reason };
+  const m = which.m;
+  if (m.press === "none") {
+    return { ...base, reason: `Machine "${m.name}" has no press transport (press: "none"); no chord can be sent.` };
+  }
+  if (m.press !== "bridge") {
+    // vpad.py owns the same four-step sequence chord.py sends on the wire.
+    let ep;
+    try {
+      ep = await openPadEndpoint();
+    } catch (err) {
+      return { ...base, reason: `${vpadRefusal(m)} (${(err as Error).message})` };
+    }
+    const x = await padChord(ep, H, T, opts.timeoutMs ?? 8_000);
+    if (!x.ack) return { ...base, reason: `${vpadRefusal(m)} (${x.failure ?? "no acknowledgement"})` };
+    if (!x.ack.ok) return { ...base, reason: `${vpadRefusal(m)} (daemon refused: ${ackLine(x)})` };
+    return { ...base, ok: true, fidelity: "wire-sent", ack: ackLine(x) };
+  }
+
   const tool = findBridgeTool("chord.py");
   if (!tool) {
     return { ...base, reason: `${REFUSAL} (bridge/tools/chord.py not found from ${import.meta.url})` };
   }
 
   const args = [tool, H, T];
-  if (opts.port) args.push("--port", opts.port);
+  const port = opts.port ?? m.bridgePort;
+  if (port) args.push("--port", port);
   const timeoutMs = opts.timeoutMs ?? 20_000;
 
   return new Promise<PressResult>((resolve) => {

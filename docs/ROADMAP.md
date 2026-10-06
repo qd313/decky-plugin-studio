@@ -248,6 +248,13 @@ Three rules keep that safe:
 - **Acceptance:** one call runs a check five ways and reports per path, so "passes fresh, fails after loader restart" is a single line rather than a night's work.
 
 ### Only one driver at a time
+> **Shipped 2026-10-05 (plan 10, lane L2), host half.** A lease per machine in `mcp-server/src/deck/lease.ts`
+> (owner, purpose, heartbeat, expiry), taken at the dispatch seam by every driving tool and renewed by each call;
+> a second session's press refuses naming the holder; `deck_releaseMachine` releases or, with `force`, evicts;
+> `deck_status` stays off the serial port while another session holds the lease. Verified with two server
+> processes the same day. **Not built:** the copy of the lease *on the device*; the file lives on the host only,
+> so two hosts driving one Deck would not see each other.
+
 ★★★ · Planned — asked 2026-09-07
 - **Problem:** bonsAI's plan 31 states it plainly: the bridge registers CDP tunnels but not presses, and has no lock, so "nobody is looking" does not mean "nobody is pressing." Two chat sessions drove the same Deck in one evening, one pinned chips the other had to restore, and every press batch starts with a manual check for a foreign tunnel.
 - **What to build:** a lease with owner, purpose, expiry and heartbeat, held in a file on the host and on the device. Presses, deploys and reloads refuse without it, or when another live holder exists. The extension's 30 s status poll honours it too.
@@ -335,6 +342,16 @@ Three rules keep that safe:
 - **Plan:** [01-dpad-focus-oracle-and-issue-intake.md](planning/01-dpad-focus-oracle-and-issue-intake.md) § Part C
 
 ### Drive several Decks at once: stand-in Decks for bonsAI
+> **In progress since 2026-10-05 ([plan 10](planning/10-stand-in-decks.md)).** Built and unit-tested the same
+> day: the machine registry (`machines.json`, `machine` on every `deck_*` tool, `deck_listMachines`, every result
+> stamped `machine: { name, kind, os }`, `machineKind` in `deck_checkReady`), the lease above, the virtual gamepad
+> (`bridge/tools/vpad.py`, uinput on Linux and ViGEm on Windows, same protocol as the board), per-machine
+> killswitch with the virtual controller shown and released from the VS Code status bar, and the host/guest
+> scripts under `scripts/standin/`. **Verified on the maintainer's PC as stand-in `this-pc`** (Route A″: Decky
+> Loader for Windows in this PC's Steam, bonsAI deployed, CEF read with no tunnel, pad seen by Windows, a second
+> session's press refused). **Still open:** the first D-pad walk on this PC (Steam offline, Big Picture open, a
+> person present), the VM lane (Memory Integrity off, VirtualBox installed), Route B, the lease's device half.
+
 ★★★★★ · Planned — unshelved 2026-09-23 (shelved 2026-09-05 as *Parallel VM QA farm for bonsAI*)
 - **What:** up to four virtual Decks (Bazzite) on the maintainer's PC, each driven by its own AI session at the same time, so bonsAI's test rows stop queuing for the one real Deck.
 - **Why it's unshelved:** both halves of the old blocker were relaxed on 2026-09-23. One Steam account may sign in once per stand-in and then stay offline. And a stand-in no longer has to pass everything a Deck passes: hardware, game-running and timing rows stay on the real Deck.

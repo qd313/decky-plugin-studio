@@ -2,6 +2,7 @@ import * as os from "os";
 import * as vscode from "vscode";
 import { callMcpControl, callMcpTool } from "../mcp/client";
 import { readLatch, writeLatch, clearLatch, StopSource } from "../automation/latch";
+import { releaseLocalPads } from "../automation/virtualPad";
 
 interface StopReport {
   ok?: boolean;
@@ -51,6 +52,13 @@ export async function stopAutomation(by: StopSource = "command"): Promise<void> 
     return;
   }
 
+  // Any virtual controller on THIS PC (plan 10: this PC as a stand-in Deck)
+  // is told to go neutral right here, before the server is asked for
+  // anything, for the same reason the latch was written here: a wedged server
+  // must not be able to leave a software pad holding a button on the user's
+  // own Steam. The server's stop releases them again; doing it twice is free.
+  const padOutcomes = await releaseLocalPads();
+
   // Only now, with nothing able to press, is it worth waiting on the server.
   let report: StopReport | null = null;
   let serverError: string | null = null;
@@ -63,6 +71,10 @@ export async function stopAutomation(by: StopSource = "command"): Promise<void> 
     serverError = (err as Error).message;
   }
 
+  const padBits = padOutcomes.map((p) =>
+    p.ok ? `Virtual pad on ${p.machine} released.` : `Virtual pad on ${p.machine} NOT confirmed released (it neutralises itself after 750 ms of silence).`,
+  );
+
   if (serverError) {
     // Honest partial success. The dangerous half is done; say which half is not,
     // and say what covers the gap, because the firmware watchdog genuinely does.
@@ -70,7 +82,8 @@ export async function stopAutomation(by: StopSource = "command"): Promise<void> 
       `Deck automation is LATCHED OFF — no Studio process can press a button. ` +
         `But the Studio server could not be reached (${serverError}), so the board was not ` +
         `told to release and the SSH tunnels were not torn down. The board goes neutral by ` +
-        `itself 750 ms after the link falls silent, which the latch guarantees.`,
+        `itself 750 ms after the link falls silent, which the latch guarantees. ` +
+        padBits.join(" "),
       "Show Server Log",
     ).then((pick) => {
       if (pick) void vscode.commands.executeCommand("decky.showMcpOutput");
@@ -86,6 +99,7 @@ export async function stopAutomation(by: StopSource = "command"): Promise<void> 
       : report?.release?.attempted === false
         ? "Release skipped (this process was not driving the board)."
         : "Board release NOT confirmed — the firmware neutralises it after 750 ms of silence.",
+    ...padBits,
     tunnels?.closed
       ? `Tunnels closed: ${tunnels.byKind?.cdp ?? 0} CDP, ${tunnels.byKind?.ingest ?? 0} ingest.`
       : "No live tunnels were registered.",

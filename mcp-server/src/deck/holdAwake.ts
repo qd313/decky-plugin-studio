@@ -55,7 +55,7 @@
  * repair for what made v1 dishonest -- it reported success for a hold it had
  * never taken.
  */
-import { readDeckEnv } from "../config.js";
+import { currentMachine } from "../machines.js";
 import { proc } from "../deploy/deployHelpers.js";
 import { clearSnapshotFile, readSnapshotFile } from "./snapshotLease.js";
 
@@ -87,10 +87,12 @@ function shellCmd(): string {
 }
 
 function connectedEnv(): { user: string; host: string } {
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  if (!host) throw new Error("DECK_IP not configured — run deck_configure first");
-  return { user: env.DECK_USER ?? "deck", host };
+  const m = currentMachine();
+  if (m.local) {
+    throw new Error(`deck_holdAwake drives a Deck over SSH; machine "${m.name}" is local (a stand-in on this host does not sleep)`);
+  }
+  if (!m.host) throw new Error("DECK_IP not configured — run deck_configure first");
+  return { user: m.user ?? "deck", host: m.host };
 }
 
 /**

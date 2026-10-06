@@ -134,6 +134,24 @@ console.log(
     : `board release NOT confirmed: ${release.detail}`,
 );
 
+// Stand-ins (plan 10) press through a virtual pad, not the board. Release
+// every one this process can reach without opening anything: a local pad
+// directly, a remote one only through a tunnel that is already up here (none,
+// in a fresh CLI process -- its daemon releases on disconnect and after 750 ms
+// of silence, which the tunnel teardown below guarantees).
+try {
+  const distDir = path.dirname(BUILT);
+  const machines = await import(pathToFileURL(path.join(distDir, "..", "machines.js")).href);
+  const tunnel = await import(pathToFileURL(path.join(distDir, "cdpTunnel.js")).href);
+  for (const m of machines.listMachines()) {
+    if (m.press !== "uinput" && m.press !== "vigem") continue;
+    const r = await ks.releaseVirtualPad(m, tunnel.padEndpointIfOpen);
+    console.log(r.ok ? `virtual pad on ${m.name} released` : `virtual pad on ${m.name}: ${r.detail}`);
+  }
+} catch (err) {
+  console.log(`virtual pads not checked (${err.message}); each daemon neutralises itself 750 ms after its link falls silent`);
+}
+
 const tunnels = ks.killAllTunnels();
 console.log(
   tunnels.closed || tunnels.failed

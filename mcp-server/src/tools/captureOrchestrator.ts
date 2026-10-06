@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { getWorkspaceRoot } from "../config.js";
+import { currentMachine, hostIsSteamOsLike } from "../machines.js";
 
 const RECORD_RESULT_RE =
   /---RECORD_RESULT---\s+mode=(\S+)\s+method=(\S+)\s+bytes=(\d+)\s+path=(\S+)\s+seconds=(\d+)\s+plugin_ui=(\S+)/;
@@ -171,37 +172,28 @@ export function verifyPackagedScripts(mcpServerRoot: string): PackagedScriptsChe
   return { ok: true, scriptsDir };
 }
 
+/**
+ * Is THIS PROCESS on a SteamOS-like host? A fact about the host and nothing
+ * more. It used to double as "this process is on the Deck", which routed a
+ * DPS server on a Bazzite host to deploy into the host's own Decky folder and
+ * skip every tunnel (plan 10 § 3). Whether the current machine is local is
+ * now its registry entry's `local` flag -- see isDeckLocal().
+ */
 export function isLocalSteamOS(): boolean {
-  if (process.platform === "win32") return false;
+  return hostIsSteamOsLike().steamOsLike;
+}
+
+/**
+ * Is the current machine this process's own host? Answered by the machine
+ * registry, never by comparing hostnames or reading /etc/os-release. The
+ * `host` argument is accepted for the old call shape and ignored.
+ */
+export function isDeckLocal(_host?: string | undefined): boolean {
   try {
-    if (fs.existsSync("/etc/os-release")) {
-      const release = fs.readFileSync("/etc/os-release", "utf8");
-      return /ID=steamos|ID=bazzite/.test(release);
-    }
+    return currentMachine().local;
   } catch {
-    /* ignore */
+    return false;
   }
-  return false;
-}
-
-function normalizeDeckHost(host: string): string {
-  return host.replace(/^.*@/, "").trim().toLowerCase();
-}
-
-export function isDeckLocal(host: string | undefined): boolean {
-  if (!host) return isLocalSteamOS();
-  const target = normalizeDeckHost(host);
-  if (!target || target === "127.0.0.1" || target === "localhost") return true;
-  if (isLocalSteamOS()) {
-    try {
-      const short = os.hostname().split(".")[0]?.toLowerCase();
-      const long = os.hostname().toLowerCase();
-      if (target === short || target === long || target === `${short}.local`) return true;
-    } catch {
-      /* ignore */
-    }
-  }
-  return false;
 }
 
 function shellCmd(): string {

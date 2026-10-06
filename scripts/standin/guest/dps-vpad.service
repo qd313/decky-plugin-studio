@@ -1,0 +1,22 @@
+# DPS virtual gamepad for a stand-in Deck (plan 10 § 5 item 4).
+#
+# A user service, so the pad exists before Steam starts and Steam sees it the
+# way it sees a controller that was plugged in before boot -- the most reliable
+# path into gamescope's input handling. Installed by install-vpad.sh into
+# ~/.config/systemd/user/, enabled with `systemctl --user enable --now dps-vpad`.
+#
+# Binds 127.0.0.1 only. DPS reaches it through the same SSH tunnel it uses for
+# Steam's CEF debugger (mcp-server/src/deck/cdpTunnel.ts), so nothing on the
+# network can press a button here.
+[Unit]
+Description=Decky Plugin Studio virtual gamepad (vpad.py)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/bin/dps-vpad serve --backend uinput --bind 127.0.0.1 --port 7690
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -2,6 +2,7 @@ import { execSync, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { readDeckEnv } from "../config.js";
+import { currentMachine, DEFAULT_SSH_USER, Machine, sshTarget } from "../machines.js";
 import { registerTunnel, unregisterTunnel } from "../deck/killswitch.js";
 import { listDeploySources } from "../deploy/copyManifest.js";
 import {
@@ -24,8 +25,6 @@ import {
   getScriptsDir,
   getWorkspaceArtifactsDir,
   installCaptureHelperOnDeck,
-  isDeckLocal,
-  isLocalSteamOS,
   parseCaptureResult,
   parseRecordResult,
   recordPassesGate,
@@ -52,13 +51,19 @@ export function getTunnelState() {
 }
 
 export function startTunnel(): { pid?: number; skipped?: boolean; reason?: string } {
-  const env = readDeckEnv();
-  if (isLocalSteamOS()) {
-    return { skipped: true, reason: "local SteamOS host — loopback is direct" };
+  const m = currentMachine();
+  if (m.local) {
+    return { skipped: true, reason: `machine "${m.name}" is local — loopback is direct` };
+  }
+  if (!m.host) {
+    return { reason: "DECK_IP not configured — run deck.configure first" };
   }
   if (tunnelProcess && !tunnelProcess.killed) {
     return { pid: tunnelProcess.pid };
   }
+  // The script reads DECK_IP / DECK_USER; the current machine's address wins
+  // over whatever deck.env says, so a stand-in gets its own reverse tunnel.
+  const env = { ...readDeckEnv(), DECK_IP: m.host, DECK_USER: m.user ?? DEFAULT_SSH_USER };
 
   // The capture-scripts resolver, not a hand-rolled `import.meta.url` regex.
   // That regex recognised only upper-case drive letters and turned bonsAI's
@@ -103,11 +108,17 @@ export function startTunnel(): { pid?: number; skipped?: boolean; reason?: strin
   // that the ssh process is gone. The CDP forwards are the ones that matter for
   // a stop, and those are spawned as ssh directly (cdpTunnel.ts), so their pid
   // is the real one and killing it ends the tunnel.
-  tunnelRegistrationId = registerTunnel("ingest", tunnelProcess.pid, "deck ingest reverse tunnel", () => {
-    if (tunnelProcess && !tunnelProcess.killed) tunnelProcess.kill();
-    tunnelProcess = null;
-    tunnelRegistrationId = null;
-  });
+  tunnelRegistrationId = registerTunnel(
+    "ingest",
+    tunnelProcess.pid,
+    `${m.name} ingest reverse tunnel`,
+    () => {
+      if (tunnelProcess && !tunnelProcess.killed) tunnelProcess.kill();
+      tunnelProcess = null;
+      tunnelRegistrationId = null;
+    },
+    m.name,
+  );
 
   return { pid: tunnelProcess.pid };
 }
@@ -126,10 +137,15 @@ export function stopTunnel(): { stopped: boolean } {
 }
 
 export async function pingDeck(): Promise<boolean> {
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
+  let m: Machine;
+  try {
+    m = currentMachine();
+  } catch {
+    return false;
+  }
+  if (m.local) return true;
+  const host = m.host;
   if (!host) return false;
-  if (isDeckLocal(host)) return true;
   try {
     if (process.platform === "win32") {
       execSync(`ping -n 1 -w 1000 ${host}`, { stdio: "ignore", shell: shellCmd() });
@@ -151,13 +167,24 @@ export async function probeOllama(): Promise<boolean> {
   }
 }
 
+/** The capture and record scripts are bash on a SteamOS-like machine; a Windows stand-in has neither. */
+function refuseCaptureOnWindows(m: Machine, tool: string): void {
+  if (m.os === "windows") {
+    throw new Error(
+      `${tool} is not available on machine "${m.name}" (Windows): the capture scripts need gamescope or a ` +
+        "Wayland compositor. Use deck_readFocus / deck_readPage there, which read Steam's UI over CDP.",
+    );
+  }
+}
+
 export async function captureScreenshot(
   mode: string,
   allowNonPluginUi = false
 ): Promise<{ path: string; bytes: number; mode: string; method: string }> {
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  const user = env.DECK_USER ?? "deck";
+  const m = currentMachine();
+  refuseCaptureOnWindows(m, "deck_captureScreenshot");
+  const host = m.host;
+  const user = m.user ?? DEFAULT_SSH_USER;
   const ts = timestamp();
   const outPath = path.join(getWorkspaceArtifactsDir("screenshots"), `DeckCapture_${ts}_${mode}.png`);
 
@@ -173,7 +200,7 @@ export async function captureScreenshot(
   let resultText = "";
   let exitCode = 0;
 
-  if (!host || isDeckLocal(host)) {
+  if (m.local) {
     const run = runLocalBundledScript(bundle, remoteArgs);
     exitCode = run.exitCode;
     resultText = run.resultText;
@@ -198,6 +225,7 @@ export async function captureScreenshot(
     );
   }
 
+  if (!host) throw new Error("DECK_IP not configured — run deck.configure first");
   const run = runRemoteBundledScript(user, host, bundle, remoteArgs, remoteScript);
   exitCode = run.exitCode;
   resultText = run.resultText;
@@ -236,9 +264,11 @@ export async function recordDeck(
   quality = "compressed",
   allowNonPluginUi = false
 ): Promise<{ path: string; bytes: number; mode: string; method: string; seconds: number }> {
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  const user = env.DECK_USER ?? "deck";
+  const m = currentMachine();
+  refuseCaptureOnWindows(m, "deck_record");
+  const host = m.host;
+  const user = m.user ?? DEFAULT_SSH_USER;
+  if (!m.local && !host) throw new Error("DECK_IP not configured — run deck.configure first");
   const duration = Math.max(1, Number(seconds) || 10);
   const ts = timestamp();
   const suffixMode = mode === "auto" ? "auto" : mode;
@@ -259,12 +289,12 @@ export async function recordDeck(
   let resultText = "";
   let exitCode = 0;
 
-  if (!host || isDeckLocal(host)) {
+  if (m.local) {
     const run = runLocalBundledScript(bundle, remoteArgs);
     exitCode = run.exitCode;
     resultText = run.resultText;
   } else {
-    const run = runRemoteBundledScript(user, host, bundle, remoteArgs, remoteScript);
+    const run = runRemoteBundledScript(user, host!, bundle, remoteArgs, remoteScript);
     exitCode = run.exitCode;
     resultText = run.resultText;
   }
@@ -273,23 +303,23 @@ export async function recordDeck(
   const passes = recordPassesGate(parsed, quality, allowNonPluginUi);
 
   if (exitCode !== 0 || !passes || !parsed.path) {
-    if (host && !isDeckLocal(host)) {
-      cleanupRemote(user, host, [remoteFile, remoteDiag, remoteResult, remoteScript]);
+    if (!m.local) {
+      cleanupRemote(user, host!, [remoteFile, remoteDiag, remoteResult, remoteScript]);
     }
     throw new Error(
       `Recording failed (method=${parsed.method ?? "failed"}, bytes=${parsed.bytes ?? 0}, plugin_ui=${parsed.pluginUi ?? "no"}). Open QAM + plugin before recording.`
     );
   }
 
-  if (!host || isDeckLocal(host)) {
+  if (m.local) {
     if (parsed.path !== outPath && fs.existsSync(parsed.path)) {
       fs.copyFileSync(parsed.path, outPath);
     }
   } else {
     runWithRetry("scp recording", () => {
-      downloadRemoteFile(user, host, parsed.path!, outPath);
+      downloadRemoteFile(user, host!, parsed.path!, outPath);
     });
-    cleanupRemote(user, host, [remoteFile, remoteDiag, remoteResult, remoteScript]);
+    cleanupRemote(user, host!, [remoteFile, remoteDiag, remoteResult, remoteScript]);
   }
 
   const stat = fs.statSync(outPath);
@@ -305,15 +335,12 @@ export async function recordDeck(
 export async function installCaptureHelper(
   which: "record" | "capture" | "both" = "both"
 ): Promise<{ installed: string[] }> {
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  const user = env.DECK_USER ?? "deck";
-  if (!host && !isLocalSteamOS()) {
-    throw new Error("DECK_IP not configured — run deck.configure first");
+  const m = currentMachine();
+  refuseCaptureOnWindows(m, "deck_installCaptureHelper");
+  if (m.local) {
+    throw new Error(`installCaptureHelper requires a remote machine; "${m.name}" is local`);
   }
-  if (!host || isDeckLocal(host)) {
-    throw new Error("installCaptureHelper requires remote DECK_IP (not local host)");
-  }
+  const { user, host } = sshTarget(m);
 
   const installed: string[] = [];
   if (which === "record" || which === "both") {
@@ -345,10 +372,7 @@ export async function deployRemote(
   pluginName: string,
   opts: DeployRemoteOptions = {}
 ): Promise<{ target: string; copied: string[]; loader: LoaderReadiness | null }> {
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  const user = env.DECK_USER ?? "deck";
-  if (!host) throw new Error("DECK_IP not configured — run deck.configure first");
+  const { user, host } = sshTarget(currentMachine());
 
   runPreDeployHook(pluginRoot);
 

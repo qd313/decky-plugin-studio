@@ -11,11 +11,21 @@ not neutralise mid-chord.
 import json, sys, threading, time
 import serial
 
-hold_btn = sys.argv[1] if len(sys.argv) > 1 else "GUIDE"
-tap_btn = sys.argv[2] if len(sys.argv) > 2 else "A"
+# `--port COMx` anywhere on the line picks the serial port; the positional
+# arguments are the two buttons. Until 2026-10-05 the port was hard-wired to
+# COM7 and a `--port` from pressButton.ts was silently ignored.
+_argv = sys.argv[1:]
+port_name = "COM7"
+if "--port" in _argv:
+    i = _argv.index("--port")
+    if i + 1 < len(_argv):
+        port_name = _argv[i + 1]
+    del _argv[i:i + 2]
+hold_btn = _argv[0] if len(_argv) > 0 else "GUIDE"
+tap_btn = _argv[1] if len(_argv) > 1 else "A"
 
 p = serial.Serial()
-p.port, p.baudrate = "COM7", 115200
+p.port, p.baudrate = port_name, 115200
 p.dtr = p.rts = False
 p.timeout = 0.02
 p.write_timeout = 2.0

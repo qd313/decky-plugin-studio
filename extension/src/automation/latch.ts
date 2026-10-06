@@ -88,6 +88,31 @@ export function clearLatch(): boolean {
 }
 
 /**
+ * Machines stopped on their own (plan 10): `automation-stop.<machine>.json`
+ * beside the stop-all latch. Shown in the tooltip; re-arming clears them too.
+ */
+export function readMachineLatches(): Array<StopRecord & { machine: string }> {
+  let names: string[];
+  try {
+    names = fs.readdirSync(CONFIG_DIR());
+  } catch {
+    return [];
+  }
+  const out: Array<StopRecord & { machine: string }> = [];
+  for (const n of names) {
+    const m = n.match(/^automation-stop\.(.+)\.json$/);
+    if (!m) continue;
+    try {
+      const rec = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR(), n), "utf8")) as StopRecord;
+      out.push({ ...rec, machine: m[1] });
+    } catch {
+      out.push({ at: "unknown time", by: "unknown", pid: 0, host: "unknown host", machine: m[1] });
+    }
+  }
+  return out;
+}
+
+/**
  * How many SSH tunnels are registered right now, across every studio process.
  *
  * A live CDP forward is the closest thing to a reliable "a run is driving the

@@ -45,6 +45,7 @@ import { readRunningApps } from "./gameSession.js";
 import { looksLikeOpenPanelFor, panelRootMounted } from "./openPlugin.js";
 import { automationStatus } from "./killswitch.js";
 import { verifyDeployedBuild } from "./buildHash.js";
+import { currentMachine, MachineKind } from "../machines.js";
 
 export type Verdict = "pass" | "fail" | "unknown";
 
@@ -80,6 +81,12 @@ export interface DeclaredState {
   modalOnScreen?: boolean;
   /** Whether Steam's gamepad focus ring should currently be owned by something. */
   focusRingOwned?: boolean;
+  /**
+   * The current machine must be the real Deck ("deck") or a stand-in
+   * ("standin"), per its registry entry (plan 10). A run that must only ever
+   * file Deck verdicts declares "deck" and fails at step zero on a stand-in.
+   */
+  machineKind?: MachineKind;
 }
 
 export interface CheckReadyOptions {
@@ -293,6 +300,21 @@ function checkModalOnScreen(declared: boolean, focus: ReadFocusResult): FieldChe
   );
 }
 
+function checkMachineKind(declared: MachineKind): FieldCheck {
+  if (declared !== "deck" && declared !== "standin") {
+    return unknown(declared, `machineKind must be "deck" or "standin", got ${JSON.stringify(declared)}`);
+  }
+  let m;
+  try {
+    m = currentMachine();
+  } catch (err) {
+    return unknown(declared, `could not resolve the current machine: ${(err as Error).message}`);
+  }
+  return m.kind === declared
+    ? pass(declared, m.kind, `machine "${m.name}" is a ${m.kind} (${m.os}), as declared`)
+    : fail(declared, m.kind, `declared a ${declared}, but machine "${m.name}" is a ${m.kind} (${m.os})`);
+}
+
 // ---------------------------------------------------------------------------
 // The aggregator
 // ---------------------------------------------------------------------------
@@ -308,6 +330,11 @@ export async function checkDeckReady(
   opts: CheckReadyOptions = {},
 ): Promise<CheckReadyResult> {
   const checks: Record<string, FieldCheck> = {};
+
+  // Cheapest of all: is this even the kind of machine the run is for?
+  if (declared.machineKind !== undefined) {
+    checks.machineKind = checkMachineKind(declared.machineKind);
+  }
 
   // Cheapest and most consequential first: is somebody else already driving
   // this Deck? No CDP call needed -- the registry is a local file.

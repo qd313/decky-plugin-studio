@@ -9,6 +9,7 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 - **Fidelity is earned:** `deck.pressButton` reports `fidelity: "wire-sent"` — the bridge firmware acked, which says nothing about whether the Deck received anything. Pass `verify: true` to earn `"steam-routed"`, which reads focus before and after the press. Treat a bare `wire-sent` as "sent", never as "landed".
 - **Build parity:** After changes to `src/`, `main.py`, or `plugin.json`, run `plugin.build` (MCP) or `./scripts/build.sh` / `./scripts/build.ps1` before on-device QA.
 - **Preview vs on-device:** The live preview is **very much beta**. Use `preview.start` for fast UI iteration; use `deck.deploy` + on-device QA for focus/layout bugs the preview cannot reproduce faithfully.
+- **Which machine:** every `deck.*` tool takes `machine: "<name>"` (see `deck.listMachines`). Without it you drive `deck`, the real Deck. A stand-in (a Bazzite VM, or the maintainer's PC running Big Picture with Decky for Windows) is `kind: "standin"`, and **every result says `machine: { name, kind, os }`** -- never file a stand-in's verdict as the Deck's; declare `machineKind: "deck"` in `deck.checkReady` when a run must only ever run on the real Deck. **One driver per machine:** a driving call takes the machine's lease for your session; if another live session holds it you get a refusal naming them -- stop and tell the user, do not look for another way to press.
 
 ## MCP tools (Decky Plugin Studio)
 
@@ -16,7 +17,9 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 |------|---------|
 | `deck.stopAutomation` | **KILLSWITCH.** Stop every press now and latch it off until a human re-arms |
 | `deck.automationStatus` | Is the rig armed, or did somebody stop it? |
-| `deck.configure` | Set DECK_IP, DECK_USER, ingest port |
+| `deck.configure` | Set DECK_IP, DECK_USER, ingest port; with `machine`, add or change a stand-in's registry entry |
+| `deck.listMachines` | Every machine this server can drive, with kind, os, press transport, who holds its lease, and whether it is stopped |
+| `deck.releaseMachine` | Release your session's driving lease on a machine; `force` evicts another session's (only when the user says it is gone) |
 | `deck.startTunnel` / `deck.stopTunnel` | Reverse SSH tunnel for NDJSON ingest |
 | `deck.probeIngest` / `deck.tailIngest` | Debug log capture from Deck |
 | `deck.captureScreenshot` | Composited Deck screenshot (open QAM + plugin) |
@@ -51,10 +54,13 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 ## Stopping the rig
 
 `deck.pressButton` and everything built on it drive a **real controller wired to a
-real Deck**. If anything looks wrong -- the ring somewhere you did not expect, a
-sequence heading somewhere you did not intend, a press that activated something --
-call **`deck.stopAutomation`** immediately. It presses nothing, it is idempotent,
-and stopping a run that turned out to be fine costs one re-arm.
+real Deck** -- or, on a stand-in, a virtual controller Steam treats the same way. If
+anything looks wrong -- the ring somewhere you did not expect, a sequence heading
+somewhere you did not intend, a press that activated something -- call
+**`deck.stopAutomation`** immediately. It presses nothing, it is idempotent, and
+stopping a run that turned out to be fine costs one re-arm. `{ machine }` stops one
+stand-in and leaves the others running; with no argument it stops everything, which
+is the right call whenever you are not sure.
 
 You cannot undo it. There is no arming tool, on purpose: an agent that can clear
 its own killswitch does not have one. Re-arming is the user's job -- their status

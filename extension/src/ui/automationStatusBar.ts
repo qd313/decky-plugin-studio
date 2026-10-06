@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { readLatch, countLiveTunnels, watchAutomation } from "../automation/latch";
+import { readLatch, readMachineLatches, countLiveTunnels, watchAutomation } from "../automation/latch";
+import { probeLocalPads, PadState } from "../automation/virtualPad";
 
 /**
  * The killswitch's own status bar item, and the armed indicator.
@@ -25,14 +26,26 @@ import { readLatch, countLiveTunnels, watchAutomation } from "../automation/latc
  *
  *   ARMED AND DRIVING -- warning background. A registered CDP forward means
  *   some process has a live path to the Deck right now, which is the closest
- *   honest signal available for "a run is happening". This is the moment the
- *   button exists for.
+ *   honest signal available for "a run is happening". Since plan 10 a second
+ *   signal joins it: a virtual controller on this PC holding a button, which is
+ *   a run happening on this PC's own Steam. This is the moment the button
+ *   exists for.
  *
  *   ARMED AND IDLE -- plain. The rig can press, nothing is pressing.
+ *
+ * THE VIRTUAL CONTROLLER IS COVERED BY THE SAME CLICK. Plan 10 gives this PC
+ * a software gamepad (bridge/tools/vpad.py over ViGEmBus) so it can stand in
+ * for a Deck. The stop command releases it directly from the extension host
+ * before asking the server for anything (commands/stopAutomation.ts), and this
+ * item shows it: whether its daemon is up and what it is holding, read
+ * straight off its socket so the indicator is right even when the server is
+ * not. A pad inside a VM is behind SSH and is the server's to show and stop.
  */
 export class AutomationStatusBar {
   private item: vscode.StatusBarItem;
   private watcher: { dispose: () => void };
+  private pads: PadState[] = [];
+  private probing = false;
 
   constructor() {
     this.item = vscode.window.createStatusBarItem(
@@ -52,8 +65,50 @@ export class AutomationStatusBar {
     this.watcher = watchAutomation(() => this.refresh());
   }
 
+  /**
+   * Re-read the latch and the tunnel registry (synchronous, cheap), render,
+   * then ask the local virtual pads to report in and render again if their
+   * answer changed anything. The pad probe is one TCP round trip on loopback
+   * per pad, bounded to 1.5 s, and runs at most once at a time.
+   */
   refresh(): void {
+    this.render();
+    if (this.probing) return;
+    this.probing = true;
+    void probeLocalPads()
+      .then((pads) => {
+        const before = JSON.stringify(this.pads);
+        this.pads = pads;
+        if (JSON.stringify(pads) !== before) this.render();
+      })
+      .catch(() => {
+        /* a probe that fails leaves the last known state in place */
+      })
+      .finally(() => {
+        this.probing = false;
+      });
+  }
+
+  private padRows(): string[] {
+    if (this.pads.length === 0) return [];
+    return [
+      "",
+      "| Virtual controller | State |",
+      "|---|---|",
+      ...this.pads.map((p) => {
+        const state = !p.reachable
+          ? `daemon not running (${p.reason ?? "no answer"})`
+          : p.held.length
+            ? `**HOLDING ${p.held.join("+")}**`
+            : `up (${p.backend ?? p.transport}), idle`;
+        return `| ${p.machine} (${p.transport}) | ${state} |`;
+      }),
+    ];
+  }
+
+  private render(): void {
     const latch = readLatch();
+    const perMachine = readMachineLatches();
 
     if (latch) {
       this.item.text = "$(circle-slash) Deck STOPPED";
@@ -69,6 +124,7 @@ export class AutomationStatusBar {
           "|---|---|",
           `| By | ${latch.by} |`,
           ...(latch.reason ? [`| Reason | ${latch.reason} |`] : []),
+          ...this.padRows(),
           "",
           "Click to re-arm.",
         ].join("\n"),
@@ -78,7 +134,8 @@ export class AutomationStatusBar {
     }
 
     const tunnels = countLiveTunnels();
-    const driving = tunnels.cdp > 0;
+    const padHolding = this.pads.some((p) => p.reachable && p.held.length > 0);
+    const driving = tunnels.cdp > 0 || padHolding;
 
     this.item.command = "decky.stopAutomation";
     this.item.backgroundColor = driving
@@ -90,16 +147,29 @@ export class AutomationStatusBar {
         driving ? "**Deck automation is running**" : "**Deck automation is armed**",
         "",
         driving
-          ? "A Studio process has a live path to the Deck and can press buttons right now."
-          : "The rig can press buttons. Nothing is driving the Deck at this moment.",
+          ? padHolding
+            ? "A virtual controller on this PC is holding a button right now."
+            : "A Studio process has a live path to the Deck and can press buttons right now."
+          : "The rig can press buttons. Nothing is driving a machine at this moment.",
         "",
         `| Live CDP forwards | ${tunnels.cdp} |`,
         "|---|---|",
         `| Ingest tunnels | ${tunnels.ingest} |`,
+        ...this.padRows(),
+        ...(perMachine.length
+          ? [
+              "",
+              "| Stopped on its own | Since |",
+              "|---|---|",
+              ...perMachine.map((m) => `| ${m.machine} | ${m.at} (${m.by}) |`),
+              "",
+              "Re-arming clears these too.",
+            ]
+          : []),
         "",
-        "Click to stop everything (`ctrl+alt+.`): release every held button,",
-        "abort any run in flight, tear down the tunnels, and latch it off",
-        "until you re-arm.",
+        "Click to stop everything (`ctrl+alt+.`): release every held button on the",
+        "board and on every virtual controller on this PC, abort any run in flight,",
+        "tear down the tunnels, and latch it off until you re-arm.",
       ].join("\n"),
     );
     this.item.show();

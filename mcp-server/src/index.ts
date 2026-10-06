@@ -9,7 +9,28 @@ import {
   probeIngest,
   getIngestPort,
 } from "./ingest/server.js";
-import { writeDeckEnv, getWorkspaceRoot, readDeckEnv } from "./config.js";
+import { writeDeckEnv, getWorkspaceRoot, getDeckEnvPath } from "./config.js";
+import {
+  currentMachine,
+  defaultMachineName,
+  DEFAULT_MACHINE_NAME,
+  getMachinesPath,
+  labelOf,
+  listMachines,
+  Machine,
+  MachineKind,
+  resolveMachine,
+  runWithMachine,
+  upsertMachine,
+} from "./machines.js";
+import {
+  leaseHeldByOther,
+  listLeases,
+  readLease,
+  releaseLease,
+  releaseLeasesHeldByThisProcess,
+  withLease,
+} from "./deck/lease.js";
 import * as deck from "./tools/deck.js";
 import * as plugin from "./tools/plugin.js";
 import * as preview from "./tools/preview.js";
@@ -25,7 +46,7 @@ import { openPluginDriven } from "./deck/openPlugin.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
-import { closeSharedCdpTunnel } from "./deck/cdpTunnel.js";
+import { closeSharedCdpTunnel, padEndpointIfOpen } from "./deck/cdpTunnel.js";
 import { saveCheck, replayChecks } from "./checks/checkRunner.js";
 import { checkDeckReady, DeclaredState } from "./deck/checkReady.js";
 import { holdAwake, restorePowerSettings } from "./deck/holdAwake.js";
@@ -54,19 +75,169 @@ function respond(id: number | undefined, result: unknown, error?: { message: str
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
 
+/**
+ * Tools that DRIVE a machine -- press, deploy, reload, hold it awake, swap
+ * its settings, record it -- and therefore need its lease (deck/lease.ts).
+ * Reads, the killswitch, the restore tools and the registry tools do not:
+ * a second session must always be able to look, stop, and put things back.
+ */
+const DRIVING_TOOLS: ReadonlySet<string> = new Set([
+  "deck_pressButton",
+  "deck_pressChord",
+  "deck_walkTo",
+  "deck_runSequence",
+  "deck_sweep",
+  "deck_openPlugin",
+  "deck_launchGame",
+  "deck_exitGame",
+  "deck_assertFocusMove",
+  "deck_saveCheck",
+  "deck_replayChecks",
+  "deck_deploy",
+  "deck_reloadPlugin",
+  "deck_holdAwake",
+  "deck_snapshotSettings",
+  "deck_record",
+  "deck_captureScreenshot",
+  "deck_installCaptureHelper",
+]);
+
+/**
+ * Tools about the registry or the killswitch. They take a machine NAME, not
+ * a resolved machine, and must keep working when that name does not resolve
+ * (a machine being added, a broken machines.json during a stop).
+ */
+const REGISTRY_TOOLS: ReadonlySet<string> = new Set([
+  "deck_configure",
+  "deck_listMachines",
+  "deck_releaseMachine",
+  "deck_stopAutomation",
+  "deck_automationStatus",
+]);
+
+/**
+ * THE DISPATCH SEAM (plan 10 § 5). Every deck_* call resolves its `machine`
+ * argument here, once, and runs inside that machine's context; the tools
+ * below ask machines.ts `currentMachine()` and never read deck.env or a
+ * `machine` argument of their own. Driving tools also take the machine's
+ * lease here, so "only one driver at a time" is enforced in one place. And
+ * every result is stamped `machine: { name, kind, os }`, so a stand-in's
+ * verdict can never be filed as the Deck's.
+ */
 async function handle(method: string, params: Record<string, unknown>): Promise<unknown> {
+  if (!method.startsWith("tools/deck_")) return dispatch(method, params);
+  const tool = method.slice("tools/".length);
+  if (REGISTRY_TOOLS.has(tool)) return dispatch(method, params);
+
+  const { machine: machineArg, ...rest } = params;
+  const machine = resolveMachine(machineArg != null ? String(machineArg) : undefined);
+  const result = await runWithMachine(machine, () =>
+    DRIVING_TOOLS.has(tool)
+      ? withLease(machine.name, tool, () => dispatch(method, rest))
+      : dispatch(method, rest),
+  );
+  return labelResult(result, machine);
+}
+
+function labelResult(result: unknown, machine: Machine): unknown {
+  // Assigned onto the same object, not spread into a new one, so a picture
+  // attached by withImage() (a non-enumerable symbol) survives the stamp.
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    (result as Record<string, unknown>).machine = labelOf(machine);
+  }
+  return result;
+}
+
+/** Fields of a machine entry deck_configure accepts; everything else it is handed is deck.env's. */
+const MACHINE_FIELDS = ["kind", "os", "local", "host", "user", "press", "bridgePort", "padPort", "cdpPort", "pluginsDir", "vm", "note"] as const;
+
+async function dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
   switch (method) {
     case "initialize":
       return { ok: true, workspaceRoot: getWorkspaceRoot() };
 
-    case "tools/deck_configure":
-      writeDeckEnv(params as Record<string, string>);
-      return { ok: true };
+    case "tools/deck_configure": {
+      const machineName = params.machine != null ? String(params.machine).trim() : "";
+      if (!machineName) {
+        // The call bonsAI has always made: KEY=VALUE pairs into deck.env.
+        writeDeckEnv(params as Record<string, string>);
+        return { ok: true, path: getDeckEnvPath() };
+      }
+      // A registry entry (plan 10): add, extend or remove a machine.
+      const { machine: _machine, remove, makeDefault, ...fields } = params;
+      const entry: Record<string, unknown> = {};
+      for (const k of MACHINE_FIELDS) if (k in fields) entry[k] = fields[k];
+      const deckKeys = Object.keys(fields).filter((k) => k.startsWith("DECK_"));
+      if (machineName === DEFAULT_MACHINE_NAME && deckKeys.length) {
+        writeDeckEnv(Object.fromEntries(deckKeys.map((k) => [k, String(fields[k])])));
+      }
+      const r = upsertMachine(machineName, entry as Partial<Machine>, {
+        remove: Boolean(remove),
+        makeDefault: Boolean(makeDefault),
+      });
+      return { ok: true, machine: r.machine, path: r.path, removed: Boolean(remove), default: defaultMachineName() };
+    }
+
+    case "tools/deck_listMachines": {
+      const machines = listMachines();
+      const leases = listLeases();
+      const automation = automationStatus();
+      return {
+        default: defaultMachineName(),
+        path: getMachinesPath(),
+        allStopped: !automation.armed,
+        machines: machines.map((m) => {
+          const lease = leases.find((l) => l.machine === m.name && l.live) ?? null;
+          const stopped = automation.machinesStopped.find((s) => s.machine === m.name) ?? null;
+          return {
+            ...m,
+            lease: lease
+              ? { owner: lease.owner, purpose: lease.purpose, since: lease.since, expiresAt: lease.expiresAt, mine: lease.mine }
+              : null,
+            stopped,
+          };
+        }),
+      };
+    }
+
+    case "tools/deck_releaseMachine": {
+      const name = params.machine != null ? String(params.machine).trim() : defaultMachineName();
+      return { machine: name, ...releaseLease(name, { force: Boolean(params.force) }) };
+    }
 
     case "tools/deck_status": {
+      const m = currentMachine();
       const tunnel = deck.getTunnelState();
       const automation = automationStatus();
-      const bridge = await deckAutonomy.probeBridge();
+      const heldByOther = leaseHeldByOther(m.name);
+      const lease = readLease(m.name);
+
+      // The status poll stays off a serial port another session is driving
+      // through (ROADMAP: "status poll opens COM7"); a virtual pad is a TCP
+      // socket that takes any number of clients, so it is always probed.
+      let bridge: { bridgePortOpen: boolean; bridgeReady: boolean; port: string; reason?: string; probed: boolean };
+      let virtualPad: deckAutonomy.VirtualPadProbe | null = null;
+      if (m.press === "bridge") {
+        bridge = heldByOther
+          ? {
+              bridgePortOpen: false,
+              bridgeReady: false,
+              port: deckAutonomy.getConfiguredBridgePort(),
+              probed: false,
+              reason: `not probed: "${m.name}" is leased by ${heldByOther.owner} (${heldByOther.purpose}); the status poll stays off a leased serial port`,
+            }
+          : { ...(await deckAutonomy.probeBridge()), probed: true };
+      } else {
+        bridge = {
+          bridgePortOpen: false,
+          bridgeReady: false,
+          port: "",
+          probed: false,
+          reason: `machine "${m.name}" presses through ${m.press === "none" ? "nothing (press: none)" : `a virtual pad (${m.press})`}, not the bridge board`,
+        };
+        if (m.press === "uinput" || m.press === "vigem") virtualPad = await deckAutonomy.probeVirtualPad(m);
+      }
+
       return {
         tunnelRunning: tunnel.running,
         tunnelPid: tunnel.pid,
@@ -78,15 +249,28 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         // armed without a second round trip. The extension's indicator does not
         // depend on this -- it reads the latch file directly, because a dead
         // server must not be able to make a stopped rig look armed.
-        automationArmed: automation.armed,
+        automationArmed: automation.armed && !automation.machinesStopped.some((s) => s.machine === m.name),
         automationStoppedSince: automation.stoppedSince,
         automationStoppedBy: automation.stoppedBy,
+        machineStopped: automation.machinesStopped.find((s) => s.machine === m.name) ?? null,
         bridgePortOpen: bridge.bridgePortOpen,
         // Deprecated: use bridgePortOpen. Same value, kept so an existing
         // consumer (bonsAI) reading this name does not break on the rename.
         bridgeReady: bridge.bridgeReady,
         bridgePort: bridge.port,
         bridgeReason: bridge.reason,
+        bridgeProbed: bridge.probed,
+        virtualPad,
+        lease: lease
+          ? {
+              owner: lease.owner,
+              purpose: lease.purpose,
+              since: lease.since,
+              expiresAt: lease.expiresAt,
+              mine: lease.ownerPid === process.pid,
+              heldByOther: Boolean(heldByOther),
+            }
+          : null,
       };
     }
 
@@ -95,6 +279,8 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         by: (params.by as StopSource) ?? "tool",
         reason: params.reason != null ? String(params.reason) : undefined,
         port: params.port != null ? String(params.port) : undefined,
+        machine: params.machine != null ? String(params.machine) : undefined,
+        padEndpointIfOpen,
       });
 
     case "tools/deck_automationStatus":
@@ -345,7 +531,7 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
 
     case "tools/deck_checkReady": {
       const info = plugin.detectPlugin();
-      const env = readDeckEnv();
+      const m = currentMachine();
       const configuredRootSelector = loadPreviewConfig().panelRootSelector;
       let defaultPluginName: string | undefined;
       try {
@@ -368,6 +554,7 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         noForeignCdpTunnel: params.noForeignCdpTunnel != null ? Boolean(params.noForeignCdpTunnel) : undefined,
         modalOnScreen: params.modalOnScreen != null ? Boolean(params.modalOnScreen) : undefined,
         focusRingOwned: params.focusRingOwned != null ? Boolean(params.focusRingOwned) : undefined,
+        machineKind: params.machineKind != null ? (String(params.machineKind) as MachineKind) : undefined,
       };
 
       return checkDeckReady(declared, {
@@ -377,8 +564,8 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
         rootSelector: params.rootSelector != null ? String(params.rootSelector) : configuredRootSelector,
         pluginRoot: params.pluginRoot != null ? String(params.pluginRoot) : info.valid ? info.root : undefined,
         pluginName: params.pluginName != null ? String(params.pluginName) : defaultPluginName,
-        user: env.DECK_USER ?? "deck",
-        host: env.DECK_IP,
+        user: m.user ?? "deck",
+        host: m.host,
         pingFn: deck.pingDeck,
       });
     }
@@ -511,6 +698,7 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
 
     case "shutdown":
       stopIngestServer();
+      releaseLeasesHeldByThisProcess();
       process.exit(0);
 
     default:
@@ -620,11 +808,15 @@ rl.on("line", async (line) => {
 rl.on("close", () => {
   stopIngestServer();
   closeSharedCdpTunnel();
+  // A session that ends releases its machines (deck/lease.ts), so the next
+  // session is not told to wait for a driver that no longer exists.
+  releaseLeasesHeldByThisProcess();
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
   stopIngestServer();
   closeSharedCdpTunnel();
+  releaseLeasesHeldByThisProcess();
   process.exit(0);
 });

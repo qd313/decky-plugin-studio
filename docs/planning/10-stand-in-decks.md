@@ -1,9 +1,10 @@
-# Plan 10 — Drive several Decks at once: stand-in Decks for bonsAI (discovery)
+# Plan 10 — Drive several Decks at once: stand-in Decks for bonsAI
 
-**Written 2026-10-05. Rounds 1 and 2 answered the same day; round 3 (§ 10) is awaiting answers.**
-Planning only. Nothing built, nothing installed. The one action taken: the Bazzite deck ISO
-(`bazzite-deck-stable-amd64.iso`, 9.6 GB) is in `E:\standins\` and its SHA-256 matches the published
-checksum, verified 2026-10-05 (the maintainer said yes to the download in round 1).
+**Written 2026-10-05. Rounds 1–3 answered the same day; "go" given the same evening. § 12 records what
+was built, what was verified, and what is still in the maintainer's hands.** §§ 1–11 are the discovery
+record as it stood before go and are left as written (so § 1's "virtualization still off" row is history:
+§ 12 has the measurements after the BIOS change). The Bazzite deck ISO (`bazzite-deck-stable-amd64.iso`,
+9.6 GB) is in `E:\standins\` and its SHA-256 matches the published checksum, verified 2026-10-05.
 Roadmap entry: *Drive several Decks at once: stand-in Decks for bonsAI* (★★★★★, Planned features).
 Earlier record: [plan 08](08-parallel-vm-qa-farm.md) (why it was shelved, what moved). Consumer side:
 bonsAI plan 67, `docs/planning/67-stand-in-decks.md` in the bonsAI repo.
@@ -339,3 +340,67 @@ What go starts, concretely:
 Same host; Bazzite deck image; Ollama on the host GPU over the network; the single bridge board is
 not a factor because stand-ins use a virtual pad; split verdicts are accepted; one Steam account,
 offline on every stand-in; no games on stand-ins in version one.
+
+## 12. Built on 2026-10-05, after "go"
+
+**The BIOS, measured afterwards.** VT-x on (a hypervisor runs, which needs it), VT-d on (Windows
+lists DMA protection), memory at 3600 on both sticks (XMP I; XMP II had not applied). **Side
+effect:** Windows turned Memory Integrity (Core isolation) on by itself the moment VT-x appeared, so
+its own hypervisor now runs under Windows and VirtualBox would fall back to its slow engine. Turning
+it off is the maintainer's: Windows Security → Device security → Core isolation → Memory integrity
+off, `bcdedit /set hypervisorlaunchtype off` in an elevated prompt, reboot. `scripts/standin/vm/install-virtualbox.ps1`
+checks for it every time.
+
+**L2, lease then registry — built, 45 new unit tests, 435 in the suite.**
+- `mcp-server/src/machines.ts`: the registry (`~/.config/decky-plugin-studio/machines.json`), `deck`
+  derived from `deck.env` on every read, `local` a field (the /etc/os-release trap is gone; the one
+  concession: an unconfigured `deck` on a SteamOS-like host defaults to local, since remote is
+  impossible there), an AsyncLocalStorage context so two in-flight calls cannot swap machines.
+- `index.ts`: the seam. `machine` resolved once per `deck_*` call, driving tools wrapped in the lease,
+  every result stamped `machine: { name, kind, os }`. `deck_listMachines`, `deck_releaseMachine`,
+  `deck_configure { machine, ... }`, `machineKind` on `deck_checkReady`.
+- `deck/lease.ts`: *Only one driver at a time*, host half (the device half is not built).
+- `deck/killswitch.ts`: per-machine latch (`automation-stop.<machine>.json`) beside the stop-all, tunnel
+  entries tagged with their machine, release dispatched on the machine's transport, re-arm clears all.
+- `cdpTunnel.ts`: local machines use 127.0.0.1 directly; remote ones get a second `-L` forward for the
+  pad on the same ssh process. `pressButton.ts` picks the transport from the machine.
+- `bridge/tools/vpad.py`: the virtual pad, uinput (ctypes, Xbox 360 class, 045e:028e) or ViGEm
+  (`vgamepad`), the firmware's JSON protocol, watchdog 750 ms, release on disconnect, 30 s hold cap.
+- `bridge/tools/chord.py` now honours `--port` (it never had).
+- The VS Code status bar lists each local virtual controller, goes loud while one holds a button, and
+  its stop click releases them from the extension host before the server is asked (same reasoning as the
+  latch file). The stop CLI releases them too.
+
+**L1, this PC as stand-in — installed and verified, first walk pending.**
+- No admin step after all: the ViGEmBus driver was already installed and running (service `ViGEmBus`),
+  and Steam's folder grants Users full control, so `.cef-enable-remote-debugging` could be created
+  without elevation. `vgamepad` installed for the user.
+- `scripts/standin/windows/setup-decky-windows.ps1` did what the community installer does: the CEF
+  flag, `~/homebrew/{services,plugins,settings,logs}`, `PluginLoader.Win.zip` (release
+  `Working_PluginLoader_14/10/25`, 30 MB, kept at `E:\standins\`) into `services`, a Startup shortcut,
+  the loader started (answers on 127.0.0.1:1337), `this-pc` registered. Steam was restarted (no game
+  running) and its CEF debugger answers on 127.0.0.1:8080 (Chrome/126).
+- `start-vpad.ps1 -AtLogon`: the pad daemon runs (pid in `%LOCALAPPDATA%\decky-plugin-studio\vpad.log`),
+  Windows lists "Xbox 360 Controller for Windows", a Startup shortcut starts it at logon.
+- Through the built server: `deck_listMachines` shows `deck` and `this-pc`; `deck_status { machine:
+  "this-pc" }` reports the pad reachable and skips the bridge; `deck_readFocus` read Steam's pages with
+  no tunnel (nothing owned gamepad focus: Big Picture was not open — the honest answer);
+  `deck_checkReady { machineKind: "deck" }` failed on the stand-in as it must; `deck_deploy` built
+  bonsAI and landed it in `C:\Users\still\homebrew\plugins\bonsai`, loader and Steam pages back in 1 s;
+  two server processes: the second's `deck_pressButton` refused naming the first as holder.
+- **Not pressed yet.** The first Phase 0″ walk needs, by the rules in § 4: this PC's Steam in offline
+  mode (the maintainer's hand), Big Picture open, and a person present for the first press — a press
+  landing in desktop mode could be mapped to keyboard or mouse by Steam Input if that is enabled for
+  Xbox controllers. Then: `deck_openPlugin { machine: "this-pc" }` and a `deck_sweep`.
+- Fidelity caveats from § 3 stand and are now measurable: Windows Steam build, no gamescope, not a Deck.
+
+**L3, the VM lane — scripts ready, waits on two admin actions.** Memory Integrity off (above) and
+`scripts/standin/vm/install-virtualbox.ps1` (winget, one UAC prompt), then one reboot. After that:
+`verify-iso.ps1`, `create-vm.ps1 -Name standin-1` (installer clicks), `ujust toggle-ssh` in the guest,
+`provision.ps1 -Name standin-1`, the sign-in, `measure.ps1`. `linux-host/` holds the Route B scripts.
+
+**Still the maintainer's.** Steam offline before a run; Big Picture open; the first press watched;
+Memory Integrity off; VirtualBox's UAC prompt; the Bazzite installer clicks; every Steam sign-in; and the
+YD-ESP32-S3 N16R8 board order from § 10 (the ViGEm pad works, so the order is durability, not need).
+
+**Not committed.** All of the above is uncommitted work in the repo at the time of writing.

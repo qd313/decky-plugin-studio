@@ -46,6 +46,8 @@ import path from "path";
 
 import { getConfigDir, ensureConfigDir } from "../config.js";
 import { findPadTool } from "./bridgeTools.js";
+import { listMachines, Machine } from "../machines.js";
+import { padRelease } from "./padClient.js";
 
 /** Who or what asked for the stop. Recorded so a latch is never anonymous. */
 export type StopSource = "status-bar" | "command" | "keybinding" | "tool" | "cli" | "unknown";
@@ -58,27 +60,25 @@ export interface StopRecord {
   /** Process that set it, purely for post-mortems. */
   pid: number;
   host: string;
+  /** Set on a per-machine stop (plan 10): only this machine is latched. Absent on a stop-all. */
+  machine?: string;
 }
 
-export function getLatchPath(): string {
-  return path.join(getConfigDir(), "automation-stop.json");
+/**
+ * The latch file. With no argument, the stop-all latch every press on every
+ * machine honours. With a machine name, that machine's own latch
+ * (`automation-stop.<machine>.json`), which stops presses on it alone --
+ * a stand-in that is misbehaving while the real Deck's run should go on.
+ */
+export function getLatchPath(machine?: string): string {
+  return path.join(getConfigDir(), machine ? `automation-stop.${machine}.json` : "automation-stop.json");
 }
 
 function getTunnelDir(): string {
   return path.join(getConfigDir(), "automation-tunnels");
 }
 
-/**
- * Is automation latched off, and by whom?
- *
- * Called before every single press and at the top of every navigation loop, so
- * it stays cheap and never throws. A present-but-unreadable latch file counts
- * as STOPPED: the only reason that file exists is that somebody asked for a
- * stop, and resolving the ambiguity in favour of pressing buttons is the wrong
- * way round.
- */
-export function automationStopped(): StopRecord | null {
-  const file = getLatchPath();
+function readLatchFile(file: string, machine?: string): StopRecord | null {
   let raw: string;
   try {
     if (!fs.existsSync(file)) return null;
@@ -94,23 +94,61 @@ export function automationStopped(): StopRecord | null {
       reason: parsed.reason,
       pid: Number(parsed.pid ?? 0),
       host: parsed.host ?? "unknown host",
+      ...(machine ? { machine } : {}),
     };
   } catch {
     // Present but unparseable -- caught mid-write, or hand-edited. Still a stop.
-    return { at: "unknown time", by: "unknown", pid: 0, host: "unknown host" };
+    return { at: "unknown time", by: "unknown", pid: 0, host: "unknown host", ...(machine ? { machine } : {}) };
   }
+}
+
+/**
+ * Is automation latched off, and by whom?
+ *
+ * Called before every single press and at the top of every navigation loop, so
+ * it stays cheap and never throws. A present-but-unreadable latch file counts
+ * as STOPPED: the only reason that file exists is that somebody asked for a
+ * stop, and resolving the ambiguity in favour of pressing buttons is the wrong
+ * way round.
+ *
+ * With a machine name, the stop-all latch is checked first and that machine's
+ * own latch second; either one stops it.
+ */
+export function automationStopped(machine?: string): StopRecord | null {
+  const all = readLatchFile(getLatchPath());
+  if (all || !machine) return all;
+  return readLatchFile(getLatchPath(machine), machine);
 }
 
 /** The refusal every press and every loop hands back. One wording, one place. */
 export function stoppedMessage(rec: StopRecord): string {
   return (
-    `Deck automation is STOPPED. The killswitch was set at ${rec.at} (${rec.by})` +
+    (rec.machine ? `Automation on machine "${rec.machine}" is STOPPED.` : "Deck automation is STOPPED.") +
+    ` The killswitch was set at ${rec.at} (${rec.by})` +
     (rec.reason ? `: ${rec.reason}.` : ".") +
     " No press will be delivered until a human re-arms it -- click the Decky automation item" +
     " in the status bar, or run the 'Decky: Arm Deck Automation' command." +
     " Re-arming is deliberately not available as a tool: an agent that can clear its own" +
     " killswitch does not have one."
   );
+}
+
+/** Every per-machine latch currently set. */
+export function machinesStopped(): StopRecord[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(getConfigDir());
+  } catch {
+    return [];
+  }
+  const out: StopRecord[] = [];
+  for (const n of names) {
+    const m = n.match(/^automation-stop\.(.+)\.json$/);
+    if (!m) continue;
+    const rec = readLatchFile(path.join(getConfigDir(), n), m[1]);
+    if (rec) out.push(rec);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +164,8 @@ export interface TunnelEntry {
   ownerPid: number;
   since: string;
   detail?: string;
+  /** Registry name of the machine this tunnel reaches, so a per-machine stop can find it. */
+  machine?: string;
 }
 
 /**
@@ -153,6 +193,7 @@ export function registerTunnel(
   pid: number | undefined,
   detail?: string,
   close?: () => void,
+  machine?: string,
 ): string {
   const id = `${process.pid}-${Date.now().toString(36)}-${++idCounter}`;
   if (close) localClosers.set(id, close);
@@ -163,6 +204,7 @@ export function registerTunnel(
     ownerPid: process.pid,
     since: new Date().toISOString(),
     detail,
+    ...(machine ? { machine } : {}),
   };
   try {
     fs.mkdirSync(getTunnelDir(), { recursive: true });
@@ -239,7 +281,13 @@ export interface TunnelKillReport {
   details: string[];
 }
 
-export function killAllTunnels(): TunnelKillReport {
+/**
+ * Tear down registered tunnels. With no argument, all of them. With a
+ * machine name, only the ones registered against that machine -- an
+ * untagged entry (older server, or the ingest tunnel of a machine that was
+ * not named) is left alone by a per-machine stop and taken by a stop-all.
+ */
+export function killAllTunnels(machine?: string): TunnelKillReport {
   const report: TunnelKillReport = {
     closed: 0,
     failed: 0,
@@ -249,6 +297,7 @@ export function killAllTunnels(): TunnelKillReport {
   };
 
   for (const entry of readTunnelEntries()) {
+    if (machine && entry.machine !== machine) continue;
     const age = Date.now() - Date.parse(entry.since);
     const label =
       `${entry.kind} tunnel pid ${entry.pid || "?"}` + (entry.detail ? ` (${entry.detail})` : "");
@@ -309,6 +358,11 @@ export interface ReleaseReport {
   detail: string;
 }
 
+function bridgeGuardSet(): boolean {
+  const noBridge = process.env.DPS_NO_BRIDGE;
+  return Boolean(noBridge && noBridge !== "0" && noBridge.toLowerCase() !== "false");
+}
+
 /**
  * Tell the board to drop every button it is holding.
  *
@@ -326,8 +380,7 @@ export function releaseAllButtons(port?: string, timeoutMs = 8000): Promise<Rele
   // serial port anyway would take it away from whichever process legitimately
   // has it. It also keeps the test suite from talking to a real board while
   // testing the killswitch, which would be a memorable way to find this out.
-  const noBridge = process.env.DPS_NO_BRIDGE;
-  if (noBridge && noBridge !== "0" && noBridge.toLowerCase() !== "false") {
+  if (bridgeGuardSet()) {
     return Promise.resolve({
       attempted: false,
       ok: false,
@@ -405,6 +458,70 @@ export function releaseAllButtons(port?: string, timeoutMs = 8000): Promise<Rele
 }
 
 // ---------------------------------------------------------------------------
+// Releasing a virtual pad (plan 10: stand-ins press through vpad.py, not the board)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tell one machine's virtual gamepad daemon to go neutral. Only a daemon
+ * this process can reach WITHOUT opening anything: a local one directly, a
+ * remote one only through a tunnel that is already up here. A stop must not
+ * start an ssh session. A remote pad whose tunnel is being cut by this same
+ * stop goes neutral on its own: vpad.py releases on client disconnect and
+ * its 750 ms watchdog covers the rest, the same two nets the board has.
+ *
+ * `endpointIfOpen` is injected by the caller (index.ts wires cdpTunnel's
+ * padEndpointIfOpen) rather than imported, so this module keeps importing
+ * nothing from the layer whose presses it exists to stop.
+ */
+export async function releaseVirtualPad(
+  m: Machine,
+  endpointIfOpen: (m: Machine) => { host: string; port: number } | null,
+  timeoutMs = 3000,
+): Promise<ReleaseReport> {
+  if (bridgeGuardSet()) {
+    return {
+      attempted: false,
+      ok: false,
+      detail: `DPS_NO_BRIDGE is set; no release was sent to the virtual pad on "${m.name}".`,
+    };
+  }
+  const ep = endpointIfOpen(m);
+  if (!ep) {
+    return {
+      attempted: false,
+      ok: false,
+      detail:
+        `no open channel to the virtual pad on "${m.name}" from this process; its daemon releases ` +
+        "on disconnect and neutralises 750 ms after the link falls silent.",
+    };
+  }
+  const x = await padRelease(ep, timeoutMs);
+  if (x.ack?.ok) return { attempted: true, ok: true, detail: `the virtual pad on "${m.name}" acknowledged the release` };
+  return {
+    attempted: true,
+    ok: false,
+    detail: `virtual pad on "${m.name}": ${x.failure ?? x.ack?.err ?? "no acknowledgement"}; its own watchdog still neutralises it.`,
+  };
+}
+
+/** Release whatever the machine presses through. Dispatches on the transport. */
+async function releaseMachine(
+  m: Machine,
+  port: string | undefined,
+  endpointIfOpen: (m: Machine) => { host: string; port: number } | null,
+): Promise<ReleaseReport> {
+  switch (m.press) {
+    case "bridge":
+      return releaseAllButtons(port ?? m.bridgePort);
+    case "uinput":
+    case "vigem":
+      return releaseVirtualPad(m, endpointIfOpen);
+    default:
+      return { attempted: false, ok: true, detail: `"${m.name}" has no press transport; nothing to release` };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The switch
 // ---------------------------------------------------------------------------
 
@@ -416,6 +533,8 @@ export interface StopReport {
   record: StopRecord;
   latchPath: string;
   release: ReleaseReport;
+  /** Per machine, when more than one was released (a stop-all with stand-ins registered). */
+  releases?: Record<string, ReleaseReport>;
   tunnels: TunnelKillReport;
   summary: string;
 }
@@ -425,8 +544,25 @@ export interface StopOptions {
   reason?: string;
   /** Serial port of the bridge's COM side, if not the pad.py default. */
   port?: string;
+  /**
+   * Stop ONE machine (plan 10). Its own latch is set, its pad released, its
+   * tunnels cut; every other machine keeps running. Absent means stop-all.
+   */
+  machine?: string;
   /** Skip the tunnel teardown. Tests only -- a real stop takes them down. */
   skipTunnels?: boolean;
+  /** How to reach a virtual pad without opening anything; see releaseVirtualPad. Default: never. */
+  padEndpointIfOpen?: (m: Machine) => { host: string; port: number } | null;
+}
+
+/** Machines to release for this stop, or the bare `deck` when the registry is unreadable. */
+function machinesForStop(machine?: string): { machines: Machine[]; registryError?: string } {
+  try {
+    const all = listMachines();
+    return { machines: machine ? all.filter((m) => m.name === machine) : all };
+  } catch (err) {
+    return { machines: [], registryError: (err as Error).message };
+  }
 }
 
 /**
@@ -438,7 +574,9 @@ export interface StopOptions {
  * is kept, so the timestamp still says when automation actually stopped.
  */
 export async function stopAutomation(opts: StopOptions = {}): Promise<StopReport> {
-  const already = automationStopped();
+  const machine = opts.machine?.trim() || undefined;
+  const latchPath = getLatchPath(machine);
+  const already = machine ? readLatchFile(latchPath, machine) : automationStopped();
 
   // Step 1, first and synchronously. From this line on no press can be
   // delivered by any process on this machine: pressButton checks the latch
@@ -450,32 +588,59 @@ export async function stopAutomation(opts: StopOptions = {}): Promise<StopReport
     reason: opts.reason,
     pid: process.pid,
     host: os.hostname(),
+    ...(machine ? { machine } : {}),
   };
   let latchWritten = true;
   try {
     ensureConfigDir();
-    fs.writeFileSync(getLatchPath(), JSON.stringify(record, null, 2), "utf8");
+    fs.writeFileSync(latchPath, JSON.stringify(record, null, 2), "utf8");
   } catch {
     latchWritten = false;
   }
 
-  const release = await releaseAllButtons(opts.port);
+  // Step 2: release. One machine, or every machine in the registry. If the
+  // registry itself cannot be read, the board still gets its release the way
+  // it always did -- a broken machines.json must never turn a stop into a
+  // no-op on the one device that has physical buttons.
+  const endpointIfOpen = opts.padEndpointIfOpen ?? (() => null);
+  const { machines, registryError } = machinesForStop(machine);
+  const releases: Record<string, ReleaseReport> = {};
+  if (machines.length === 0) {
+    releases[machine ?? "deck"] = await releaseAllButtons(opts.port);
+  } else {
+    for (const m of machines) releases[m.name] = await releaseMachine(m, opts.port, endpointIfOpen);
+  }
+  const names = Object.keys(releases);
+  const release: ReleaseReport =
+    names.length === 1
+      ? releases[names[0]]
+      : {
+          attempted: names.some((n) => releases[n].attempted),
+          ok: names.every((n) => releases[n].ok || !releases[n].attempted) && names.some((n) => releases[n].ok),
+          detail: names.map((n) => `${n}: ${releases[n].detail}`).join(" | "),
+        };
+
   const tunnels = opts.skipTunnels
     ? { closed: 0, failed: 0, stale: 0, byKind: { cdp: 0, ingest: 0 }, details: ["skipped"] }
-    : killAllTunnels();
+    : killAllTunnels(machine);
 
   const parts = [
     latchWritten
-      ? "automation latched OFF -- no press until a human re-arms"
-      : `LATCH COULD NOT BE WRITTEN to ${getLatchPath()} -- unplug the board`,
+      ? machine
+        ? `automation on "${machine}" latched OFF -- no press there until a human re-arms`
+        : "automation latched OFF -- no press until a human re-arms"
+      : `LATCH COULD NOT BE WRITTEN to ${latchPath} -- unplug the board`,
     release.ok
-      ? "board released"
-      : "board release NOT confirmed; the firmware watchdog neutralises it 750 ms after the link falls silent",
+      ? names.length === 1
+        ? `${names[0] === "deck" ? "board" : `pad on ${names[0]}`} released`
+        : `released: ${names.filter((n) => releases[n].ok).join(", ")}`
+      : "release NOT confirmed; the firmware watchdog (board) and vpad.py's watchdog (virtual pads) neutralise 750 ms after the link falls silent",
     tunnels.closed || tunnels.failed
       ? `tunnels: ${tunnels.byKind.cdp} cdp + ${tunnels.byKind.ingest} ingest closed` +
         (tunnels.failed ? `, ${tunnels.failed} could NOT be closed` : "")
       : "no live tunnels were registered",
   ];
+  if (registryError) parts.push(`machines.json unreadable (${registryError}); released the board only`);
   if (already) parts.push(`was already stopped since ${already.at} (${already.by})`);
 
   return {
@@ -483,8 +648,9 @@ export async function stopAutomation(opts: StopOptions = {}): Promise<StopReport
     stopped: true,
     alreadyStopped: Boolean(already),
     record,
-    latchPath: getLatchPath(),
+    latchPath,
     release,
+    ...(names.length > 1 ? { releases } : {}),
     tunnels,
     summary: parts.join("; "),
   };
@@ -495,6 +661,8 @@ export interface ArmReport {
   armed: boolean;
   wasStopped: boolean;
   previous: StopRecord | null;
+  /** Per-machine latches that were cleared along with the stop-all one. */
+  machinesCleared: string[];
   summary: string;
 }
 
@@ -504,28 +672,45 @@ export interface ArmReport {
  * Nothing here touches the board. Arming means "presses are permitted again",
  * not "press something", and a re-arm that moved the ring would be its own kind
  * of surprise.
+ *
+ * Clears the stop-all latch AND every per-machine latch: the human re-arming
+ * from the status bar is saying "it is safe again", and leaving one stand-in
+ * silently stopped behind that click would be a surprise of the other kind.
  */
 export function armAutomation(): ArmReport {
   const previous = automationStopped();
+  const perMachine = machinesStopped();
+  const machinesCleared: string[] = [];
   try {
     fs.rmSync(getLatchPath(), { force: true });
+    for (const rec of perMachine) {
+      if (!rec.machine) continue;
+      fs.rmSync(getLatchPath(rec.machine), { force: true });
+      machinesCleared.push(rec.machine);
+    }
   } catch (err) {
     return {
       ok: false,
       armed: false,
       wasStopped: Boolean(previous),
       previous,
+      machinesCleared,
       summary: `could not clear the latch at ${getLatchPath()}: ${(err as Error).message}`,
     };
   }
+  const wasStopped = Boolean(previous) || perMachine.length > 0;
   return {
     ok: true,
     armed: true,
-    wasStopped: Boolean(previous),
+    wasStopped,
     previous,
+    machinesCleared,
     summary: previous
-      ? `automation re-armed; it had been stopped since ${previous.at} (${previous.by})`
-      : "automation was already armed; there was nothing to clear",
+      ? `automation re-armed; it had been stopped since ${previous.at} (${previous.by})` +
+        (machinesCleared.length ? `; also cleared per-machine stops on ${machinesCleared.join(", ")}` : "")
+      : machinesCleared.length
+        ? `automation re-armed; cleared per-machine stops on ${machinesCleared.join(", ")}`
+        : "automation was already armed; there was nothing to clear",
   };
 }
 
@@ -535,8 +720,10 @@ export interface AutomationStatus {
   stoppedBy: StopSource | null;
   reason: string | null;
   latchPath: string;
+  /** Machines with their own latch set (plan 10), even while the stop-all latch is clear. */
+  machinesStopped: Array<{ machine: string; at: string; by: StopSource; reason: string | null }>;
   /** Live tunnels the killswitch would take down, across every process. */
-  tunnels: Array<{ kind: TunnelKind; pid: number; ownerPid: number; since: string; alive: boolean }>;
+  tunnels: Array<{ kind: TunnelKind; pid: number; ownerPid: number; since: string; alive: boolean; machine?: string }>;
   /** Whether the release step would have a tool to run. */
   padToolFound: boolean;
   summary: string;
@@ -544,12 +731,19 @@ export interface AutomationStatus {
 
 export function automationStatus(): AutomationStatus {
   const rec = automationStopped();
+  const perMachine = machinesStopped().map((r) => ({
+    machine: r.machine!,
+    at: r.at,
+    by: r.by,
+    reason: r.reason ?? null,
+  }));
   const tunnels = readTunnelEntries().map((e) => ({
     kind: e.kind,
     pid: e.pid,
     ownerPid: e.ownerPid,
     since: e.since,
     alive: pidAlive(e.pid),
+    ...(e.machine ? { machine: e.machine } : {}),
   }));
   return {
     armed: !rec,
@@ -557,10 +751,12 @@ export function automationStatus(): AutomationStatus {
     stoppedBy: rec?.by ?? null,
     reason: rec?.reason ?? null,
     latchPath: getLatchPath(),
+    machinesStopped: perMachine,
     tunnels,
     padToolFound: findPadTool() !== null,
     summary: rec
       ? `STOPPED since ${rec.at} (${rec.by})${rec.reason ? `: ${rec.reason}` : ""}`
-      : `armed -- the rig can press; ${tunnels.length} tunnel(s) registered`,
+      : `armed -- the rig can press; ${tunnels.length} tunnel(s) registered` +
+        (perMachine.length ? `; stopped on ${perMachine.map((p) => p.machine).join(", ")}` : ""),
   };
 }

@@ -57,15 +57,69 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_configure",
     description:
-      "Persist Steam Deck connection settings (deck IP, user, SSH details) to the studio's deck.env. Call once before remote deploy or tunnel operations.",
+      "Persist Steam Deck connection settings (deck IP, user, SSH details) to the studio's deck.env. Call once before remote deploy or tunnel operations. With `machine` set, instead adds or changes that machine's entry in machines.json (a stand-in Deck: a Bazzite VM, or this PC running Steam Big Picture with Decky) -- pass the entry's fields alongside; `remove: true` deletes it; `makeDefault: true` makes it the machine used when a call names none. The `deck` machine's address always comes from deck.env.",
     inputSchema: {
       type: "object",
       properties: {
         DECK_IP: { type: "string", description: "Steam Deck IP address on the LAN." },
         DECK_USER: { type: "string", default: "deck", description: "SSH user on the Deck." },
+        machine: {
+          type: "string",
+          description:
+            "Registry name of the machine to add or change (letters, digits, dot, dash, underscore). Omit to write deck.env as before.",
+        },
+        kind: { type: "string", enum: ["deck", "standin"], description: "The real Deck, or a stand-in. Default standin for any name but deck." },
+        os: { type: "string", enum: ["steamos", "bazzite", "windows"], description: "What the machine runs. Default bazzite for a stand-in." },
+        local: {
+          type: "boolean",
+          description:
+            "true when this server process runs ON the machine itself (this PC as a stand-in): no SSH, no tunnels, local paths. Default false.",
+        },
+        host: { type: "string", description: "SSH host (IP, name, or a ~/.ssh/config alias carrying a non-22 port). Remote machines only." },
+        user: { type: "string", description: "SSH user. Default deck." },
+        press: {
+          type: "string",
+          enum: ["bridge", "uinput", "vigem", "none"],
+          description:
+            "How a press reaches it: bridge = the ESP32 board on a serial port; uinput = vpad.py on a Linux machine over the shared tunnel; vigem = vpad.py on this Windows PC (must be local); none = reads only.",
+        },
+        bridgePort: { type: "string", description: "bridge only: serial port on this PC, e.g. COM7 or /dev/ttyACM0." },
+        padPort: { type: "number", description: "uinput/vigem only: TCP port vpad.py serves on, on the machine. Default 7690." },
+        cdpPort: { type: "number", description: "Steam's CEF debugger port on the machine. Default 8080." },
+        pluginsDir: { type: "string", description: "Where Decky keeps plugins on the machine. Default ~/homebrew/plugins." },
+        vm: {
+          type: "object",
+          description: "For a VM: { hypervisor: 'virtualbox' | 'qemu', name } so the host scripts can find it.",
+          properties: {
+            hypervisor: { type: "string", enum: ["virtualbox", "qemu"] },
+            name: { type: "string" },
+          },
+        },
+        note: { type: "string" },
+        remove: { type: "boolean", description: "Delete this machine's entry." },
+        makeDefault: { type: "boolean", description: "Use this machine when a call names none." },
       },
       // Any further KEY=VALUE pairs are written to deck.env verbatim.
       additionalProperties: true,
+    },
+  },
+  {
+    name: "deck_listMachines",
+    description:
+      "Every machine this server can drive -- the real Deck (from deck.env) and any stand-ins in machines.json -- with each one's kind (deck or standin), os, whether it is local, its press transport, who holds its lease right now (only one driver at a time), and whether it is stopped by the killswitch. Call this to learn what to pass as `machine` on any deck_* tool. Read-only.",
+    inputSchema: noArgs,
+  },
+  {
+    name: "deck_releaseMachine",
+    description:
+      "Release a machine's driving lease. Every driving call (press, deploy, reload, sweep...) takes the lease for this session automatically and keeps it until the session ends, it goes ten minutes without a call, or this is called. Releasing your own is always allowed. A lease held by ANOTHER live session needs `force: true`, which evicts them -- their next driving call will refuse. Do that only when the user says that session is gone; the refusal you got names the holder and when it expires on its own.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        machine: { type: "string", description: "Machine name. Default: the registry default (normally deck)." },
+        force: { type: "boolean", default: false, description: "Evict another session's live lease." },
+      },
+      additionalProperties: false,
     },
   },
   {
@@ -97,6 +151,11 @@ export const TOOLS: ToolDef[] = [
         port: {
           type: "string",
           description: "Serial port of the bridge's COM side, if not the default.",
+        },
+        machine: {
+          type: "string",
+          description:
+            "Stop ONE machine (a stand-in that is misbehaving while the real Deck's run should go on): its own latch is set, its pad released, its tunnels cut. Omit to stop everything, which is the right call whenever you are not sure.",
         },
       },
       additionalProperties: false,
@@ -738,6 +797,12 @@ export const TOOLS: ToolDef[] = [
           type: "boolean",
           description: "Whether Steam's gamepad focus ring should currently be owned by something.",
         },
+        machineKind: {
+          type: "string",
+          enum: ["deck", "standin"],
+          description:
+            "The machine this call drives must be the real Deck ('deck') or a stand-in ('standin'). A run whose verdicts must only ever come from the real Deck declares 'deck' and fails at step zero on a stand-in.",
+        },
         pluginRoot: {
           type: "string",
           description: "Plugin workspace root, for buildMatches. Defaults to the detected workspace plugin.",
@@ -1132,6 +1197,30 @@ export const TOOLS: ToolDef[] = [
     },
   },
 ];
+
+/**
+ * Every deck_* tool that drives or reads a machine takes `machine` (plan 10).
+ * Added here, once, rather than typed into thirty-odd schemas by hand -- the
+ * dispatch seam in index.ts is where the argument is read, also once. The
+ * registry tools that take a machine NAME in their own right (deck_configure,
+ * deck_releaseMachine, deck_stopAutomation) already declare it themselves.
+ *
+ * Schemas are cloned, not mutated: several tools share the `noArgs` object.
+ */
+const MACHINE_PARAM = {
+  type: "string",
+  description:
+    "Which machine to drive: a name from deck_listMachines. Default: the registry default, normally 'deck' (the real Deck from deck.env). Every result carries `machine: { name, kind, os }` so a stand-in's verdict is never filed as the Deck's.",
+};
+for (const t of TOOLS) {
+  if (!t.name.startsWith("deck_")) continue;
+  if (Object.prototype.hasOwnProperty.call(t.inputSchema.properties, "machine")) continue;
+  if (t.name === "deck_listMachines" || t.name === "deck_automationStatus") continue;
+  t.inputSchema = {
+    ...t.inputSchema,
+    properties: { ...t.inputSchema.properties, machine: MACHINE_PARAM },
+  };
+}
 
 export const TOOL_NAMES: ReadonlySet<string> = new Set(TOOLS.map((t) => t.name));
 

@@ -1,13 +1,30 @@
 import { execSync, spawnSync } from "child_process";
 import fs from "fs";
+import path from "path";
 import { getIngestPort } from "../ingest/server.js";
 import { readDeckEnv, getWorkspaceRoot } from "../config.js";
-import { detectLocalSteamOs, getHomebrewPluginsDir, restartLoaderLocal } from "../deploy/local.js";
+import {
+  detectLocalSteamOs,
+  getHomebrewPluginsDir,
+  restartLoaderLocal,
+  waitForLoaderReadyLocal,
+  LocalLoaderReadiness,
+} from "../deploy/local.js";
 import { sshRestartLoader, waitForLoaderReady, LoaderReadiness } from "../deploy/deployHelpers.js";
 import { detectPlugin } from "./plugin.js";
-import { isDeckLocal } from "./captureOrchestrator.js";
 import { getTunnelState, pingDeck } from "./deck.js";
 import { bridgeDisabled, findPadTool } from "../deck/pressButton.js";
+import {
+  currentMachine,
+  DEFAULT_CDP_PORT,
+  DEFAULT_PAD_PORT,
+  DEFAULT_SSH_USER,
+  hostIsSteamOsLike,
+  labelOf,
+  Machine,
+} from "../machines.js";
+import { openPadEndpoint } from "../deck/cdpTunnel.js";
+import { padStatus, PadEndpoint, PadExchange } from "../deck/padClient.js";
 
 function shellCmd(): string {
   return process.platform === "win32" ? "cmd.exe" : "/bin/sh";
@@ -24,24 +41,27 @@ function execQuiet(cmd: string): string {
 export async function reloadPlugin(
   mode: "auto" | "local" | "remote" = "auto",
   opts: { waitForLoader?: boolean; loaderTimeoutMs?: number } = {}
-): Promise<{ ok: boolean; mode: string; method: string; loader?: LoaderReadiness | null }> {
-  const localInfo = detectLocalSteamOs();
-  const homebrew = getHomebrewPluginsDir();
-  const canLocal =
-    localInfo.isSteamOsLike &&
-    (fs.existsSync(homebrew) || fs.mkdirSync(homebrew, { recursive: true }) === undefined);
-
+): Promise<{ ok: boolean; mode: string; method: string; loader?: LoaderReadiness | LocalLoaderReadiness | null }> {
+  // Local or remote is the current machine's `local` flag (machines.ts), not
+  // a guess from the host's /etc/os-release. An explicit mode still wins.
+  const m = currentMachine();
   let deployMode = mode;
-  if (mode === "auto") deployMode = canLocal ? "local" : "remote";
+  if (mode === "auto") deployMode = m.local ? "local" : "remote";
 
   if (deployMode === "local") {
-    const method = await restartLoaderLocal();
-    return { ok: true, mode: "local", method };
+    const method = await restartLoaderLocal(undefined, m);
+    const loader =
+      opts.waitForLoader === false
+        ? null
+        : await waitForLoaderReadyLocal({
+            cdpBase: `http://127.0.0.1:${m.cdpPort ?? DEFAULT_CDP_PORT}`,
+            timeoutMs: opts.loaderTimeoutMs,
+          });
+    return { ok: true, mode: "local", method, loader };
   }
 
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  const user = env.DECK_USER ?? "deck";
+  const host = m.host;
+  const user = m.user ?? DEFAULT_SSH_USER;
   if (!host) throw new Error("DECK_IP not configured — run deck.configure first");
 
   sshRestartLoader(user, host);
@@ -103,22 +123,67 @@ function fetchFallbackLogPaths(local: boolean, user: string, host: string): stri
   return "";
 }
 
+/**
+ * The Windows port of Decky Loader has no journal. It writes under
+ * <homebrew>/logs; the newest file there is the one to read.
+ */
+function readWindowsLoaderLog(m: Machine, maxLines: number): { source: string; text: string } {
+  const logsDir = path.join(path.dirname(getHomebrewPluginsDir(m)), "logs");
+  let newest: { file: string; mtime: number } | null = null;
+  const walk = (dir: string, depth: number): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory() && depth > 0) walk(p, depth - 1);
+      else if (e.isFile()) {
+        try {
+          const mtime = fs.statSync(p).mtimeMs;
+          if (!newest || mtime > newest.mtime) newest = { file: p, mtime };
+        } catch {
+          /* skip */
+        }
+      }
+    }
+  };
+  walk(logsDir, 2);
+  if (!newest) return { source: "none", text: "" };
+  const found: { file: string; mtime: number } = newest;
+  try {
+    const all = fs.readFileSync(found.file, "utf8").split(/\r?\n/);
+    return { source: `file:${found.file}`, text: all.slice(-maxLines).join("\n") };
+  } catch {
+    return { source: "none", text: "" };
+  }
+}
+
 export function readPluginLog(
   lines = 50,
   filter?: string
 ): { source: string; text: string } {
   const maxLines = Math.min(Math.max(1, Number(lines) || 50), 500);
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  const user = env.DECK_USER ?? "deck";
-  const local = !host || isDeckLocal(host);
+  const m = currentMachine();
+  const host = m.host;
+  const user = m.user ?? DEFAULT_SSH_USER;
+  const local = m.local;
+  if (!local && !host) throw new Error("DECK_IP not configured — run deck.configure first");
 
   let source = "journalctl:plugin_loader.service";
-  let text = fetchJournalText(local, user, host ?? "127.0.0.1", maxLines);
-
-  if (!text.trim()) {
-    text = fetchFallbackLogPaths(local, user, host ?? "127.0.0.1");
-    source = "fallback:homebrew/logs";
+  let text = "";
+  if (local && m.os === "windows") {
+    const w = readWindowsLoaderLog(m, maxLines);
+    source = w.source;
+    text = w.text;
+  } else {
+    text = fetchJournalText(local, user, host ?? "127.0.0.1", maxLines);
+    if (!text.trim()) {
+      text = fetchFallbackLogPaths(local, user, host ?? "127.0.0.1");
+      source = "fallback:homebrew/logs";
+    }
   }
 
   if (!text.trim()) {
@@ -212,9 +277,24 @@ export async function getEnv(): Promise<Record<string, unknown>> {
   const plugin = detectPlugin();
   const tunnel = getTunnelState();
   const localOs = detectLocalSteamOs();
+  const m = currentMachine();
 
   const base: Record<string, unknown> = {
     workspaceRoot: workspace,
+    // The machine this call is about (plan 10). `deckEnv` below is the raw
+    // file, kept for anyone reading it; `machine` is what the tools use.
+    machine: {
+      ...labelOf(m),
+      local: m.local,
+      host: m.host ?? null,
+      user: m.user ?? DEFAULT_SSH_USER,
+      press: m.press,
+      bridgePort: m.bridgePort ?? null,
+      padPort: m.press === "uinput" || m.press === "vigem" ? m.padPort ?? DEFAULT_PAD_PORT : null,
+      cdpPort: m.cdpPort ?? DEFAULT_CDP_PORT,
+      pluginsDir: m.pluginsDir ?? null,
+      vm: m.vm ?? null,
+    },
     deckEnv: {
       DECK_IP: deckEnv.DECK_IP ?? null,
       DECK_USER: deckEnv.DECK_USER ?? "deck",
@@ -227,13 +307,15 @@ export async function getEnv(): Promise<Record<string, unknown>> {
       pid: tunnel.pid ?? null,
     },
     ingestPort: getIngestPort(),
+    // A fact about THIS host, not about where deploys go (see machines.ts).
     localOs: { isSteamOsLike: localOs.isSteamOsLike, id: localOs.id },
+    hostOs: hostIsSteamOsLike(),
     deckReachable: await pingDeck(),
   };
 
-  const host = deckEnv.DECK_IP;
-  const user = deckEnv.DECK_USER ?? "deck";
-  if (host && !isDeckLocal(host)) {
+  const host = m.host;
+  const user = m.user ?? DEFAULT_SSH_USER;
+  if (host && !m.local) {
     // probeRemoteDeck carries its own deadline and never throws or hangs, but
     // the catch stays as a last line of defense: whatever happens to `remote`,
     // the rest of the env report above must still be returned to the caller.
@@ -288,8 +370,63 @@ export interface BridgeProbeResult {
 
 /** The serial port deck.pressButton would use, absent a per-call override. */
 export function getConfiguredBridgePort(): string {
+  try {
+    const m = currentMachine();
+    if (m.bridgePort) return m.bridgePort;
+  } catch {
+    /* an unreadable registry falls back to deck.env, the way it always worked */
+  }
   const env = readDeckEnv();
   return env.DECK_BRIDGE_PORT?.trim() || DEFAULT_BRIDGE_PORT;
+}
+
+export interface VirtualPadProbe {
+  /** Did vpad.py answer a status query? */
+  reachable: boolean;
+  endpoint?: string;
+  backend?: string;
+  /** Buttons the pad is holding right now. Non-empty while a run is mid-press. */
+  held?: string[];
+  watchdogTripped?: boolean;
+  reason?: string;
+}
+
+/**
+ * Ask a stand-in's virtual gamepad daemon to report in (plan 10). Reads
+ * only: `status` writes nothing to the device. A missing daemon is a
+ * reportable status, not an error, exactly like a missing board.
+ */
+export async function probeVirtualPad(
+  m: Machine,
+  opts: { endpoint?: () => Promise<PadEndpoint>; status?: (ep: PadEndpoint) => Promise<PadExchange> } = {}
+): Promise<VirtualPadProbe> {
+  const disabledReason = bridgeDisabled();
+  if (disabledReason) return { reachable: false, reason: disabledReason };
+  let ep: PadEndpoint;
+  try {
+    ep = await (opts.endpoint ?? openPadEndpoint)();
+  } catch (err) {
+    return { reachable: false, reason: `no channel to the virtual pad on "${m.name}": ${(err as Error).message}` };
+  }
+  const endpoint = `${ep.host}:${ep.port}`;
+  const x = await (opts.status ?? padStatus)(ep);
+  if (!x.ack?.ok) {
+    return {
+      reachable: false,
+      endpoint,
+      reason:
+        x.failure ??
+        x.ack?.err ??
+        `vpad.py did not answer on ${endpoint}; start it on "${m.name}" with "python3 bridge/tools/vpad.py serve"`,
+    };
+  }
+  return {
+    reachable: true,
+    endpoint,
+    backend: String(x.ack.backend ?? m.press),
+    held: Array.isArray(x.ack.held) ? (x.ack.held as string[]) : [],
+    watchdogTripped: Boolean(x.ack.watchdog_tripped),
+  };
 }
 
 export type BridgeStatusRunner = (

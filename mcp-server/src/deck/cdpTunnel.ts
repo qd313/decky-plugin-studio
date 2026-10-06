@@ -56,9 +56,10 @@
  */
 import { spawn as spawnProcess, ChildProcess } from "child_process";
 import net from "net";
-import { readDeckEnv } from "../config.js";
+import { currentMachine, DEFAULT_CDP_PORT, DEFAULT_PAD_PORT, DEFAULT_SSH_USER, Machine } from "../machines.js";
 import { getVersion } from "./cdp.js";
 import { registerTunnel, unregisterTunnel } from "./killswitch.js";
+import type { PadEndpoint } from "./padClient.js";
 
 export interface CdpTunnel {
   base: string;
@@ -99,12 +100,20 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** The live shared tunnel, if one is open and has not been invalidated. */
 interface SharedTunnel {
-  /** `user@host` this tunnel forwards to -- the cache key. */
+  /** `machine:user@host:cdpPort:padPort` this tunnel forwards to -- the cache key. */
   key: string;
+  /** Registry name of the machine this tunnel reaches. */
+  machine: string;
   host: string;
   user: string;
   port: number;
   base: string;
+  /**
+   * Local port forwarded to the machine's vpad.py daemon, when its press
+   * transport is `uinput`. Rides the same ssh process as the CDP forward, so
+   * a press to a remote stand-in is one TCP write from here. null otherwise.
+   */
+  padPort: number | null;
   child: ChildProcess;
   /** This tunnel's id in the killswitch's cross-process registry. */
   tunnelId: string;
@@ -142,8 +151,12 @@ export function closeSharedCdpTunnel(): void {
 }
 
 /** Open one ssh forward and poll it until CEF answers, or give up. */
-async function createTunnel(host: string, user: string, key: string, readyTimeoutMs: number): Promise<SharedTunnel> {
+async function createTunnel(m: Machine, key: string, readyTimeoutMs: number): Promise<SharedTunnel> {
+  const host = m.host!;
+  const user = m.user ?? DEFAULT_SSH_USER;
+  const cdpPort = m.cdpPort ?? DEFAULT_CDP_PORT;
   const port = await proc.freePort();
+  const padLocal = m.press === "uinput" ? await proc.freePort() : null;
   const args = [
     "-N",
     "-o",
@@ -162,7 +175,8 @@ async function createTunnel(host: string, user: string, key: string, readyTimeou
     "-o",
     "ServerAliveCountMax=3",
     "-L",
-    `${port}:127.0.0.1:8080`,
+    `${port}:127.0.0.1:${cdpPort}`,
+    ...(padLocal ? ["-L", `${padLocal}:127.0.0.1:${m.padPort ?? DEFAULT_PAD_PORT}`] : []),
     `${user}@${host}`,
   ];
 
@@ -172,9 +186,20 @@ async function createTunnel(host: string, user: string, key: string, readyTimeou
   child.stderr?.on("data", (d: string) => (stderr += d));
 
   const base = `http://127.0.0.1:${port}`;
-  const detail = `${user}@${host} -> 127.0.0.1:${port}`;
+  const detail = `${user}@${host} -> 127.0.0.1:${port}` + (padLocal ? ` (+pad 127.0.0.1:${padLocal})` : "");
 
-  const state: SharedTunnel = { key, host, user, port, base, child, tunnelId: "", exited: false };
+  const state: SharedTunnel = {
+    key,
+    machine: m.name,
+    host,
+    user,
+    port,
+    base,
+    padPort: padLocal,
+    child,
+    tunnelId: "",
+    exited: false,
+  };
   child.on("exit", () => {
     state.exited = true;
   });
@@ -185,10 +210,16 @@ async function createTunnel(host: string, user: string, key: string, readyTimeou
   // `shared`; it does not unregister itself, because killAllTunnels() does
   // that right after calling it (killswitch.ts), the same contract the ingest
   // tunnel in tools/deck.ts relies on.
-  state.tunnelId = registerTunnel("cdp", child.pid, detail, () => {
-    if (shared === state) shared = null;
-    if (!child.killed) child.kill();
-  });
+  state.tunnelId = registerTunnel(
+    "cdp",
+    child.pid,
+    detail,
+    () => {
+      if (shared === state) shared = null;
+      if (!child.killed) child.kill();
+    },
+    m.name,
+  );
 
   const deadline = Date.now() + readyTimeoutMs;
   for (;;) {
@@ -208,9 +239,9 @@ async function createTunnel(host: string, user: string, key: string, readyTimeou
         unregisterTunnel(state.tunnelId);
         if (!child.killed) child.kill();
         throw new Error(
-          `Tunnel to ${user}@${host} opened but Steam's CEF did not answer on 127.0.0.1:8080 ` +
+          `Tunnel to ${user}@${host} opened but Steam's CEF did not answer on 127.0.0.1:${cdpPort} ` +
             `within ${readyTimeoutMs}ms. Confirm ~/.steam/steam/.cef-enable-remote-debugging ` +
-            "exists on the Deck and that Steam has been restarted since it was created.",
+            `exists on machine "${m.name}" and that Steam has been restarted since it was created.`,
         );
       }
       await sleep(300);
@@ -228,17 +259,22 @@ async function createTunnel(host: string, user: string, key: string, readyTimeou
  * the second before it decides whether to start its own.
  */
 async function acquireSharedTunnel(readyTimeoutMs: number): Promise<SharedTunnel> {
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  const user = env.DECK_USER ?? "deck";
+  const m = currentMachine();
+  const host = m.host;
+  const user = m.user ?? DEFAULT_SSH_USER;
 
+  if (m.local) {
+    throw new Error(`machine "${m.name}" is local; it has no SSH tunnel (openCdpTunnel handles this case)`);
+  }
   if (!host) {
     throw new DeckNotConfiguredError(
-      "No DECK_IP configured. Run deck_configure with DECK_IP (and DECK_USER if not 'deck'), " +
-        "or pass an explicit cdpUrl if you already have a tunnel open.",
+      m.name === "deck"
+        ? "No DECK_IP configured. Run deck_configure with DECK_IP (and DECK_USER if not 'deck'), " +
+            "or pass an explicit cdpUrl if you already have a tunnel open."
+        : `Machine "${m.name}" has no host configured.`,
     );
   }
-  const key = `${user}@${host}`;
+  const key = `${m.name}:${user}@${host}:${m.cdpPort ?? DEFAULT_CDP_PORT}:${m.press === "uinput" ? m.padPort ?? DEFAULT_PAD_PORT : "-"}`;
 
   if (shared) {
     if (shared.key === key && !shared.exited) {
@@ -256,7 +292,7 @@ async function acquireSharedTunnel(readyTimeoutMs: number): Promise<SharedTunnel
     return pending.promise;
   }
 
-  const promise = createTunnel(host, user, key, readyTimeoutMs)
+  const promise = createTunnel(m, key, readyTimeoutMs)
     .then((state) => {
       if (pending?.key === key) pending = null;
       shared = state;
@@ -279,6 +315,18 @@ async function acquireSharedTunnel(readyTimeoutMs: number): Promise<SharedTunnel
  * being superseded by a fresher one.
  */
 export async function openCdpTunnel(readyTimeoutMs = 12_000): Promise<CdpTunnel> {
+  const m = currentMachine();
+  if (m.local) {
+    // This process runs on the machine itself (plan 10 Route A″: this
+    // Windows PC as a stand-in), so CEF's loopback port is reachable
+    // directly. No ssh, nothing to register, nothing to tear down.
+    return {
+      base: `http://127.0.0.1:${m.cdpPort ?? DEFAULT_CDP_PORT}`,
+      close: () => {
+        /* nothing was opened */
+      },
+    };
+  }
   const state = await acquireSharedTunnel(readyTimeoutMs);
   return {
     base: state.base,
@@ -286,6 +334,39 @@ export async function openCdpTunnel(readyTimeoutMs = 12_000): Promise<CdpTunnel>
       /* no-op: see module doc comment */
     },
   };
+}
+
+/**
+ * Where the current machine's virtual gamepad daemon (bridge/tools/vpad.py)
+ * can be reached from this process: directly on a local machine, through
+ * the shared tunnel's pad forward on a remote one. Throws for a machine
+ * whose press transport is not a virtual pad.
+ */
+export async function openPadEndpoint(readyTimeoutMs = 12_000): Promise<PadEndpoint> {
+  const m = currentMachine();
+  if (m.press !== "uinput" && m.press !== "vigem") {
+    throw new Error(`machine "${m.name}" presses through "${m.press}", not a virtual pad`);
+  }
+  if (m.local) return { host: "127.0.0.1", port: m.padPort ?? DEFAULT_PAD_PORT };
+  const state = await acquireSharedTunnel(readyTimeoutMs);
+  if (!state.padPort) {
+    throw new Error(`the shared tunnel to "${m.name}" carries no pad forward (press transport is "${m.press}")`);
+  }
+  return { host: "127.0.0.1", port: state.padPort };
+}
+
+/**
+ * Like openPadEndpoint, but never opens anything: the endpoint if the
+ * machine is local or its tunnel is already up in this process, else null.
+ * The killswitch uses this -- a stop must not start an ssh session.
+ */
+export function padEndpointIfOpen(m: Machine): PadEndpoint | null {
+  if (m.press !== "uinput" && m.press !== "vigem") return null;
+  if (m.local) return { host: "127.0.0.1", port: m.padPort ?? DEFAULT_PAD_PORT };
+  if (shared && shared.machine === m.name && !shared.exited && shared.padPort) {
+    return { host: "127.0.0.1", port: shared.padPort };
+  }
+  return null;
 }
 
 /** Get the shared tunnel, run one operation. Does not close it afterwards. */

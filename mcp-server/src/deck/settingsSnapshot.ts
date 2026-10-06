@@ -25,7 +25,8 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 
-import { getConfigDir, readDeckEnv } from "../config.js";
+import { getConfigDir } from "../config.js";
+import { currentMachine } from "../machines.js";
 import { proc, quoteRemotePath } from "../deploy/deployHelpers.js";
 import { detectPlugin, remotePluginDirName } from "../tools/plugin.js";
 import {
@@ -72,10 +73,12 @@ function shellCmd(): string {
 }
 
 function connectedEnv(): { user: string; host: string } {
-  const env = readDeckEnv();
-  const host = env.DECK_IP;
-  if (!host) throw new Error("DECK_IP not configured — run deck_configure first");
-  return { user: env.DECK_USER ?? "deck", host };
+  const m = currentMachine();
+  if (m.local) {
+    throw new Error(`deck_snapshotSettings copies a plugin's settings off a Deck over SSH; machine "${m.name}" is local`);
+  }
+  if (!m.host) throw new Error("DECK_IP not configured — run deck_configure first");
+  return { user: m.user ?? "deck", host: m.host };
 }
 
 function pluginNameForSnapshot(): string {
