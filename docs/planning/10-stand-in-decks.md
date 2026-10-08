@@ -490,3 +490,7 @@ One verified A on "Got it" (`steam-routed`) dismissed it and the QAM came back w
 inference-mode chip; UP walked back through them to "New chat", "Main tab" and the version button.
 Not the Deck's walk (plan 06 found four covered chips on DOWN there): a different starting ring, a
 Windows Steam build and no gamescope. A lead-finder, as plan 10 § 3 said, not a verdict.
+
+**00:45:** the maintainer copied the v3.2.10 exes over the old ones in `homebrew\services` and started
+`PluginLoader_noconsole.exe` from there: it holds 1337, Decky injects, the QAM lists tab 999. The
+Startup shortcut and `deck_deploy`'s restart now start the right loader; nothing runs from `E:\` any more.
