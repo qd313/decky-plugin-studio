@@ -452,3 +452,25 @@ deployed to the stand-in; the change sits uncommitted in the bonsAI working tree
 a 30-line stdio MCP client (`@modelcontextprotocol/sdk` `Client` + `StdioClientTransport`,
 spawning `mcp-server/dist/index.js` with `DECKY_STUDIO_WORKSPACE` set to the bonsAI checkout) drove
 every call above. Worth keeping as `scripts/call-tool.mjs` if this recurs.
+
+**Later the same night: the loader swap worked, and it exposed a server bug.** With upstream's
+v3.2.10 Windows build (run from `E:\standins\PluginLoader.Win_v3.2.10_7556331`, console output
+to `E:\standins\loader-v3.2.10.log`) Decky injects: `window.DeckyPluginLoader`, `DFL` and
+`DeckyBackend` exist in SharedJSContext, the QAM lists `quickaccess_tab_999`, and the loader logs
+"bonsAI plugin loaded!" with the `pwd` guard in place. The earlier failure of both exes was the old
+loader still holding port 1337 after `deck_deploy` restarted it.
+
+- **`deck_readFocus` took 2.5 minutes on the stand-in, and `deck_openPlugin` timed out.** The
+  Windows Steam client lists its desktop window's views (Profile/Community/Library/Store Supernav,
+  the Root Menus, "Steam", three bare "Menu" pages: fifteen in all) beside Big Picture's, and while
+  that window is hidden they are frozen: `Runtime.evaluate` on them never returns. Big Picture's
+  own pages answer in under 10 ms. The scan was sequential at 10 s per page. Fixed: every page is
+  asked at once and the answers read back in listing order, so the first page with the marker
+  still wins and a frozen page costs one timeout for the whole read (12 s measured, 435 unit
+  tests green). `deck_readFocus` now takes `timeoutMs` too.
+- **Big Picture has to be the foreground window.** After the loader swap the Big Picture page
+  reported `visibilityState: "hidden"` and no `gpfocus` anywhere, because the maintainer's
+  terminal covered it; a D-pad press (`wire-sent`) changed nothing, and Windows refused
+  `SetForegroundWindow` from this session. The first walk resumes when the maintainer clicks into
+  Big Picture. This is the "use the PC while it is driven" roadmap item measured from the other
+  side: it is not a monitor question, it is a foreground question.

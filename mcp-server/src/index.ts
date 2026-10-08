@@ -527,6 +527,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
     case "tools/deck_readFocus":
       return readFocus({
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        timeoutMs: params.timeoutMs != null ? Number(params.timeoutMs) : undefined,
       });
 
     case "tools/deck_checkReady": {

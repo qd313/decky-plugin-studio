@@ -754,6 +754,11 @@ export const TOOLS: ToolDef[] = [
           description:
             "Existing CDP endpoint, e.g. http://127.0.0.1:8080. Omit to open a temporary SSH forward to the configured Deck.",
         },
+        timeoutMs: {
+          type: "number",
+          description:
+            "Per-page Runtime.evaluate budget in ms (default 10000). Every listed page is asked at once, so a page that never answers costs the read one timeout, not one per page.",
+        },
       },
       additionalProperties: false,
     },

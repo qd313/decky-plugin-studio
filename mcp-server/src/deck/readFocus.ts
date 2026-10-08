@@ -918,17 +918,36 @@ export async function readFocusAt(
 
   // Ask every target rather than assuming which one owns focus. Plan 01 named
   // SharedJSContext; measurement says the QAM target carries the marker.
-  for (const t of pages) {
+  //
+  // Every page is asked at once and the answers are read back in listing
+  // order, so the first page carrying the marker still wins, but a page that
+  // never answers costs the scan one timeout, not one timeout per page. The
+  // Windows Steam client lists its desktop window's views (the Supernavs, the
+  // Root Menus, "Steam") beside Big Picture's, and while that window is hidden
+  // they are frozen: Runtime.evaluate on them never returns. Fifteen of them
+  // at 10 s each made every read on the stand-in take two and a half minutes,
+  // and deck_openPlugin, which reads focus between presses, never finished
+  // (plan 10 § 13).
+  const answers = await Promise.all(
+    pages.map(async (t): Promise<{ page?: PageResult; error?: string }> => {
+      try {
+        const page = await evaluate<PageResult>(
+          rewriteWsHost(t.webSocketDebuggerUrl!, base),
+          pageExpression(expect),
+          timeoutMs,
+        );
+        return { page };
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    }),
+  );
+  for (let i = 0; i < pages.length; i++) {
+    const t = pages[i];
     scanned.push(t.title);
-    let page: PageResult;
-    try {
-      page = await evaluate<PageResult>(
-        rewriteWsHost(t.webSocketDebuggerUrl!, base),
-        pageExpression(expect),
-        timeoutMs,
-      );
-    } catch (err) {
-      failures.push(`${t.title}: ${(err as Error).message}`);
+    const { page, error } = answers[i];
+    if (error != null) {
+      failures.push(`${t.title}: ${error}`);
       continue;
     }
     if (!page?.hasGpfocus) continue;
