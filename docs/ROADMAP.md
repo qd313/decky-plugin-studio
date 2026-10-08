@@ -353,8 +353,10 @@ Three rules keep that safe:
 > and walked its tabs with a person watching. No Decky tab: the Windows loader release is a 2025-10 build and
 > this Steam is the 2026-09 build, so the loader must be a current upstream `Builder Win` artifact (v3.2.10,
 > staged on `E:\standins\`, the swap is the maintainer's). bonsAI needed a Windows guard for `import pwd`.
-> **Still open:** the loader swap, then the first sweep; the VM lane (Memory Integrity off, VirtualBox
-> installed), Route B, the lease's device half.
+> **2026-10-08: bonsAI opened and swept on `this-pc`** with upstream loader v3.2.10 (6 controls, every stop
+> visible). **Still open:** copy the v3.2.10 exes over the old loader so the Startup shortcut and `deck_deploy`
+> start the right one; `openPlugin` naming a first-run dialog that takes the ring; the VM lane (Memory
+> Integrity off, VirtualBox installed), Route B, the lease's device half.
 
 ★★★★★ · Planned — unshelved 2026-09-23 (shelved 2026-09-05 as *Parallel VM QA farm for bonsAI*)
 - **What:** up to four virtual Decks (Bazzite) on the maintainer's PC, each driven by its own AI session at the same time, so bonsAI's test rows stop queuing for the one real Deck.

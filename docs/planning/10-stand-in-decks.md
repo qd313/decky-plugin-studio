@@ -474,3 +474,19 @@ loader still holding port 1337 after `deck_deploy` restarted it.
   `SetForegroundWindow` from this session. The first walk resumes when the maintainer clicks into
   Big Picture. This is the "use the PC while it is driven" roadmap item measured from the other
   side: it is not a monitor question, it is a foreground question.
+
+**2026-10-08, 00:30: bonsAI opened and swept on a stand-in for the first time.** With Big Picture
+in front (the maintainer clicked it), one D-pad press restored the ring (Steam drops it after
+mouse or keyboard use). `deck_openPlugin`: QAM opened, pane 999 after 4 rail presses, ring into
+the Decky pane, "bonsAI" found and activated. It then reported "the panel did not mount" because
+**bonsAI's first-run welcome dialog** ("Welcome to bonsAI! This plugin is currently in beta...")
+took the ring on the Big Picture page and hid the QAM; this PC's settings directory was fresh.
+One verified A on "Got it" (`steam-routed`) dismissed it and the QAM came back with
+`.bonsai-scope` present. Follow-up for DPS: `openPlugin` should name a modal that took the ring
+("a dialog owns focus: <its first words>") instead of "did not mount"; a `deck_checkReady`
+`noModal` check would have said so first. `deck_sweep` (DOWN, return trip, lane 0): 6 controls in
+11 presses over 2 legs, every stop visible, no cycle, `wire-sent`, 233 s; evidence in bonsAI's
+`runs/this-pc-first-sweep-2026-10-08.json`. The DOWN leg stalled at "ask" after Speed and the
+inference-mode chip; UP walked back through them to "New chat", "Main tab" and the version button.
+Not the Deck's walk (plan 06 found four covered chips on DOWN there): a different starting ring, a
+Windows Steam build and no gamescope. A lead-finder, as plan 10 § 3 said, not a verdict.
