@@ -349,14 +349,25 @@ Three rules keep that safe:
 > killswitch with the virtual controller shown and released from the VS Code status bar, and the host/guest
 > scripts under `scripts/standin/`. **Verified on the maintainer's PC as stand-in `this-pc`** (Route A″: Decky
 > Loader for Windows in this PC's Steam, bonsAI deployed, CEF read with no tunnel, pad seen by Windows, a second
-> session's press refused). **Still open:** the first D-pad walk on this PC (Steam offline, Big Picture open, a
-> person present), the VM lane (Memory Integrity off, VirtualBox installed), Route B, the lease's device half.
+> session's press refused). **First press done 2026-10-07 (plan 10 § 13):** the virtual pad opened the QAM
+> and walked its tabs with a person watching. No Decky tab: the Windows loader release is a 2025-10 build and
+> this Steam is the 2026-09 build, so the loader must be a current upstream `Builder Win` artifact (v3.2.10,
+> staged on `E:\standins\`, the swap is the maintainer's). bonsAI needed a Windows guard for `import pwd`.
+> **Still open:** the loader swap, then the first sweep; the VM lane (Memory Integrity off, VirtualBox
+> installed), Route B, the lease's device half.
 
 ★★★★★ · Planned — unshelved 2026-09-23 (shelved 2026-09-05 as *Parallel VM QA farm for bonsAI*)
 - **What:** up to four virtual Decks (Bazzite) on the maintainer's PC, each driven by its own AI session at the same time, so bonsAI's test rows stop queuing for the one real Deck.
 - **Why it's unshelved:** both halves of the old blocker were relaxed on 2026-09-23. One Steam account may sign in once per stand-in and then stay offline. And a stand-in no longer has to pass everything a Deck passes: hardware, game-running and timing rows stay on the real Deck.
 - **What DPS has to build:** a list of machines with their addresses, with every call naming which one it drives; a way to tell a stand-in from the real Deck; a virtual gamepad inside each stand-in, because the one bridge board can only press buttons on one machine; and *Only one driver at a time* above, per machine.
 - **Plans:** [planning/08](planning/08-parallel-vm-qa-farm.md) (the 2026-09-05 discovery, now with a § 7 on what changed) and bonsAI's plan 67, `docs/planning/67-stand-in-decks.md` in the bonsAI repo (phases, decisions, the machine's measured budget). bonsAI's Phase 0 (can one stand-in run game mode at all) comes before any DPS work.
+
+#### Use the PC while this-pc is being driven (asked 2026-10-07)
+★★★ · Planned — a stand-in on the maintainer's own desktop takes the desktop with it, and that should stop being true.
+- **What is true now:** Steam Big Picture only takes pad input while it is the foreground window, and a mouse crossing it moves the focus ring. So on `this-pc` the maintainer cannot type or click anywhere during a run, on any monitor: a run with Big Picture in the background stalls (presses go nowhere, or into whatever is focused if Steam Input's desktop layout is on), and a run with Big Picture in front is disturbed by every keystroke. Moving the window to another monitor changes neither.
+- **What fixes it for real:** a stand-in that owns its own display and input. That is the VM lane (plan 10 L3, a Bazzite VM has its own screen and its own virtual pad) and Route B. The `this-pc` stand-in stays the quick one for a watched run and for "does bonsAI load on this Steam build at all".
+- **What DPS can add cheaply on `this-pc`:** a *foreground* gate: `deck_checkReady { machine: "this-pc" }` fails unless Big Picture is the foreground window, and a walk pauses (does not press) the moment it is not, then resumes when it is back, so a stray alt-tab costs a retry instead of a mis-landed press. A second Windows session (another user signed in, Steam running there) is worth measuring as a middle route: separate input focus, same hardware, no VM.
+- **Plan:** fold into plan 10 as a § 14 when the loader swap and the first sweep are done.
 
 ---
 

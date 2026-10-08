@@ -403,4 +403,52 @@ checks for it every time.
 Memory Integrity off; VirtualBox's UAC prompt; the Bazzite installer clicks; every Steam sign-in; and the
 YD-ESP32-S3 N16R8 board order from § 10 (the ViGEm pad works, so the order is durability, not need).
 
-**Not committed.** All of the above is uncommitted work in the repo at the time of writing.
+**Committed** as `abdc5f2` (L1+L2) and `3fd66b9` (version 0.3.11) on 2026-10-06.
+
+## 13. First press on this-pc, 2026-10-07
+
+Steam offline, Big Picture open, the maintainer watching. Through the built server with
+`machine: "this-pc"`:
+
+- `deck_readFocus`: ring on the "Sifu" tile of the Big Picture home, visible, no tunnel. The
+  stand-in reads focus exactly like the Deck does.
+- `deck_openPlugin`: the ViGEm pad **works**. The GUIDE+A chord opened the QAM (pane 4 on screen),
+  ten D-pad presses walked the tabs 4 -> 6. Nothing launched. Fidelity `wire-sent`, as expected.
+- It failed at `find-decky-tab`: the QAM has six tabs (Notifications, 3, Quick Settings,
+  Performance, Soundtracks, Help) and no Decky tab. `window.DeckyPluginLoader` is undefined in
+  SharedJSContext.
+
+**Why: the Windows loader is a year older than this Steam.** The Steam user agent says
+`Valve Steam Client/default/1788652215`, which is the 2026-09-05 build (the `package/` file dates
+of 2025-10-11 mislead). The loader installed by `setup-decky-windows.ps1` is the Windows fork's
+`Working_PluginLoader_14/10/25`, an upstream CI artifact from 2025-10. Two incompatibilities,
+both measured in the page:
+
+1. Its boot script spins forever on `window.App.BFinishedInitStageOne()`, which this Steam no
+   longer has (it has `BFinishedInitBeforeLogin`). Only `frontend/index.js` was ever fetched.
+2. With that function shimmed from CDP, the next step throws
+   `TypeError: Cannot convert a Symbol value to a string` inside `@decky/ui`'s
+   `findModuleByExport` (the `IconsModule` finder calls `e.toString()` on every export; one
+   export in the 2026 webpack graph is an array holding a Symbol).
+
+So no Windows Decky release matches a current Steam; the loader has to be a current upstream
+build. Upstream `SteamDeckHomebrew/decky-loader` has a **Builder Win** workflow; its newest
+successful run (36373680161) built commit `7556331`, which is exactly what the `v3.2.10` tag
+(2026-10-04) points at. The artifact `PluginLoader Win` (two exes, 14 MB each) was downloaded
+with `gh run download`; **installing it is the maintainer's** (the session's permission policy
+refused to run a downloaded executable, rightly). Swap: stop `PluginLoader*`, back up the two
+exes in `%USERPROFILE%\homebrew\services`, copy the two from the artifact in, start
+`PluginLoader_noconsole.exe` (the Startup shortcut needs no change), then
+`deck_openPlugin { machine: "this-pc" }` again.
+
+**bonsAI's backend cannot start on Windows** (second finding, from the loader console):
+`py_modules/backend/services/screenshot_media.py` imported `pwd` at module level, which does not
+exist on Windows, so `main.py` failed at import and the loader reported "Failed to start bonsAI!".
+Guarded (`pwd = None` on ImportError; `_discover_x11_sessions` falls back to uid 1000) and
+deployed to the stand-in; the change sits uncommitted in the bonsAI working tree.
+`network_service.py` already imports `fcntl` lazily, so it was fine.
+
+**Driving the server without the IDE:** the `deck_*` tools were not connected to this session, so
+a 30-line stdio MCP client (`@modelcontextprotocol/sdk` `Client` + `StdioClientTransport`,
+spawning `mcp-server/dist/index.js` with `DECKY_STUDIO_WORKSPACE` set to the bonsAI checkout) drove
+every call above. Worth keeping as `scripts/call-tool.mjs` if this recurs.
