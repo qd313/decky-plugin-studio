@@ -301,6 +301,35 @@ shown `Y, X, RB, LB, up, down, left, right, A, B`; the maintainer reported
 presses missed. An independent observation agreeing is what made it safe to act
 on.
 
+### Triggers (LT, RT) — axes, not buttons (2026-10-08)
+
+Until 2026-10-08 the board had no trigger at all, so any check that needed L2 or
+R2 needed a person's hands (bonsAI's plan 84 had to, for chat switching). The
+sweep above already held the reason: **bits 8 and 9 do nothing because Linux
+turns the board's buttons into the kernel's gamepad codes one for one** (bit 0
+BTN_A, bit 1 BTN_B, bit 2 BTN_C, bit 3 BTN_X, bit 4 BTN_Y, bit 5 BTN_Z, bit 6
+BTN_TL, bit 7 BTN_TR, bit 8 BTN_TL2, bit 9 BTN_TR2, bit 10 BTN_SELECT, bit 11
+BTN_START, bit 12 BTN_MODE, bit 13 BTN_THUMBL, bit 14 BTN_THUMBR -- the measured
+map exactly, gaps included), and SDL, which Steam reads controllers through,
+**prefers an analog trigger to a digital one**: with ABS_Z and ABS_RZ present it
+maps the left trigger to Z and the right to Rz, and leaves BTN_TL2 and BTN_TR2
+unmapped.
+
+So `LT` and `RT` are names in the firmware (`TRIGGERS` in `deck_bridge.ino`)
+that pull the Z and Rz axes to 127 for the press and back to 0 on release, the
+watchdog and `release` included. Rest is 0, where Steam's input tester reads
+both triggers 0. A raw `"ax":[x,y,z,rz,rx,ry]` field does for axes what `mask`
+does for bits, for mapping a host that disagrees. Every reply now carries `ax`,
+so a reply without it means the board runs a program from before 2026-10-08;
+`deck_pressButton` says so in its refusal.
+
+**Measured on the Deck, 2026-10-08**, first flash, no second guess needed: with
+the Quick Access Menu open and a passive listener on its document,
+`pad.py press LT` arrived as **one** `vgp_onbuttondown` with button **7**
+(TRIGGER_LEFT) and `pad.py press RT` as one with button **8** (TRIGGER_RIGHT);
+the ring did not move. The same two numbers a person's L2 and R2 gave on the
+same Deck that evening.
+
 ### GUIDE exists — XInput is not needed
 
 This is the S2 blocker removed. Earlier evidence (SDL has no mapping; five names
@@ -419,7 +448,7 @@ belongs here. Anything inside a plugin belongs to that plugin's repo. Per plan
 | Tool | Does |
 |---|---|
 | `flash.ps1` | Compile + flash a sketch. Holds the FQBN and why each option matters. |
-| `pad.py` | Drive the board: `status`, `press`, `hold`, `release`, `watchdog-test`. |
+| `pad.py` | Drive the board: `status`, `press`, `hold`, `release`, `watchdog-test`. Names include `LT` and `RT`, the triggers. |
 | `chord.py` | Hold one button, tap another. `chord.py GUIDE A` opens the QAM. |
 | `sweep.py` | Press named buttons in turn, for watching which lights up. |
 | `bitsweep.py` | Press raw bits 0-15 on a fixed 2.0 s grid, for mapping an unknown host. |

@@ -1,4 +1,5 @@
-// 04_command - serial command channel + neutral-on-silence watchdog.
+// 05_triggers - serial command channel + neutral-on-silence watchdog, with
+// the two triggers (LT, RT) as axes since 2026-10-08. Was 04_command.
 //
 // The board does NOTHING on its own. It presses only what the PC tells it to,
 // and it releases everything the moment the PC goes quiet. Per plan 19 L6 the
@@ -11,11 +12,13 @@
 //   {"t":"hold","b":["A","DOWN"]}         hold until released or watchdog fires
 //   {"t":"release"}                       everything to neutral, now
 //   {"t":"status"}                        report current state
+//   {"t":"press","ax":[0,0,127,0,0,0]}    raw axes x y z rz rx ry, for mapping
 //
 // Every line in gets exactly one JSON line back, so the PC can verify the
 // command landed instead of assuming it did.
 //
-// Names: UP DOWN LEFT RIGHT (hat) | A B X Y LB RB SELECT START GUIDE (buttons)
+// Names: UP DOWN LEFT RIGHT (hat) | A B X Y LB RB SELECT START GUIDE L3 R3
+// (buttons) | LT RT (the triggers, sent as axes; see TRIGGERS below)
 
 #include <ArduinoJson.h>
 #include "USB.h"
@@ -50,6 +53,30 @@ static const NamedBit BUTTONS[] = {
 };
 static const size_t N_BUTTONS = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
 
+// The triggers are axes, not buttons. Linux turns this board's buttons into
+// the kernel's gamepad codes (bit 0 -> BTN_A ... bit 8 -> BTN_TL2, bit 9 ->
+// BTN_TR2), which is why the measured map above matches them one for one.
+// SDL, which Steam reads controllers through, prefers an analog trigger to a
+// digital one: with ABS_Z and ABS_RZ present it maps the left trigger to Z and
+// the right to Rz, and leaves BTN_TL2 / BTN_TR2 unmapped -- the "bits 8 and 9
+// unused" the sweep found. So LT is the Z axis and RT the Rz axis, pulled all
+// the way (127). Rest is 0, where Steam's input tester reads both triggers 0.
+// Index into the axis array below, which is in Gamepad.send()'s order.
+static const uint8_t AX_X = 0, AX_Y = 1, AX_Z = 2, AX_RZ = 3, AX_RX = 4, AX_RY = 5;
+static const uint8_t N_AXES = 6;
+static const int8_t TRIGGER_FULL = 127;
+
+struct NamedAxis {
+  const char *name;
+  uint8_t axis;
+};
+
+static const NamedAxis TRIGGERS[] = {
+  {"LT", AX_Z},
+  {"RT", AX_RZ},
+};
+static const size_t N_TRIGGERS = sizeof(TRIGGERS) / sizeof(TRIGGERS[0]);
+
 static const uint8_t DIR_U = 1, DIR_D = 2, DIR_L = 4, DIR_R = 8;
 
 static const NamedBit DIRS[] = {
@@ -76,17 +103,27 @@ static uint8_t hatFromDirs(uint8_t d) {
 
 static uint16_t curButtons = 0;
 static uint8_t curDirs = 0;
+static int8_t curAxes[N_AXES] = {0, 0, 0, 0, 0, 0};
 static uint32_t lastRxMs = 0;
 static uint32_t releaseAtMs = 0;   // 0 = no timed release pending
 static bool watchdogTripped = false;
 
+static bool axesAtRest() {
+  for (uint8_t i = 0; i < N_AXES; i++) {
+    if (curAxes[i]) return false;
+  }
+  return true;
+}
+
 static void applyState() {
-  Gamepad.send(0, 0, 0, 0, 0, 0, hatFromDirs(curDirs), curButtons);
+  Gamepad.send(curAxes[AX_X], curAxes[AX_Y], curAxes[AX_Z], curAxes[AX_RZ],
+               curAxes[AX_RX], curAxes[AX_RY], hatFromDirs(curDirs), curButtons);
 }
 
 static void goNeutral() {
   curButtons = 0;
   curDirs = 0;
+  for (uint8_t i = 0; i < N_AXES; i++) curAxes[i] = 0;
   releaseAtMs = 0;
   applyState();
 }
@@ -94,8 +131,10 @@ static void goNeutral() {
 // ---- replies -------------------------------------------------------------
 
 static void reply(const char *t, const char *detail = nullptr) {
-  Serial.printf("{\"ok\":true,\"t\":\"%s\",\"buttons\":%u,\"dirs\":%u,\"ms\":%lu",
+  Serial.printf("{\"ok\":true,\"t\":\"%s\",\"buttons\":%u,\"dirs\":%u,"
+                "\"ax\":[%d,%d,%d,%d,%d,%d],\"ms\":%lu",
                 t, (unsigned)curButtons, (unsigned)curDirs,
+                curAxes[0], curAxes[1], curAxes[2], curAxes[3], curAxes[4], curAxes[5],
                 (unsigned long)millis());
   if (detail) Serial.printf(",\"detail\":\"%s\"", detail);
   Serial.println("}");
@@ -108,7 +147,8 @@ static void fail(const char *why) {
 // ---- command handling ----------------------------------------------------
 
 // Fill masks from a JSON array of names. Returns false on an unknown name.
-static bool parseNames(JsonArrayConst arr, uint16_t &btns, uint8_t &dirs) {
+static bool parseNames(JsonArrayConst arr, uint16_t &btns, uint8_t &dirs,
+                       int8_t (&axes)[N_AXES]) {
   for (JsonVariantConst v : arr) {
     const char *name = v.as<const char *>();
     if (!name) return false;
@@ -116,6 +156,12 @@ static bool parseNames(JsonArrayConst arr, uint16_t &btns, uint8_t &dirs) {
     for (size_t i = 0; i < N_BUTTONS && !found; i++) {
       if (strcasecmp(name, BUTTONS[i].name) == 0) {
         btns |= BUTTONS[i].mask;
+        found = true;
+      }
+    }
+    for (size_t i = 0; i < N_TRIGGERS && !found; i++) {
+      if (strcasecmp(name, TRIGGERS[i].name) == 0) {
+        axes[TRIGGERS[i].axis] = TRIGGER_FULL;
         found = true;
       }
     }
@@ -158,21 +204,44 @@ static void handleLine(const char *line) {
   if (strcmp(t, "press") == 0 || strcmp(t, "hold") == 0) {
     uint16_t btns = 0;
     uint8_t dirs = 0;
+    int8_t axes[N_AXES] = {0, 0, 0, 0, 0, 0};
     // "mask" presses raw button bits, for discovering how a host numbers them.
     // The Arduino gamepad API carries 16 buttons, so bits above 15 are lost.
     if (doc["mask"].is<unsigned int>()) {
       btns = (uint16_t)(doc["mask"].as<unsigned int>() & 0xFFFF);
     } else if (doc["b"].is<JsonArrayConst>()) {
-      if (!parseNames(doc["b"].as<JsonArrayConst>(), btns, dirs)) {
+      if (!parseNames(doc["b"].as<JsonArrayConst>(), btns, dirs, axes)) {
         fail("unknown button name");
         return;
       }
-    } else {
-      fail("missing b[] or mask");
+    } else if (!doc["ax"].is<JsonArrayConst>()) {
+      fail("missing b[], mask or ax[]");
       return;
+    }
+    // "ax" sets raw axes (x y z rz rx ry, -127..127), for finding which axis a
+    // host reads as which control -- the way "mask" found the button map. It
+    // goes on top of any names in the same command.
+    if (doc["ax"].is<JsonArrayConst>()) {
+      JsonArrayConst arr = doc["ax"].as<JsonArrayConst>();
+      if (arr.size() > N_AXES) {
+        fail("ax takes at most 6 values: x y z rz rx ry");
+        return;
+      }
+      uint8_t i = 0;
+      for (JsonVariantConst v : arr) {
+        if (!v.is<int>()) {
+          fail("ax values must be integers");
+          return;
+        }
+        int a = v.as<int>();
+        if (a > 127) a = 127;
+        if (a < -127) a = -127;
+        axes[i++] = (int8_t)a;
+      }
     }
     curButtons = btns;
     curDirs = dirs;
+    for (uint8_t i = 0; i < N_AXES; i++) curAxes[i] = axes[i];
     applyState();
     // Only a fresh press clears a recorded trip. Merely talking to the board
     // must not erase the evidence that the safety net fired.
@@ -202,7 +271,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  Serial.println("{\"boot\":\"deck-bridge 04_command\",\"watchdog_ms\":750}");
+  Serial.println("{\"boot\":\"deck-bridge 05_triggers\",\"watchdog_ms\":750}");
 
   Gamepad.begin();
   USB.begin();
@@ -234,7 +303,7 @@ void loop() {
 
   // Neutral on silence. This is the thing that stops a stuck button when the
   // PC dies, the cable is pulled, or the runner crashes mid-press.
-  if ((curButtons || curDirs) && (millis() - lastRxMs) > WATCHDOG_MS) {
+  if ((curButtons || curDirs || !axesAtRest()) && (millis() - lastRxMs) > WATCHDOG_MS) {
     goNeutral();
     watchdogTripped = true;
     Serial.println("{\"event\":\"watchdog\",\"detail\":\"link silent, neutralized\"}");

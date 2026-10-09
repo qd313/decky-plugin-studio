@@ -131,7 +131,8 @@ def main():
     ap.add_argument("cmd", choices=["status", "press", "hold", "release",
                                     "watchdog-test"])
     ap.add_argument("buttons", nargs="*", help="UP DOWN LEFT RIGHT A B X Y "
-                                              "LB RB SELECT START GUIDE")
+                                              "LB RB SELECT START GUIDE L3 R3 "
+                                              "LT RT (the triggers)")
     ap.add_argument("--port", default="COM7")
     ap.add_argument("--ms", type=int, default=80)
     ap.add_argument("--secs", type=float, default=2.0)

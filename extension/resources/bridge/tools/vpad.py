@@ -51,7 +51,9 @@ Backends:
             and the `vgamepad` package (`pip install --user vgamepad`).
 
 Button names are the board's: UP DOWN LEFT RIGHT A B X Y LB RB SELECT START
-GUIDE L3 R3. Anything else is refused, never guessed at.
+GUIDE L3 R3 LT RT. Anything else is refused, never guessed at. LT and RT are the
+triggers, pulled all the way: the Xbox 360 pad's ABS_Z / ABS_RZ at 255 on
+uinput, its left and right trigger at 255 on ViGEm.
 """
 import argparse
 import json
@@ -63,7 +65,8 @@ import threading
 import time
 
 BUTTONS = ["UP", "DOWN", "LEFT", "RIGHT", "A", "B", "X", "Y", "LB", "RB",
-           "SELECT", "START", "GUIDE", "L3", "R3"]
+           "SELECT", "START", "GUIDE", "L3", "R3", "LT", "RT"]
+TRIGGER_FULL = 255  # both backends' trigger range is 0..255
 WATCHDOG_MS = 750
 DEFAULT_PORT = 7690
 # A hold that never hears a heartbeat still ends here; so does one that does.
@@ -165,6 +168,8 @@ class UinputBackend(Backend):
         hy = (1 if "DOWN" in held else 0) - (1 if "UP" in held else 0)
         self._emit(self.EV_ABS, self.ABS_HAT0X, hx)
         self._emit(self.EV_ABS, self.ABS_HAT0Y, hy)
+        self._emit(self.EV_ABS, self.ABS_Z, TRIGGER_FULL if "LT" in held else 0)
+        self._emit(self.EV_ABS, self.ABS_RZ, TRIGGER_FULL if "RT" in held else 0)
         self._emit(self.EV_SYN, self.SYN_REPORT, 0)
         self._held = held
 
@@ -209,6 +214,8 @@ class VigemBackend(Backend):
                 self.pad.press_button(button=flag)
             else:
                 self.pad.release_button(button=flag)
+        self.pad.left_trigger(value=TRIGGER_FULL if "LT" in held else 0)
+        self.pad.right_trigger(value=TRIGGER_FULL if "RT" in held else 0)
         self.pad.update()
 
     def close(self):

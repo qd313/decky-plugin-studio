@@ -635,7 +635,7 @@ export const TOOLS: ToolDef[] = [
           type: "array",
           items: { type: "string" },
           description:
-            "One or more of UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3. Several at once are pressed SIMULTANEOUSLY in one report -- NOT a chord: [GUIDE, A] opens the Steam main menu, not the Quick Access Menu. Use deck_pressChord for hold-then-tap.",
+            "One or more of UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3 LT RT (LT and RT are the triggers, L2 and R2, pulled all the way). Several at once are pressed SIMULTANEOUSLY in one report -- NOT a chord: [GUIDE, A] opens the Steam main menu, not the Quick Access Menu. Use deck_pressChord for hold-then-tap.",
         },
         holdMs: { type: "number", default: 80, description: "How long to hold the press." },
         port: { type: "string", description: "Serial port of the bridge's COM side, e.g. COM7." },
@@ -660,7 +660,7 @@ export const TOOLS: ToolDef[] = [
       properties: {
         hold: {
           type: "string",
-          description: "Button held for the whole chord, e.g. GUIDE. One of UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3.",
+          description: "Button held for the whole chord, e.g. GUIDE. One of UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3 LT RT.",
         },
         tap: { type: "string", description: "Button tapped while `hold` is down, e.g. A." },
         port: { type: "string", description: "Serial port of the bridge's COM side, e.g. COM7." },

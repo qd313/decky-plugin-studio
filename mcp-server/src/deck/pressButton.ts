@@ -62,7 +62,30 @@ export const BRIDGE_BUTTONS = [
   "GUIDE",
   "L3",
   "R3",
+  // The triggers, since 2026-10-08. The board sends them as axes, not button
+  // bits (deck_bridge.ino, TRIGGERS), so a board still running the program from
+  // before then refuses them -- see oldFirmwareHint.
+  "LT",
+  "RT",
 ] as const;
+
+/** The names a board flashed before 2026-10-08 does not know. */
+const TRIGGER_NAMES: readonly string[] = ["LT", "RT"];
+
+/**
+ * When the board refuses a trigger as an unknown name, the board is running the
+ * program from before the triggers existed: say so, and how to fix it, rather
+ * than leaving the caller with a bare "unknown button name". Undefined for every
+ * other output.
+ */
+export function oldFirmwareHint(out: string, buttons: readonly string[]): string | undefined {
+  if (!/unknown button name/i.test(out)) return undefined;
+  if (!buttons.some((b) => TRIGGER_NAMES.includes(b.trim().toUpperCase()))) return undefined;
+  return (
+    "the board is running its program from before LT and RT existed (2026-10-08). " +
+    "Unplug the board's Deck-side cable, run bridge/tools/flash.ps1 deck_bridge, then plug it back in"
+  );
+}
 
 export interface PressResult {
   ok: boolean;
@@ -354,6 +377,9 @@ async function deliverPress(opts: PressOptions): Promise<PressResult> {
           .find((l) => l.includes('"t":"press"'));
 
         if (code !== 0 || !ack) {
+          const hint = oldFirmwareHint(out, buttons);
+          // Not REFUSAL: the board is there and answering, so "check it is plugged in" would mislead.
+          if (hint) return finish({ ...base, reason: `Nothing was pressed: ${hint}.` });
           const detail = failureDetail(err, out);
           return finish({ ...base, reason: `${REFUSAL} (pad.py exit ${code}: ${detail})`, detail });
         }

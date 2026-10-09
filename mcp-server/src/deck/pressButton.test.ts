@@ -12,7 +12,7 @@ process.env.DPS_NO_BRIDGE ??= "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { pressButton, portBusy, failureDetail } from "./pressButton.js";
+import { pressButton, portBusy, failureDetail, oldFirmwareHint } from "./pressButton.js";
 import { startFakeCdp, focusedPage } from "./__testutil__/fakeCdp.js";
 
 /**
@@ -196,3 +196,33 @@ test("verify reports an honest failure, not steam-routed, when the underlying pr
       await fake.close();
     }
   }));
+
+// --------------------------------------------------------------------------
+// The triggers. Added 2026-10-08 for bonsAI's plan 84, where LT and RT switch
+// chats: until then the rig had no trigger at all, and a person had to press
+// L2 and R2 by hand. The board sends them as axes (see deck_bridge.ino,
+// TRIGGERS), but to a caller they are two more button names.
+// --------------------------------------------------------------------------
+
+test("LT and RT are known names: they pass validation and stop only at the hardware guard", async () => {
+  for (const b of ["LT", "RT", "lt"]) {
+    const r = await pressButton({ buttons: [b] });
+    assert.equal(r.ok, false);
+    assert.doesNotMatch(r.reason ?? "", /Unknown button/, `${b} was refused as unknown`);
+    assert.match(r.reason ?? "", /DPS_NO_BRIDGE/);
+  }
+});
+
+test("a name that is not a button is still refused, and the refusal lists the triggers", async () => {
+  const r = await pressButton({ buttons: ["L2"] });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /Unknown button\(s\): L2\./);
+  assert.match(r.reason ?? "", /\bLT\b.*\bRT\b/);
+});
+
+test("a board still running the program from before the triggers is named as the cause", () => {
+  const out = '-> {"t":"press","b":["LT"],"ms":80}\n<- {"ok":false,"error":"unknown button name"}\n';
+  assert.match(oldFirmwareHint(out, ["LT"]) ?? "", /flash\.ps1 deck_bridge/);
+  assert.equal(oldFirmwareHint(out, ["A"]), undefined, "an A refusal is not about the triggers");
+  assert.equal(oldFirmwareHint('<- {"ok":true,"t":"press"}', ["RT"]), undefined);
+});
