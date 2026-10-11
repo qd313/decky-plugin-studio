@@ -34,6 +34,17 @@
  *   RULE 5 -- the caller gets the QAM back with deck_openPlugin. These verbs
  *   leave the ring wherever Steam puts it.
  *
+ * WHEN THE STEAM BUTTON DOES NOT OPEN STEAM'S MENU (since 2026-10-10 on the
+ * maintainer's Deck: a clean Steam-button press and release reaches the Deck and
+ * the menu stays shut, while the hold-GUIDE-tap-A chord still opens the QAM --
+ * bonsAI plan89-M3-STEAM-BUTTON). The GUIDE route is still tried first. When
+ * no menu opens, launchGame takes the route the drivers used by hand: close the
+ * QAM with the chord, and only if the read then says the Deck is on the Home
+ * screen with the ring on a Recent Games tile, walk the shelf with the D-pad
+ * and press A on the tile and on Play exactly as above. Anything else is a
+ * refusal: without the menu there is no way to Home but B, which is never sent.
+ * The result's `via` says which route was used ("steam-menu" / "home-screen").
+ *
  * What is NOT here, on purpose: `steam://rungameid/<id>` over SSH and
  * `SteamClient.Apps.RunAppById` over CDP. Both work and both are driving by
  * script -- a test that starts a game the way no thumb can is not evidence about
@@ -44,7 +55,7 @@ import fs from "fs";
 import path from "path";
 
 import { openCdpTunnel } from "./cdpTunnel.js";
-import { pressButton } from "./pressButton.js";
+import { pressButton, pressChord } from "./pressButton.js";
 import { confirmedFidelity, type Fidelity } from "./fidelity.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
 import { focusKey, describe, labelIsBorrowed } from "./focusKey.js";
@@ -93,6 +104,12 @@ export interface GameSessionResult {
   running: { appid: number; name: string } | null;
   /** The main window's route after the last stage, when it could be read. */
   route: string | null;
+  /**
+   * Which way the verb got there, on a success: "steam-menu" is the Steam
+   * button and Steam's main menu; "home-screen" is launchGame's route when that
+   * menu did not open (see the file header).
+   */
+  via?: GameRoute;
   stages: GameStage[];
   /** Controls the ring was read on, in order -- the useful half of a refusal. */
   seen: string[];
@@ -106,6 +123,8 @@ export interface GameSessionResult {
   evidenceFile: string | null;
   summary: string;
 }
+
+export type GameRoute = "steam-menu" | "home-screen";
 
 export type ReadFocusFn = (base: string, timeoutMs?: number) => Promise<ReadFocusResult>;
 export type ReadPageFn = (opts: ReadPageOptions) => Promise<ReadPageResult<unknown>>;
@@ -130,6 +149,8 @@ export interface GameSessionOptions {
    * MCP dispatch never set any of them.
    */
   pressFn?: typeof pressButton;
+  /** The QAM toggle (hold GUIDE, tap A), sent only by launchGame's Home-screen route. */
+  chordFn?: typeof pressChord;
   readFocusFn?: ReadFocusFn;
   readPageFn?: ReadPageFn;
   sleepFn?: (ms: number) => Promise<void>;
@@ -199,7 +220,8 @@ class AutomationStoppedError extends Error {}
 class PressFailedError extends Error {
   constructor(
     readonly stage: string,
-    readonly button: Button,
+    /** A button name, or "GUIDE+A" for the QAM chord. */
+    readonly button: string,
     reason: string,
   ) {
     super(reason);
@@ -515,6 +537,19 @@ class Rig {
     this.presses++;
   }
 
+  /**
+   * The QAM toggle, hold GUIDE and tap A: four HID reports, counted as one
+   * press. Its only call site closes a QAM a read just saw open, on the route
+   * taken when the Steam button did not open Steam's menu.
+   */
+  async closeQamChord(stage: string): Promise<void> {
+    this.abortIfStopped();
+    const chord = this.opts.chordFn ?? pressChord;
+    const p = await chord("GUIDE", "A", { port: this.opts.port });
+    if (!p.ok) throw new PressFailedError(stage, "GUIDE+A", p.reason ?? "chord failed");
+    this.presses++;
+  }
+
   sleep(ms: number): Promise<void> {
     return (this.opts.sleepFn ?? sleep)(ms);
   }
@@ -623,6 +658,7 @@ interface Outcome {
   nothingRunning?: boolean;
   running: { appid: number; name: string } | null;
   route: string | null;
+  via?: GameRoute;
   reason?: string;
   summary: string;
 }
@@ -752,6 +788,7 @@ async function runSession(
         nothingRunning: result.nothingRunning ?? false,
         running: result.running,
         route: result.route,
+        via: result.via ?? null,
         stages: result.stages,
         seen: result.seen,
         presses: result.presses,
@@ -912,6 +949,8 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
       ? `ring on ${describe(focus)}` +
         (focus.visibleQuickAccessTab !== null ? ` with QAM pane ${focus.visibleQuickAccessTab} on screen` : "")
       : "no ring readable";
+    let via: GameRoute = "steam-menu";
+    let route: string | null = null;
     if (inMainMenu(focus)) {
       // GUIDE is a toggle: from inside the menu it would close it.
       rig.stage("open-main-menu", true, `main menu already open (${from}), so GUIDE was not pressed`, 0);
@@ -926,114 +965,177 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
         opened,
         opened
           ? `one GUIDE press from ${from}; ring on ${describe(focus)} in the main menu`
-          : `one GUIDE press from ${from}; ring on ${describe(focus)}, which is not the main menu`,
+          : `one GUIDE press from ${from}; ring on ${describe(focus)}, which is not the main menu - ` +
+              "trying the Home-screen route",
         1,
       );
       if (!opened) {
-        return refuse(
-          `GUIDE did not put the ring in Steam's main menu (${MAIN_MENU_CONTAINER}); it is on ${describe(focus)}`,
-          "the main menu did not open where a read could see it - nothing else was pressed",
-          target.appid,
-          name,
+        // ---- close-qam: 0 or 1 chord; home-screen: 0 presses -------------------
+        //
+        // The drivers' route by hand (v1010-VOICE-BASE-GAME, p88-VOICE-WHOLE-
+        // GAME): close the QAM with the chord, and the Home screen is underneath
+        // with the ring on a Recent Games tile. Every step is gated on a read.
+        const noMenu = "Steam's main menu did not open for the Steam button";
+        if (focus.ok && focus.visibleQuickAccessTab !== null) {
+          const pane = focus.visibleQuickAccessTab;
+          await rig.closeQamChord("close-qam");
+          await rig.sleep(MENU_SETTLE_MS);
+          focus = await rig.readFocus();
+          rig.record(ownLabelOf(focus));
+          const closed = !(focus.ok && focus.visibleQuickAccessTab !== null);
+          rig.stage(
+            "close-qam",
+            closed,
+            closed
+              ? `QAM pane ${pane} closed with the hold-GUIDE-tap-A chord; ring on ${describe(focus)}`
+              : `the chord left QAM pane ${focus.visibleQuickAccessTab} on screen`,
+            1,
+          );
+          if (!closed) {
+            return refuse(
+              `${noMenu}, and the Quick Access Menu did not close with the chord (pane ` +
+                `${focus.visibleQuickAccessTab} still on screen)`,
+              "neither Steam's menu nor the Home screen could be reached - A was not pressed",
+              target.appid,
+              name,
+            );
+          }
+        }
+        route = await rig.readRoute();
+        const home = route !== null && /\/library\/home\/?$/.test(route);
+        const startTile = home ? await rig.readTile() : null;
+        const onTile = startTile !== null && startTile.ok && startTile.appid !== null;
+        rig.stage(
+          "home-screen",
+          home && onTile,
+          !home
+            ? `route ${route ?? "unreadable"}, not /library/home`
+            : onTile
+              ? `on the Home screen (route ${route}), ring on a Recent Games tile (appid ${startTile.appid})`
+              : `on the Home screen, but the ring (${describe(focus)}) is not on a Recent Games tile`,
+          0,
         );
+        if (!home) {
+          return refuse(
+            `${noMenu}, and the Deck is not on the Home screen (route ${route ?? "unreadable"}). Without the ` +
+              "menu the rig cannot get to Home: that would take B, which it never presses. Go to Home by hand " +
+              "and call again",
+            "Steam's menu did not open and the Deck is not on Home - A was not pressed",
+            target.appid,
+            name,
+          );
+        }
+        if (!onTile) {
+          return refuse(
+            `${noMenu}; the Deck is on the Home screen but the ring is on ${describe(focus)}, not on a Recent ` +
+              "Games tile, and the rig does not search the rest of the page",
+            "Steam's menu did not open and the ring is off the Recent Games row - A was not pressed",
+            target.appid,
+            name,
+          );
+        }
+        via = "home-screen";
       }
     }
 
-    // ---- go-home: <= 8 UP, then 1 A ------------------------------------------
-    let homeWalk = 0;
-    if (ownLabelOf(focus) !== HOME_LABEL) {
-      const w = await rig.walk("UP", HOME_BUDGET, "go-home", focus, (r) => ownLabelOf(r) === HOME_LABEL);
-      focus = w.focus;
-      homeWalk = w.presses;
-      if (!w.found) {
-        rig.stage("go-home", false, `no entry labelled exactly "Home" within ${w.presses} UP press(es); ${w.ended}`, w.presses);
-        return refuse(
-          `could not find "Home" in the main menu (${w.ended}); saw ${rig.seen.join(", ") || "nothing labelled"}`,
-          "walked the main menu without finding Home - A was not pressed",
-          target.appid,
-          name,
-        );
+    if (via === "steam-menu") {
+      // ---- go-home: <= 8 UP, then 1 A ----------------------------------------
+      let homeWalk = 0;
+      if (ownLabelOf(focus) !== HOME_LABEL) {
+        const w = await rig.walk("UP", HOME_BUDGET, "go-home", focus, (r) => ownLabelOf(r) === HOME_LABEL);
+        focus = w.focus;
+        homeWalk = w.presses;
+        if (!w.found) {
+          rig.stage("go-home", false, `no entry labelled exactly "Home" within ${w.presses} UP press(es); ${w.ended}`, w.presses);
+          return refuse(
+            `could not find "Home" in the main menu (${w.ended}); saw ${rig.seen.join(", ") || "nothing labelled"}`,
+            "walked the main menu without finding Home - A was not pressed",
+            target.appid,
+            name,
+          );
+        }
       }
-    }
-    // The read that authorises this A is the one that saw "Home". Nothing has
-    // been pressed since. Measured: the ring lands on the shelf's first tile,
-    // the route reads /library/home, ~1.6 s.
-    await rig.press("A", "go-home");
-    await rig.sleep(PAGE_SETTLE_MS);
-    focus = await rig.readFocus();
-    let route = await rig.readRoute();
-    const onHome = route !== null && /\/library\/home\/?$/.test(route);
-    rig.stage(
-      "go-home",
-      onHome,
-      onHome
-        ? `A on "Home" after ${homeWalk} UP press(es); route ${route}, ring on ${describe(focus)}`
-        : `A on "Home" after ${homeWalk} UP press(es); route ${route ?? "unreadable"}, expected /library/home`,
-      homeWalk + 1,
-    );
-    if (!onHome) {
-      return refuse(
-        `A on "Home" did not land on /library/home (route ${route ?? "unreadable"})`,
-        "the Home screen could not be confirmed by its route - nothing else was pressed",
-        target.appid,
-        name,
+      // The read that authorises this A is the one that saw "Home". Nothing has
+      // been pressed since. Measured: the ring lands on the shelf's first tile,
+      // the route reads /library/home, ~1.6 s.
+      await rig.press("A", "go-home");
+      await rig.sleep(PAGE_SETTLE_MS);
+      focus = await rig.readFocus();
+      route = await rig.readRoute();
+      const onHome = route !== null && /\/library\/home\/?$/.test(route);
+      rig.stage(
+        "go-home",
+        onHome,
+        onHome
+          ? `A on "Home" after ${homeWalk} UP press(es); route ${route}, ring on ${describe(focus)}`
+          : `A on "Home" after ${homeWalk} UP press(es); route ${route ?? "unreadable"}, expected /library/home`,
+        homeWalk + 1,
       );
+      if (!onHome) {
+        return refuse(
+          `A on "Home" did not land on /library/home (route ${route ?? "unreadable"})`,
+          "the Home screen could not be confirmed by its route - nothing else was pressed",
+          target.appid,
+          name,
+        );
+      }
     }
 
-    // ---- find-tile: <= budget RIGHT ------------------------------------------
+    // ---- find-tile: <= budget D-pad presses ----------------------------------
     //
     // At every stop the focused element's own image names the app; the text is
-    // recorded, not trusted (rule 2). The walk ends at the target, at the
-    // budget, at "View more in your Library", or when the ring stops producing
-    // new elements -- the end of the shelf.
+    // recorded, not trusted (rule 2). A walk ends at the target, at the budget,
+    // at "View more in your Library", or when the ring stops producing new
+    // elements -- an end of the shelf. Through the menu the ring starts on the
+    // first tile, so RIGHT alone covers the shelf. On the Home-screen route it
+    // starts wherever it was left, so a RIGHT walk that reaches the end without
+    // the game is followed by a LEFT walk, inside the same budget.
     let shelfPresses = 0;
-    let found = false;
-    let ended = "";
     let tile: TileRead = { ok: false, appid: null, depth: null, src: null, text: "" };
-    const keys = new Set<string>([focusKey(focus) ?? ""]);
-    for (;;) {
-      tile = await rig.readTile();
-      if (!tile.ok) {
-        ended = `the ${BIG_PICTURE_TARGET} page could not name the focused tile (${tile.reason ?? "no reason"})`;
-        break;
+    const walkShelf = async (dir: "RIGHT" | "LEFT"): Promise<{ found: boolean; ended: string; atEnd: boolean }> => {
+      const keys = new Set<string>([focusKey(focus) ?? ""]);
+      for (;;) {
+        tile = await rig.readTile();
+        if (!tile.ok) {
+          return {
+            found: false,
+            atEnd: false,
+            ended: `the ${BIG_PICTURE_TARGET} page could not name the focused tile (${tile.reason ?? "no reason"})`,
+          };
+        }
+        rig.record(
+          tile.appid !== null
+            ? `${libraryNames.get(tile.appid) ?? tile.text ?? "unnamed tile"} (${tile.appid})`
+            : ownLabelOf(focus) || tile.text,
+        );
+        if (tile.appid === target.appid) return { found: true, atEnd: false, ended: "found" };
+        if (dir === "RIGHT" && ownLabelOf(focus) === SHELF_END_LABEL) {
+          return { found: false, atEnd: true, ended: `reached "${SHELF_END_LABEL}", the end of the shelf` };
+        }
+        if (shelfPresses >= budget) return { found: false, atEnd: false, ended: `budget of ${budget} D-pad presses spent` };
+        focus = await rig.nudge(dir, "find-tile");
+        shelfPresses++;
+        if (!focus.ok) return { found: false, atEnd: false, ended: "the ring became unreadable" };
+        const k = focusKey(focus) ?? "";
+        if (keys.has(k)) return { found: false, atEnd: true, ended: `the ring stopped moving ${dir} - an end of the shelf` };
+        keys.add(k);
       }
-      rig.record(
-        tile.appid !== null
-          ? `${libraryNames.get(tile.appid) ?? tile.text ?? "unnamed tile"} (${tile.appid})`
-          : ownLabelOf(focus) || tile.text,
-      );
-      if (tile.appid === target.appid) {
-        found = true;
-        break;
-      }
-      if (ownLabelOf(focus) === SHELF_END_LABEL) {
-        ended = `reached "${SHELF_END_LABEL}", the end of the shelf`;
-        break;
-      }
-      if (shelfPresses >= budget) {
-        ended = `budget of ${budget} RIGHT presses spent`;
-        break;
-      }
-      focus = await rig.nudge("RIGHT", "find-tile");
-      shelfPresses++;
-      if (!focus.ok) {
-        ended = "the ring became unreadable";
-        break;
-      }
-      const k = focusKey(focus) ?? "";
-      if (keys.has(k)) {
-        ended = "the ring stopped moving - the end of the shelf";
-        break;
-      }
-      keys.add(k);
+    };
+    let walked = await walkShelf("RIGHT");
+    let directions = "RIGHT";
+    if (!walked.found && walked.atEnd && via === "home-screen") {
+      walked = await walkShelf("LEFT");
+      directions = "RIGHT then LEFT";
     }
+    const found = walked.found;
+    const ended = walked.ended;
     rig.stage(
       "find-tile",
       found,
       found
         ? `appid ${target.appid} in the focused tile's own image (${tile.src ?? "?"}, ${tile.depth ?? 0} level(s) up) ` +
-          `after ${shelfPresses} RIGHT press(es)`
-        : `walked ${shelfPresses} RIGHT press(es) without a tile for appid ${target.appid}; ${ended}`,
+          `after ${shelfPresses} ${directions} press(es)`
+        : `walked ${shelfPresses} ${directions} press(es) without a tile for appid ${target.appid}; ${ended}`,
       shelfPresses,
     );
     if (!found) {
@@ -1141,7 +1243,14 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
       name: runningNow.display_name || name,
       running: { appid: runningNow.appid, name: runningNow.display_name || name },
       route,
-      summary: `launched ${nameOf(target)} - ${stagesLine(rig.stages)}; reopen the plugin with deck_openPlugin`,
+      via,
+      summary:
+        `launched ${nameOf(target)} ` +
+        (via === "home-screen"
+          ? "by the Home-screen route (Steam's main menu did not open for the Steam button, so the QAM was " +
+            "closed with the chord and the game started from its Recent Games tile)"
+          : "through Steam's main menu") +
+        ` - ${stagesLine(rig.stages)}; reopen the plugin with deck_openPlugin`,
     };
   });
 }

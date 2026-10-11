@@ -209,7 +209,7 @@ type Event =
   | { type: "read-tile"; appid: number | null }
   | { type: "read-page"; what: string };
 
-type Screen = "qam" | "game" | "main-menu" | "game-panel" | "modal" | "home" | "app-page";
+type Screen = "qam" | "game" | "main-menu" | "game-panel" | "modal" | "home" | "app-page" | "other";
 
 interface DeckSpec {
   running?: RunningApp[];
@@ -222,6 +222,16 @@ interface DeckSpec {
   appPageLabel?: string;
   /** What the exit dialog puts the ring on. Default "Confirm". */
   modalLabel?: string;
+  /**
+   * False models the Deck since 2026-10-10: a bare GUIDE reaches the Deck and
+   * Steam's main menu stays shut (plan89-M3-STEAM-BUTTON). The QAM chord still
+   * works. Default true.
+   */
+  guideOpensMenu?: boolean;
+  /** The main window's route under the QAM. Default "/library/home". */
+  underQam?: string;
+  /** Which shelf tile holds the ring when the QAM closes over Home. Default 0. */
+  homeShelfIndex?: number;
   onPress?: (button: string, count: number) => void;
 }
 
@@ -246,7 +256,7 @@ function fakeDeck(spec: DeckSpec = {}) {
   } = {
     screen: spec.screen ?? (running.length ? "game" : "qam"),
     focus: spec.focus ?? (running.length ? NO_RING : QAM_START),
-    route: running.length ? "/apprunning" : "/library/home",
+    route: running.length ? "/apprunning" : (spec.underQam ?? "/library/home"),
     shelfIndex: 0,
     panelIndex: 0,
     appPage: 0,
@@ -268,7 +278,7 @@ function fakeDeck(spec: DeckSpec = {}) {
         // A bare GUIDE opens the main menu: on Home with no game, on the game's
         // own entry (above Home) with one running. Anything else goes into the
         // game or the QAM and moves nothing this fake models.
-        if (b === "GUIDE") {
+        if (b === "GUIDE" && spec.guideOpensMenu !== false) {
           st.screen = "main-menu";
           st.focus = running.length ? menuEntry(running[0].display_name) : menuEntry("Home");
         }
@@ -350,6 +360,35 @@ function fakeDeck(spec: DeckSpec = {}) {
     return { ok: true, fidelity: "steam-routed", method: "fake", buttons, holdMs: 80 };
   };
 
+  /**
+   * Hold-GUIDE-tap-A toggles the QAM -- the one chord that kept working when
+   * the bare GUIDE stopped (plan89-M3-STEAM-BUTTON). Closing it over Home puts
+   * the ring back on a Recent Games tile, as the drivers found by hand
+   * (v1010-VOICE-BASE-GAME, p88-VOICE-WHOLE-GAME).
+   */
+  const chordFn = async (hold: string, tap: string): Promise<PressResult> => {
+    const b = `${hold}+${tap}`;
+    presses.push(b);
+    events.push({ type: "press", button: b });
+    spec.onPress?.(b, presses.length);
+    if (hold === "GUIDE" && tap === "A") {
+      if (st.screen === "qam") {
+        if (st.route === "/library/home") {
+          st.screen = "home";
+          st.shelfIndex = spec.homeShelfIndex ?? 0;
+          st.focus = tileAt(st.shelfIndex);
+        } else {
+          st.screen = "other";
+          st.focus = control("Store");
+        }
+      } else if (st.screen === "home" || st.screen === "other" || st.screen === "game") {
+        st.screen = "qam";
+        st.focus = QAM_START;
+      }
+    }
+    return { ok: true, fidelity: "wire-sent", method: "fake:chord", buttons: [hold, tap], holdMs: 0 };
+  };
+
   const readFocusFn = async (): Promise<ReadFocusResult> => {
     events.push({ type: "read-focus", label: label(), ok: st.focus.ok });
     return st.focus;
@@ -405,6 +444,7 @@ function fakeDeck(spec: DeckSpec = {}) {
 
   const seams: GameSessionOptions = {
     pressFn,
+    chordFn,
     readFocusFn,
     readPageFn,
     sleepFn: async () => {},
@@ -608,6 +648,7 @@ test("happy path: GUIDE, A on Home, RIGHT along the shelf, A on the tile, A on P
   assert.ok(r.seen.includes("Deep Rock Galactic: Survivor (2321470)"), `seen: ${r.seen.join(" | ")}`);
   assert.ok(r.seen.includes("Half-Life 2 (220)"));
   assert.match(r.summary, /launched "Half-Life 2" \(appid 220\)/);
+  assert.equal(r.via, "steam-menu", "the Steam button worked, and the result says that was the route");
 
   const tileStage = r.stages.find((s) => s.stage === "find-tile");
   assert.match(tileStage?.detail ?? "", /\/assets\/220\//, "the tile was identified by its own image, not its text");
@@ -692,6 +733,71 @@ test("press-play that never shows up in RunningApps is a finding, not a success"
     "wire-sent",
     "presses were spent and RunningApps never confirmed the launch, so nothing established that they reached Steam -- this path claimed steam-routed off rig.presses > 0 until 2026-09-08",
   );
+});
+
+// --------------------------------------------------------------------------
+// launchGame when the Steam button no longer opens Steam's menu
+// (plan89-M3-STEAM-BUTTON: a clean BTN_MODE down and up reaches the Deck, the
+// menu stays shut; the QAM chord still works)
+// --------------------------------------------------------------------------
+
+test("Steam's menu does not open: the Home-screen route closes the QAM, walks the shelf, and the game starts", async () => {
+  const deck = fakeDeck({ guideOpensMenu: false, shelf: [DRG.appid, HL2.appid, BROTATO.appid] });
+  const r = await launchGame({ ...deck.seams, name: "Half-Life 2" });
+
+  // What the driver sees on the Deck: the game is running.
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(deck.running, [HL2]);
+  assert.deepEqual(r.running, { appid: 220, name: "Half-Life 2" });
+  assert.equal(r.via, "home-screen");
+  // The GUIDE try, the chord that closes the QAM, then the drivers' own route.
+  assert.deepEqual(deck.presses, ["GUIDE", "GUIDE+A", "RIGHT", "A", "A"]);
+  assert.deepEqual(authorisingReads(deck.events), ["tile:220", "focus:Play"], "every A still follows the read naming it");
+  assert.deepEqual(stageNames(r), [
+    "read-running",
+    "resolve-app",
+    "open-main-menu",
+    "close-qam",
+    "home-screen",
+    "find-tile",
+    "open-app-page",
+    "press-play",
+  ]);
+  const menu = r.stages.find((s) => s.stage === "open-main-menu");
+  assert.equal(menu?.ok, false, "the GUIDE try is reported as the miss it was");
+  assert.match(r.summary, /Home-screen route/);
+  assert.match(r.summary, /Steam's main menu did not open/);
+  assert.equal(r.fidelity, "steam-routed", "RunningApps confirmed a launch the presses made");
+  assert.equal(deck.state.spent, false);
+});
+
+test("Home-screen route: a ring mid-shelf walks back LEFT to a game before it", async () => {
+  const deck = fakeDeck({
+    guideOpensMenu: false,
+    shelf: [DRG.appid, HL2.appid, BROTATO.appid],
+    homeShelfIndex: 2,
+  });
+  const r = await launchGame({ ...deck.seams, appid: DRG.appid });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.via, "home-screen");
+  // RIGHT from the last tile moves nothing (the shelf's end), then LEFT twice.
+  assert.deepEqual(deck.presses, ["GUIDE", "GUIDE+A", "RIGHT", "LEFT", "LEFT", "A", "A"]);
+  assert.deepEqual(authorisingReads(deck.events), [`tile:${DRG.appid}`, "focus:Play"]);
+  assert.deepEqual(deck.running, [DRG]);
+});
+
+test("Home-screen route: not on the Home screen under the QAM is a refusal, and A is never pressed", async () => {
+  // Without the menu there is no honest way Home: the rig never presses B.
+  const deck = fakeDeck({ guideOpensMenu: false, underQam: "/library/app/70" });
+  const r = await launchGame({ ...deck.seams, name: "Half-Life 2" });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /Steam's main menu did not open/);
+  assert.match(r.reason ?? "", /not on the Home screen/);
+  assert.match(r.reason ?? "", /\/library\/app\/70/);
+  assert.deepEqual(deck.presses, ["GUIDE", "GUIDE+A"]);
+  assert.ok(!deck.presses.includes("A"));
+  assert.deepEqual(deck.running, []);
+  assert.ok(r.checklist?.length);
 });
 
 // --------------------------------------------------------------------------
