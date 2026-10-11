@@ -1,5 +1,6 @@
-// 05_triggers - serial command channel + neutral-on-silence watchdog, with
-// the two triggers (LT, RT) as axes since 2026-10-08. Was 04_command.
+// 06_trigger_rest - serial command channel + neutral-on-silence watchdog, with
+// the two triggers (LT, RT) as axes since 2026-10-08, resting at the bottom of
+// their range since 2026-10-11 (see TRIGGER_REST). Was 05_triggers, 04_command.
 //
 // The board does NOTHING on its own. It presses only what the PC tells it to,
 // and it releases everything the moment the PC goes quiet. Per plan 19 L6 the
@@ -12,7 +13,8 @@
 //   {"t":"hold","b":["A","DOWN"]}         hold until released or watchdog fires
 //   {"t":"release"}                       everything to neutral, now
 //   {"t":"status"}                        report current state
-//   {"t":"press","ax":[0,0,127,0,0,0]}    raw axes x y z rz rx ry, for mapping
+//   {"t":"press","ax":[0,0,127,-127,0,0]} raw axes x y z rz rx ry, for mapping
+//                                         (z and rz rest at -127: TRIGGER_REST)
 //
 // Every line in gets exactly one JSON line back, so the PC can verify the
 // command landed instead of assuming it did.
@@ -60,11 +62,27 @@ static const size_t N_BUTTONS = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
 // digital one: with ABS_Z and ABS_RZ present it maps the left trigger to Z and
 // the right to Rz, and leaves BTN_TL2 / BTN_TR2 unmapped -- the "bits 8 and 9
 // unused" the sweep found. So LT is the Z axis and RT the Rz axis, pulled all
-// the way (127). Rest is 0, where Steam's input tester reads both triggers 0.
+// the way (127).
+//
+// TRIGGER_REST: a trigger rests at -127, the BOTTOM of its axis, not at 0. The
+// board's axes run -127..127, and SDL reads a whole-range axis as a trigger
+// from bottom (released) to top (pulled), so 0 -- the middle -- is a trigger
+// half pulled. It went unseen until 2026-10-08 because SDL reports nothing for
+// an axis that has never moved (so Steam's tester read 0 in August); the first
+// LT or RT press moved Z / Rz, and every release since put them back at 0:
+// half pulled, until Steam reopens the board. From 2026-10-10 a bare Steam
+// button stopped opening Steam's main menu while GUIDE+A still opened Quick
+// Access -- which fits Steam counting a half-pulled trigger as held through the
+// Steam-button press (the leading explanation; not yet proven on the Deck,
+// see bridge/README.md). -127 reads as released whether the host maps the whole
+// axis or only its top half (a value below a half-axis binding resets it).
 // Index into the axis array below, which is in Gamepad.send()'s order.
 static const uint8_t AX_X = 0, AX_Y = 1, AX_Z = 2, AX_RZ = 3, AX_RX = 4, AX_RY = 5;
 static const uint8_t N_AXES = 6;
 static const int8_t TRIGGER_FULL = 127;
+static const int8_t TRIGGER_REST = -127;
+// Every axis at rest: sticks centred, triggers released.
+static const int8_t REST_AXES[N_AXES] = {0, 0, TRIGGER_REST, TRIGGER_REST, 0, 0};
 
 struct NamedAxis {
   const char *name;
@@ -103,14 +121,14 @@ static uint8_t hatFromDirs(uint8_t d) {
 
 static uint16_t curButtons = 0;
 static uint8_t curDirs = 0;
-static int8_t curAxes[N_AXES] = {0, 0, 0, 0, 0, 0};
+static int8_t curAxes[N_AXES] = {0, 0, TRIGGER_REST, TRIGGER_REST, 0, 0};
 static uint32_t lastRxMs = 0;
 static uint32_t releaseAtMs = 0;   // 0 = no timed release pending
 static bool watchdogTripped = false;
 
 static bool axesAtRest() {
   for (uint8_t i = 0; i < N_AXES; i++) {
-    if (curAxes[i]) return false;
+    if (curAxes[i] != REST_AXES[i]) return false;
   }
   return true;
 }
@@ -123,7 +141,7 @@ static void applyState() {
 static void goNeutral() {
   curButtons = 0;
   curDirs = 0;
-  for (uint8_t i = 0; i < N_AXES; i++) curAxes[i] = 0;
+  for (uint8_t i = 0; i < N_AXES; i++) curAxes[i] = REST_AXES[i];
   releaseAtMs = 0;
   applyState();
 }
@@ -204,7 +222,8 @@ static void handleLine(const char *line) {
   if (strcmp(t, "press") == 0 || strcmp(t, "hold") == 0) {
     uint16_t btns = 0;
     uint8_t dirs = 0;
-    int8_t axes[N_AXES] = {0, 0, 0, 0, 0, 0};
+    int8_t axes[N_AXES];
+    for (uint8_t i = 0; i < N_AXES; i++) axes[i] = REST_AXES[i];
     // "mask" presses raw button bits, for discovering how a host numbers them.
     // The Arduino gamepad API carries 16 buttons, so bits above 15 are lost.
     if (doc["mask"].is<unsigned int>()) {
@@ -220,7 +239,8 @@ static void handleLine(const char *line) {
     }
     // "ax" sets raw axes (x y z rz rx ry, -127..127), for finding which axis a
     // host reads as which control -- the way "mask" found the button map. It
-    // goes on top of any names in the same command.
+    // goes on top of any names in the same command; axes it does not list keep
+    // their rest value (z and rz at TRIGGER_REST).
     if (doc["ax"].is<JsonArrayConst>()) {
       JsonArrayConst arr = doc["ax"].as<JsonArrayConst>();
       if (arr.size() > N_AXES) {
@@ -271,7 +291,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  Serial.println("{\"boot\":\"deck-bridge 05_triggers\",\"watchdog_ms\":750}");
+  Serial.println("{\"boot\":\"deck-bridge 06_trigger_rest\",\"watchdog_ms\":750}");
 
   Gamepad.begin();
   USB.begin();

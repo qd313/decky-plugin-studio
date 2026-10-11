@@ -316,12 +316,52 @@ maps the left trigger to Z and the right to Rz, and leaves BTN_TL2 and BTN_TR2
 unmapped.
 
 So `LT` and `RT` are names in the firmware (`TRIGGERS` in `deck_bridge.ino`)
-that pull the Z and Rz axes to 127 for the press and back to 0 on release, the
-watchdog and `release` included. Rest is 0, where Steam's input tester reads
-both triggers 0. A raw `"ax":[x,y,z,rz,rx,ry]` field does for axes what `mask`
-does for bits, for mapping a host that disagrees. Every reply now carries `ax`,
-so a reply without it means the board runs a program from before 2026-10-08;
-`deck_pressButton` says so in its refusal.
+that pull the Z and Rz axes to 127 for the press and back to rest on release,
+the watchdog and `release` included. A raw `"ax":[x,y,z,rz,rx,ry]` field does
+for axes what `mask` does for bits, for mapping a host that disagrees. Every
+reply now carries `ax`, so a reply without it means the board runs a program
+from before 2026-10-08; `deck_pressButton` says so in its refusal.
+
+**Rest is -127, not 0, from `06_trigger_rest` (written 2026-10-11, NOT YET
+FLASHED).** `05_triggers` rested both triggers at 0, the middle of the board's
+-127..127 axes. A whole-range axis read as a trigger runs from the bottom
+(released) to the top (pulled), so 0 is a trigger **half pulled**. Nobody saw it
+in August because SDL reports nothing for an axis that has never moved, so the
+tester read 0; the first `LT` / `RT` press (plan 84, 2026-10-08) moved the axes,
+and every release since has put them back at half, until Steam reopens the board.
+
+### The Steam button stopped opening Steam's menu (2026-10-10)
+
+From 2026-10-10 a bare GUIDE through the rig opened nothing, while hold-GUIDE-
+tap-A still opened Quick Access. Measured on the Deck 2026-10-11 (bonsAI
+`plan89-M3-STEAM-BUTTON`): the board's input device received exactly one
+BTN_MODE (316) down and up, 80, 150 and 400 ms apart, nothing else. So the
+press arrives clean; Steam decides to do nothing with it. **Leading explanation
+(not yet proven):** the half-pulled triggers above. Steam opens its main menu
+when the Steam button is released with nothing else used during the press, and
+a trigger held at half counts as used; GUIDE+A is an explicit chord, so it still
+works. It fits the dates: the last good launch through the menu was 2026-10-07
+(before the triggers), the first `LT` / `RT` presses through the rig were
+2026-10-08 and 2026-10-09, the first failure 2026-10-10. The USB descriptor did
+**not** change on 2026-10-08 (it comes from the board library, which is the same
+3.3.11 since August), so "Steam sees a new controller" does not fit.
+
+The hand test, no flash needed (each step one press):
+
+1. Unplug the board's Deck-side cable and plug it back in (Steam reopens it, so
+   the triggers are "never moved" again). Do not press `LT` or `RT`.
+2. `deck_pressButton GUIDE`: Steam's main menu should open. Close it with B.
+3. `deck_pressButton LT` once (with nothing on screen that LT changes).
+4. `deck_pressButton GUIDE` again: if the explanation is right, the menu stays shut.
+5. Optional, by eye: Settings > Controller > ESP32S3_DEV > Details > Test Device
+   Inputs after step 3 should show the left trigger resting at about half.
+
+If step 2 fails too, the triggers are not the cause; look next at Steam's own
+settings for the board (Settings > Controller: Guide Button Chord Layout, and
+the board's own layout, reset to default) and at whether Steam updated between
+2026-10-07 and 2026-10-10. If step 4 fails, flash `06_trigger_rest` (unplug the
+Deck-side cable first) and repeat steps 1-4: both GUIDE presses should open the
+menu.
 
 **Measured on the Deck, 2026-10-08**, first flash, no second guess needed: with
 the Quick Access Menu open and a passive listener on its document,
