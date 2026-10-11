@@ -908,7 +908,9 @@ export const TOOLS: ToolDef[] = [
       "before a test round changes anything. Replaces the hand-made settings.json.bak-preQA files " +
       "QA sessions have been leaving on the Deck. Refuses if an earlier snapshot from this tool " +
       "was never restored, naming when it was taken and pointing at deck_restoreSettings; it also " +
-      "expires and restores itself automatically after ttlMinutes if nothing calls restore first.",
+      "expires and restores itself automatically after ttlMinutes if nothing calls restore first. " +
+      "The result says how it copied in `method` (\"buffered\" for a small folder, \"streamed\" when a big folder " +
+      "is streamed straight to a file) with a one-line `methodNote`.",
     inputSchema: {
       type: "object",
       properties: {
