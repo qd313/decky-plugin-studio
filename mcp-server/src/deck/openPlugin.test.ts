@@ -270,3 +270,50 @@ test("a reload note that is too old is ignored", () => {
   clearLoaderRestart("fresh-note");
   assert.equal(msSinceLoaderRestart("fresh-note"), null);
 });
+
+test("a menu that is slow to appear after the chord is waited for, not reported as a failure and left open", async () => {
+  /*
+   * Read order, no reload note: the scan (Big Picture carries a ring, the Quick
+   * Access page n=0 does not); the menu probe (n=1, shut); -- chord -- ; the read
+   * 900 ms later, where the menu has not drawn yet (n=2); then the re-reads,
+   * where it has (n>=3). Before the fix the first read after the chord was the
+   * only one, so this was "no quickaccess pane became visible" with the menu
+   * open a moment later -- and the next call found it open.
+   */
+  const asked: Record<string, number> = {};
+  let chordSent = false;
+  const fake = await startFakeCdp(["SharedJSContext", "Steam Big Picture Mode", "QuickAccess_uid2"], (title) => {
+    const n = (asked[title] = (asked[title] ?? -1) + 1);
+    if (title === "Steam Big Picture Mode") {
+      return chordSent
+        ? unfocusedPage
+        : { ...unfocusedPage, hasGpfocus: true, gpfocus: { ...focusedPage.gpfocus, text: "Half-Life 2", ownerText: "Half-Life 2" } };
+    }
+    if (title === "QuickAccess_uid2") {
+      if (n === 1) return MENU_SHUT;
+      if (n <= 2) return unfocusedPage;
+      return focusedPage;
+    }
+    return unfocusedPage;
+  });
+  const rig = recorder();
+  try {
+    clearLoaderRestart("test-slow-menu");
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 200,
+      restartMachine: "test-slow-menu",
+      pressFn: rig.pressFn,
+      chordFn: async (hold, tap) => {
+        chordSent = true;
+        return rig.chordFn(hold, tap);
+      },
+    });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(rig.log.filter((l) => l.startsWith("chord:")).length, 1, "the toggle chord is sent once, never again");
+    assert.equal(r.stages.find((s) => s.stage === "open-qam")?.ok, true);
+  } finally {
+    await fake.close();
+  }
+});

@@ -149,6 +149,9 @@ const DECKY_TAB = "999";
 /** How long to wait for the Quick Access page after a plugin reload, before the first read. */
 const AFTER_RESTART_SETTLE_MS = 45_000;
 
+/** How long to keep re-reading for the menu after the open chord before calling it a failure. */
+const AFTER_CHORD_REREAD_MS = 3000;
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -637,6 +640,18 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         }
         await sleep(900);
         focus = await readFocusAt(cdpBase, 10_000);
+        /*
+         * A SLOW MENU IS NOT A FAILED CHORD. One read 900 ms after the toggle
+         * reported "no pane became visible" for a menu that drew a moment later,
+         * left it open, and the next call found it open (the third-try pattern
+         * of 2026-10-11). Re-read for up to three seconds, and never fire the
+         * chord again: it is a toggle.
+         */
+        const reReadUntil = Date.now() + AFTER_CHORD_REREAD_MS;
+        while (!(focus.ok && focus.visibleQuickAccessTab !== null) && Date.now() < reReadUntil) {
+          await sleep(300);
+          focus = await readFocusAt(cdpBase, 10_000);
+        }
         const opened = focus.ok && focus.visibleQuickAccessTab !== null;
         stages.push({
           stage: "open-qam",
