@@ -232,6 +232,8 @@ interface DeckSpec {
   underQam?: string;
   /** Which shelf tile holds the ring when the QAM closes over Home. Default 0. */
   homeShelfIndex?: number;
+  /** False: SteamClient.Apps.TerminateApp is missing in SharedJSContext. Default true. */
+  closeCall?: boolean;
   onPress?: (button: string, count: number) => void;
 }
 
@@ -402,6 +404,21 @@ function fakeDeck(spec: DeckSpec = {}) {
       targetsScanned: [],
       durationMs: 1,
     });
+    // Steam's own close-game call. Checked first: it looks the game up in
+    // RunningApps, so it also contains that word.
+    if (o.expression.includes("TerminateApp")) {
+      events.push({ type: "read-page", what: "TerminateApp" });
+      assert.equal(o.target, "SharedJSContext");
+      if (spec.closeCall === false) return ok({ ok: false, reason: "SteamClient.Apps.TerminateApp is not available" });
+      const appid = Number(/=== (\d+)/.exec(o.expression)?.[1]);
+      const i = running.findIndex((a) => a.appid === appid);
+      if (i < 0) return ok({ ok: false, reason: `appid ${appid} is not in SteamUIStore.RunningApps` });
+      running.splice(i, 1);
+      st.screen = "app-page";
+      st.route = `/library/app/${appid}`;
+      st.focus = control("Play");
+      return ok({ ok: true, gameid: String(appid) });
+    }
     if (o.expression.includes("RunningApps")) {
       events.push({ type: "read-page", what: "RunningApps" });
       assert.equal(o.target, "SharedJSContext");
@@ -872,6 +889,70 @@ test("GUIDE that does not land on the running game's entry is a refusal", async 
   assert.equal(r.ok, false);
   assert.match(r.reason ?? "", /did not put the ring on a main-menu entry named "Half-Life 2"/);
   assert.deepEqual(deck.presses, ["GUIDE"]);
+  assert.ok(
+    !deck.events.some((e) => e.type === "read-page" && e.what === "TerminateApp"),
+    "a menu that DID open is a refusal, never a reason to close the game some other way",
+  );
+});
+
+// --------------------------------------------------------------------------
+// exitGame when the Steam button no longer opens Steam's menu
+// --------------------------------------------------------------------------
+
+test("Steam's menu does not open: exitGame closes the game with Steam's own close call, and says it was not the menu", async () => {
+  const deck = fakeDeck({ running: [HL2], guideOpensMenu: false });
+  const r = await exitGame(deck.seams);
+
+  // What the driver sees on the Deck: the game is gone.
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(deck.running, []);
+  assert.equal(r.running, null);
+  assert.equal(r.via, "steam-close-call");
+  assert.deepEqual(deck.presses, ["GUIDE"], "the GUIDE try, and no press after it");
+  assert.deepEqual(stageNames(r), ["read-running", "open-main-menu", "close-call"]);
+  assert.equal(r.stages[1].ok, false, "the GUIDE try is reported as the miss it was");
+  assert.equal(r.stages[2].ok, true);
+  assert.match(r.summary, /closed without the Steam menu/);
+  assert.match(r.summary, /TerminateApp/);
+  assert.equal(r.route, "/library/app/220");
+  assert.equal(
+    r.fidelity,
+    "wire-sent",
+    "the game left RunningApps because of a call, not a press: nothing shows the GUIDE press reached Steam",
+  );
+  const pressAt = deck.events.findIndex((e) => e.type === "press");
+  const callAt = deck.events.findIndex((e) => e.type === "read-page" && e.what === "TerminateApp");
+  assert.ok(callAt > pressAt && pressAt >= 0, "the close call comes only after the GUIDE try");
+});
+
+test("Steam's menu does not open and the close call is unavailable: a refusal, the game still running", async () => {
+  const deck = fakeDeck({ running: [HL2], guideOpensMenu: false, closeCall: false });
+  const r = await exitGame(deck.seams);
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /Steam's main menu did not open/);
+  assert.match(r.reason ?? "", /TerminateApp is not available/);
+  assert.match(r.reason ?? "", /still running/);
+  assert.deepEqual(deck.running, [HL2]);
+  assert.deepEqual(r.running, { appid: 220, name: "Half-Life 2" });
+  assert.equal(r.stages.find((s) => s.stage === "close-call")?.ok, false);
+  assert.ok(r.checklist?.length);
+});
+
+test("the latch thrown during the GUIDE try stops exitGame before the close call", async () => {
+  const deck = fakeDeck({
+    running: [HL2],
+    guideOpensMenu: false,
+    onPress: (button) => {
+      if (button !== "GUIDE") return;
+      fs.mkdirSync(path.dirname(getLatchPath()), { recursive: true });
+      fs.writeFileSync(getLatchPath(), JSON.stringify({ at: "now", by: "status-bar", pid: 0, host: "test" }));
+    },
+  });
+  const r = await exitGame(deck.seams);
+  assert.equal(r.ok, false);
+  assert.equal(r.stopped, true);
+  assert.ok(!deck.events.some((e) => e.type === "read-page" && e.what === "TerminateApp"));
+  assert.deepEqual(deck.running, [HL2]);
 });
 
 // --------------------------------------------------------------------------

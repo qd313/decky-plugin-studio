@@ -45,6 +45,16 @@
  * refusal: without the menu there is no way to Home but B, which is never sent.
  * The result's `via` says which route was used ("steam-menu" / "home-screen").
  *
+ * exitGame has no such route by the D-pad: closing a game is the main menu's
+ * job, and the QAM has no Exit. So when GUIDE opens nothing at all -- not a
+ * menu on the wrong entry, which stays a refusal -- it asks Steam itself to
+ * close the game: SteamClient.Apps.TerminateApp, Steam's own close-game call,
+ * run in SharedJSContext. That is the ONE place this file drives by script. It
+ * is cleanup, not evidence about what a thumb gets: the result says "closed
+ * without the Steam menu" with `via: "steam-close-call"`, the latch is checked
+ * before it as before a press, and its fidelity stays "wire-sent", because the
+ * game leaving RunningApps proves the call worked, not that any press routed.
+ *
  * What is NOT here, on purpose: `steam://rungameid/<id>` over SSH and
  * `SteamClient.Apps.RunAppById` over CDP. Both work and both are driving by
  * script -- a test that starts a game the way no thumb can is not evidence about
@@ -107,7 +117,7 @@ export interface GameSessionResult {
   /**
    * Which way the verb got there, on a success: "steam-menu" is the Steam
    * button and Steam's main menu; "home-screen" is launchGame's route when that
-   * menu did not open (see the file header).
+   * menu did not open; "steam-close-call" is exitGame's (see the file header).
    */
   via?: GameRoute;
   stages: GameStage[];
@@ -124,7 +134,7 @@ export interface GameSessionResult {
   summary: string;
 }
 
-export type GameRoute = "steam-menu" | "home-screen";
+export type GameRoute = "steam-menu" | "home-screen" | "steam-close-call";
 
 export type ReadFocusFn = (base: string, timeoutMs?: number) => Promise<ReadFocusResult>;
 export type ReadPageFn = (opts: ReadPageOptions) => Promise<ReadPageResult<unknown>>;
@@ -276,6 +286,28 @@ const TILE_EXPR =
   "if (ids.length > 1) return { ok: true, appid: null, depth: depth, ambiguous: ids.length, text: text }; " +
   "n = n.parentElement; } " +
   "return { ok: true, appid: null, text: text }; } catch (e) { return { ok: false, reason: String(e) }; } })()";
+
+/**
+ * NOT A READ: the one expression in this file that changes something. Steam's
+ * own close-game call for a running app, used by exitGame only when the Steam
+ * button opened no menu at all (file header). The game id is the app's own
+ * `gameid` from RunningApps when it has one -- a non-Steam shortcut's is not
+ * its app id -- and the app id otherwise.
+ */
+function closeCallExpr(appid: number): string {
+  const id = Math.trunc(appid);
+  return (
+    "(() => { try { var a = (window.SteamUIStore.RunningApps || []).filter(function (x) { " +
+    `return Number(x.appid) === ${id}; })[0]; ` +
+    `if (!a) return { ok: false, reason: 'appid ${id} is not in SteamUIStore.RunningApps' }; ` +
+    "var C = window.SteamClient; " +
+    "if (!C || !C.Apps || typeof C.Apps.TerminateApp !== 'function') " +
+    "return { ok: false, reason: 'SteamClient.Apps.TerminateApp is not available' }; " +
+    `var gid = (typeof a.gameid === 'string' && a.gameid) ? a.gameid : '${id}'; ` +
+    "C.Apps.TerminateApp(gid, false); return { ok: true, gameid: gid }; " +
+    "} catch (e) { return { ok: false, reason: String(e) }; } })()"
+  );
+}
 
 export interface TileRead {
   /** False when the Big Picture page had no ring, or could not be asked. */
@@ -550,6 +582,20 @@ class Rig {
     this.presses++;
   }
 
+  /**
+   * Steam's own close-game call (closeCallExpr), gated on the latch exactly as
+   * a press is. Not counted as a press: nothing was pressed.
+   */
+  async closeBySteamCall(appid: number): Promise<{ ok: boolean; gameid?: string; reason?: string }> {
+    this.abortIfStopped();
+    const read = this.opts.readPageFn ?? readPage;
+    const r = await read({ expression: closeCallExpr(appid), target: SHARED_JS_CONTEXT, cdpUrl: this.base, timeoutMs: 10_000 });
+    const v = (r.ok ? r.value : null) as { ok?: unknown; gameid?: unknown; reason?: unknown } | null;
+    if (!v || typeof v !== "object") return { ok: false, reason: r.reason ?? "the call returned nothing" };
+    if (v.ok !== true) return { ok: false, reason: typeof v.reason === "string" ? v.reason : "the call failed" };
+    return { ok: true, gameid: typeof v.gameid === "string" ? v.gameid : undefined };
+  }
+
   sleep(ms: number): Promise<void> {
     return (this.opts.sleepFn ?? sleep)(ms);
   }
@@ -740,8 +786,9 @@ async function runSession(
       presses: rig.presses,
       // out.ok means RunningApps confirmed the launch or the exit: an end state
       // presses that never reached Steam cannot produce. Without it, the presses
-      // were delivered and nothing about their routing was established.
-      fidelity: confirmedFidelity(rig.presses, out.ok === true),
+      // were delivered and nothing about their routing was established. Nor
+      // with Steam's close call: the game left because of the call.
+      fidelity: confirmedFidelity(rig.presses, out.ok === true && out.via !== "steam-close-call"),
       stopped: false,
       ...(out.ok ? {} : { checklist: checklistFor(out.name ?? asked) }),
     };
@@ -1344,14 +1391,80 @@ export async function exitGame(opts: ExitGameOptions = {}): Promise<GameSessionR
       focus = await rig.readFocus();
       rig.record(ownLabelOf(focus));
       const ok = onEntry(focus);
+      const noMenu = !ok && !inMainMenu(focus);
       rig.stage(
         "open-main-menu",
         ok,
         ok
           ? `one GUIDE press from ${from}; ring on ${describe(focus)}, the running game's entry`
-          : `one GUIDE press from ${from}; ring on ${describe(focus)}, not an entry named "${game.display_name}"`,
+          : noMenu
+            ? `one GUIDE press from ${from}; Steam's main menu did not open (ring on ${describe(focus)}) - ` +
+              "closing with Steam's own close-game call instead"
+            : `one GUIDE press from ${from}; ring on ${describe(focus)}, not an entry named "${game.display_name}"`,
         1,
       );
+      if (noMenu) {
+        // ---- close-call: 0 presses ---------------------------------------------
+        //
+        // The game panel's Exit game is only reachable through the menu, so the
+        // rig asks Steam to close the game itself (file header). A menu that
+        // opened on the wrong entry is NOT this case: it stays a refusal below.
+        const call = await rig.closeBySteamCall(game.appid);
+        if (!call.ok) {
+          rig.stage("close-call", false, `Steam's close-game call could not be made: ${call.reason}`, 0);
+          return refuse(
+            `Steam's main menu did not open for the Steam button, and Steam's own close-game call could not be ` +
+              `made either (${call.reason}). ${nameOf(game)} is still running`,
+            "neither Steam's menu nor Steam's close-game call was available - the game is still running",
+            game,
+          );
+        }
+        const gone = await rig.waitForRunning((apps) => !apps.some((a) => a.appid === game.appid), waitMs);
+        rig.runningAfter = gone.apps;
+        const route = await rig.readRoute();
+        const after = await rig.readFocus();
+        rig.stage(
+          "close-call",
+          gone.satisfied,
+          gone.satisfied
+            ? `SteamClient.Apps.TerminateApp("${call.gameid ?? game.appid}") in ${SHARED_JS_CONTEXT}; appid ` +
+              `${game.appid} left RunningApps after ${gone.waitedMs}ms (${gone.polls} poll(s)); route ` +
+              `${route ?? "unreadable"}, ring on ${describe(after)}`
+            : `SteamClient.Apps.TerminateApp("${call.gameid ?? game.appid}") was called but appid ${game.appid} ` +
+              `was still in RunningApps after ${waitMs}ms (${gone.polls} poll(s)` +
+              `${gone.reason ? `, last read failed: ${gone.reason}` : ""})`,
+          0,
+        );
+        if (!gone.satisfied) {
+          return {
+            ok: false,
+            appid: game.appid,
+            name: game.display_name,
+            running: { appid: game.appid, name: game.display_name },
+            route,
+            reason:
+              `Steam's main menu did not open, so Steam's own close-game call was made, but ${nameOf(game)} ` +
+              `was still in RunningApps after ${waitMs}ms`,
+            summary: `asked Steam to close "${game.display_name}" but could not confirm it stopped within ${waitMs}ms`,
+          };
+        }
+        const left = gone.apps?.filter((a) => a.appid !== game.appid) ?? [];
+        return {
+          ok: true,
+          appid: game.appid,
+          name: game.display_name,
+          running: left.length ? { appid: left[0].appid, name: left[0].display_name } : null,
+          route,
+          via: "steam-close-call",
+          summary:
+            `closed without the Steam menu: ${nameOf(game)} has exited. The Steam button did not open Steam's main menu, so ` +
+            "the rig asked Steam itself to close the game (SteamClient.Apps.TerminateApp over the debug page) " +
+            `- no button press closed it; the Deck is on ${route ?? "an unread route"} with the ring on ` +
+            `${describe(after)}` +
+            (left.length ? `; still running: ${left.map(nameOf).join(", ")}` : "") +
+            "; reopen the plugin with deck_openPlugin",
+        };
+      }
       if (!ok) {
         return refuse(
           `GUIDE did not put the ring on a main-menu entry named "${game.display_name}"; it is on ${describe(focus)}`,
@@ -1454,6 +1567,7 @@ export async function exitGame(opts: ExitGameOptions = {}): Promise<GameSessionR
       name: game.display_name,
       running: remaining.length ? { appid: remaining[0].appid, name: remaining[0].display_name } : null,
       route,
+      via: "steam-menu",
       summary:
         `exited ${nameOf(game)} - ${stagesLine(rig.stages)}; the Deck is on ${route ?? "an unread route"} ` +
         `with the ring on ${describe(after)}` +
