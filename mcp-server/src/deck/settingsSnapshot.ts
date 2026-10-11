@@ -16,11 +16,21 @@
  * a test round makes happens through the plugin's own UI, not through this
  * tool; deck_restoreSettings is what undoes it.
  *
+ * TWO WAYS TO COPY, BECAUSE THE FOLDER CAN BE BIG. The plugin's settings folder
+ * holds saved chats and can pass 70 MB. The first way is one buffered ssh call
+ * (the tar comes back as base64 text in memory); it is kept for small folders.
+ * It died with `spawnSync cmd.exe ENOBUFS` on 2026-10-11 because base64 inflates
+ * the tar by a third and the call's buffer was a fixed size. So an overflow now
+ * falls back to the second way: ssh is started with spawn (no shell, no buffer)
+ * and its stdout goes straight into the archive file; restore streams that file
+ * back the same way. The result says which way was used (`method`).
+ *
  * UNVERIFIED ON HARDWARE. This assumes the real, well-documented Decky Loader
  * convention -- `~/homebrew/settings/<plugin name>` and
  * `~/homebrew/data/<plugin name>` -- but nothing here has been run against a
  * real Deck. See this lane's report for the honest limits.
  */
+import { ChildProcess, spawn } from "child_process";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -45,7 +55,28 @@ export interface SettingsSnapshotValues {
   archivePath: string;
   sha256: string;
   sizeBytes: number;
+  /** How the archive was copied off the Deck. Absent in run files written
+   * before the streamed copy existed; those were always buffered. */
+  method?: SnapshotMethod;
+  /** One plain line saying why that way was used. */
+  methodNote?: string;
 }
+
+export type SnapshotMethod = "buffered" | "streamed";
+
+/** What the buffered copy may hold in memory (base64 text, so ~12 MB of tar).
+ * Anything bigger overflows and falls back to the streamed copy. Kept small so
+ * a big folder wastes little time before the fallback. */
+export const BUFFERED_LIMIT_BYTES = 16 * 1024 * 1024;
+
+/** Seam over starting ssh for the streamed copy; tests swap `launch` for a
+ * stand-in process. No shell is involved, so there is no quoting layer and no
+ * output buffer between ssh and the file. */
+export const streamProc = {
+  launch(args: string[]): ChildProcess {
+    return spawn("ssh", args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  },
+};
 
 const SETTINGS_KIND = "settings-hold";
 export const RESTORE_SETTINGS_TOOL_HINT = "deck_restoreSettings";
@@ -103,11 +134,28 @@ function pluginNameForSnapshot(): string {
  * CI artifact transports use for a single-string round trip.
  */
 export function pullSettingsCommand(user: string, host: string, name: string, includeData: boolean): string {
+  const remote = `${tarOutScript(name, includeData)} 2>/dev/null | base64 -w0`;
+  return `ssh -o BatchMode=yes -o ConnectTimeout=8 ${user}@${host} "${remote}"`;
+}
+
+function tarOutScript(name: string, includeData: boolean): string {
   const rels = [remoteSettingsRelPath(name)];
   if (includeData) rels.push(remoteDataRelPath(name));
   const quotedRels = rels.map((r) => quoteRemotePath(r)).join(" ");
-  const remote = `tar cf - -C ${quoteRemotePath(HOMEBREW_ROOT)} ${quotedRels} 2>/dev/null | base64 -w0`;
-  return `ssh -o BatchMode=yes -o ConnectTimeout=8 ${user}@${host} "${remote}"`;
+  return `tar cf - -C ${quoteRemotePath(HOMEBREW_ROOT)} ${quotedRels}`;
+}
+
+/** ssh arguments for the streamed copy (spawned without a shell). The keep-alive
+ * options end a copy over a dead link instead of hanging forever. */
+function streamSshArgs(user: string, host: string, remote: string): string[] {
+  return [
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=8",
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=4",
+    `${user}@${host}`,
+    remote,
+  ];
 }
 
 /** Strips the `~/homebrew/` prefix, leaving e.g. `settings/bonsAI`. Falls back
@@ -150,32 +198,162 @@ function remoteStageDir(): string {
  * directory is absent from `remoteDirs` and is left alone.
  */
 export function pushSettingsCommand(user: string, host: string, remoteDirs: string[], stageDir: string): string {
+  return `ssh -o BatchMode=yes -o ConnectTimeout=8 ${user}@${host} "${pushRemoteScript(remoteDirs, stageDir, true)}"`;
+}
+
+/** The remote half of a restore. `base64` is true for the buffered way (the
+ * archive arrives as text), false for the streamed way (raw tar bytes). */
+function pushRemoteScript(remoteDirs: string[], stageDir: string, base64: boolean): string {
   const moves = remoteDirs
     .map(
       (full) =>
         `rm -rf ${quoteRemotePath(full)} && mv ${quoteRemotePath(`${stageDir}/${relToHomebrew(full)}`)} ${quoteRemotePath(full)}`
     )
     .join(" && ");
-  const remote =
-    `mkdir -p ${quoteRemotePath(stageDir)} && base64 -d | tar xf - -C ${quoteRemotePath(stageDir)} && ` +
-    `${moves} && rm -rf ${quoteRemotePath(stageDir)}`;
-  return `ssh -o BatchMode=yes -o ConnectTimeout=8 ${user}@${host} "${remote}"`;
+  const decode = base64 ? "base64 -d | " : "";
+  return (
+    `mkdir -p ${quoteRemotePath(stageDir)} && ${decode}tar xf - -C ${quoteRemotePath(stageDir)} && ` +
+    `${moves} && rm -rf ${quoteRemotePath(stageDir)}`
+  );
 }
 
-function readCurrentSettings(includeData: boolean): SettingsSnapshotValues {
+/** True when node's own output-size limit stopped the buffered copy. */
+function isBufferOverflow(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown };
+  return e?.code === "ENOBUFS" || /ENOBUFS|maxBuffer/i.test(String(e?.message ?? ""));
+}
+
+function newArchivePath(): string {
+  fs.mkdirSync(archiveDir(), { recursive: true });
+  return path.join(archiveDir(), `${SETTINGS_KIND}-${Date.now()}-${process.pid}.tar`);
+}
+
+/** Runs ssh and writes its stdout straight to `destFile`, hashing as it goes.
+ * Nothing is held in memory and no shell sits in between, so the size of the
+ * folder cannot overflow anything. A copy that does not finish cleanly leaves
+ * no file behind. */
+async function streamArchiveToFile(args: string[], destFile: string): Promise<{ sizeBytes: number; sha256: string }> {
+  const partFile = `${destFile}.part`;
+  const child = streamProc.launch(args);
+  const out = fs.createWriteStream(partFile);
+  const hash = crypto.createHash("sha256");
+  let sizeBytes = 0;
+  let stderr = "";
+  child.stderr?.on("data", (c: Buffer) => {
+    if (stderr.length < 2000) stderr += c.toString("utf8");
+  });
+  child.stdout?.on("data", (c: Buffer) => {
+    hash.update(c);
+    sizeBytes += c.length;
+  });
+  child.stdin?.on("error", () => {});
+  child.stdin?.end();
+  child.stdout?.pipe(out);
+
+  try {
+    const finished = new Promise<void>((resolve, reject) => {
+      out.once("finish", resolve);
+      out.once("error", reject);
+    });
+    const exited = new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => resolve(code));
+    });
+    const [code] = await Promise.all([exited, finished]);
+    if (code !== 0) {
+      throw new Error(
+        `The streamed copy off the Deck failed: ssh exited with code ${code}` +
+          (stderr.trim() ? ` (${stderr.trim().slice(0, 300)})` : "") +
+          ". Nothing was saved."
+      );
+    }
+    if (sizeBytes === 0) {
+      throw new Error("No data came back in the streamed copy -- does the settings directory exist yet?");
+    }
+    fs.renameSync(partFile, destFile);
+    return { sizeBytes, sha256: hash.digest("hex") };
+  } catch (err) {
+    out.destroy();
+    fs.rmSync(partFile, { force: true });
+    throw err;
+  }
+}
+
+/** Streams `srcFile` into ssh's stdin (raw bytes, no shell) and waits for the
+ * remote command to finish. A non-zero exit throws, naming what ssh said. */
+async function streamFileToSsh(args: string[], srcFile: string): Promise<void> {
+  const child = streamProc.launch(args);
+  let stderr = "";
+  child.stderr?.on("data", (c: Buffer) => {
+    if (stderr.length < 2000) stderr += c.toString("utf8");
+  });
+  child.stdout?.resume();
+  const exited = new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code));
+  });
+  const input = fs.createReadStream(srcFile);
+  // A remote that quits early closes the pipe; the exit code below says why.
+  child.stdin?.on("error", () => {});
+  input.on("error", () => child.kill());
+  input.pipe(child.stdin!);
+  const code = await exited;
+  if (code !== 0) {
+    throw new Error(
+      `The streamed restore to the Deck failed: ssh exited with code ${code}` +
+        (stderr.trim() ? ` (${stderr.trim().slice(0, 300)})` : "") +
+        ". The saved copy was kept."
+    );
+  }
+}
+
+function hashFile(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash("sha256");
+    fs.createReadStream(file)
+      .on("data", (c) => h.update(c))
+      .on("error", reject)
+      .on("end", () => resolve(h.digest("hex")));
+  });
+}
+
+async function readCurrentSettings(includeData: boolean): Promise<SettingsSnapshotValues> {
   const { user, host } = connectedEnv();
   const name = pluginNameForSnapshot();
   const remoteSettingsDir = `${HOMEBREW_ROOT}/${remoteSettingsRelPath(name)}`;
   const remoteDataDir = includeData ? `${HOMEBREW_ROOT}/${remoteDataRelPath(name)}` : null;
 
-  const out = String(
-    proc.execSync(pullSettingsCommand(user, host, name, includeData), {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 64 * 1024 * 1024,
-      shell: shellCmd(),
-    }) ?? ""
-  );
+  let out: string;
+  try {
+    out = String(
+      proc.execSync(pullSettingsCommand(user, host, name, includeData), {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        maxBuffer: BUFFERED_LIMIT_BYTES,
+        shell: shellCmd(),
+      }) ?? ""
+    );
+  } catch (err) {
+    if (!isBufferOverflow(err)) throw err;
+    // Too big to hold as one piece (this is the 2026-10-11 ENOBUFS). Copy it
+    // again, streaming straight to a file. tar exit 1 only means a file changed
+    // while it was being read; the archive is still whole.
+    const remote = `${tarOutScript(name, includeData)} 2>/dev/null || [ $? -eq 1 ]`;
+    const archivePath = newArchivePath();
+    const { sizeBytes, sha256 } = await streamArchiveToFile(streamSshArgs(user, host, remote), archivePath);
+    return {
+      pluginName: name,
+      remoteSettingsDir,
+      remoteDataDir,
+      archivePath,
+      sha256,
+      sizeBytes,
+      method: "streamed",
+      methodNote:
+        "the folder was too big for the one-piece copy (it hit the buffer limit, ENOBUFS), so it was " +
+        "streamed straight to a file instead",
+    };
+  }
   const b64 = out.trim();
   if (!b64) {
     throw new Error(
@@ -189,11 +367,19 @@ function readCurrentSettings(includeData: boolean): SettingsSnapshotValues {
   const buf = Buffer.from(b64, "base64");
   const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
 
-  fs.mkdirSync(archiveDir(), { recursive: true });
-  const archivePath = path.join(archiveDir(), `${SETTINGS_KIND}-${Date.now()}-${process.pid}.tar`);
+  const archivePath = newArchivePath();
   fs.writeFileSync(archivePath, buf);
 
-  return { pluginName: name, remoteSettingsDir, remoteDataDir, archivePath, sha256, sizeBytes: buf.length };
+  return {
+    pluginName: name,
+    remoteSettingsDir,
+    remoteDataDir,
+    archivePath,
+    sha256,
+    sizeBytes: buf.length,
+    method: "buffered",
+    methodNote: "the folder was small enough to copy in one piece over ssh",
+  };
 }
 
 /**
@@ -202,39 +388,57 @@ function readCurrentSettings(includeData: boolean): SettingsSnapshotValues {
  * Verifies the archive's checksum against what was recorded at snapshot time
  * BEFORE anything is sent over ssh: a truncated or hand-edited archive file
  * must be refused here rather than pushed and only discovered wrong on the
- * device.
+ * device. A streamed snapshot is read from disk as a stream (it may be far too
+ * big to hold in memory) and sent as raw tar; a buffered one (or an older run
+ * file with no method) goes the original base64 way.
  */
-function applySettings(values: SettingsSnapshotValues): void {
+async function applySettings(values: SettingsSnapshotValues): Promise<void> {
   const { user, host } = connectedEnv();
+  const streamed = values.method === "streamed";
+  const remoteDirs = [values.remoteSettingsDir, ...(values.remoteDataDir ? [values.remoteDataDir] : [])];
 
-  let buf: Buffer;
-  try {
-    buf = fs.readFileSync(values.archivePath);
-  } catch (err) {
-    throw new Error(
-      `Cannot restore settings: the archive at ${values.archivePath} recorded in the snapshot ` +
-        `is missing or unreadable (${(err as Error).message}). Nothing was sent to the Deck.`
-    );
-  }
-
-  const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
-  if (sha256 !== values.sha256) {
-    throw new Error(
+  const mismatch = (got: string): Error =>
+    new Error(
       `Cannot restore settings: the archive at ${values.archivePath} does not match the ` +
-        `checksum recorded when it was taken (expected ${values.sha256}, got ${sha256}). It may ` +
+        `checksum recorded when it was taken (expected ${values.sha256}, got ${got}). It may ` +
         "be truncated or was overwritten -- refusing to push an unverified copy. Inspect the " +
         "file by hand before retrying."
     );
-  }
+  const missing = (err: unknown): Error =>
+    new Error(
+      `Cannot restore settings: the archive at ${values.archivePath} recorded in the snapshot ` +
+        `is missing or unreadable (${(err as Error).message}). Nothing was sent to the Deck.`
+    );
 
-  const remoteDirs = [values.remoteSettingsDir, ...(values.remoteDataDir ? [values.remoteDataDir] : [])];
-  proc.execSync(pushSettingsCommand(user, host, remoteDirs, remoteStageDir()), {
-    input: buf.toString("base64"),
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "pipe"],
-    maxBuffer: 64 * 1024 * 1024,
-    shell: shellCmd(),
-  });
+  if (streamed) {
+    let sha256: string;
+    try {
+      sha256 = await hashFile(values.archivePath);
+    } catch (err) {
+      throw missing(err);
+    }
+    if (sha256 !== values.sha256) throw mismatch(sha256);
+    await streamFileToSsh(
+      streamSshArgs(user, host, pushRemoteScript(remoteDirs, remoteStageDir(), false)),
+      values.archivePath
+    );
+  } else {
+    let buf: Buffer;
+    try {
+      buf = fs.readFileSync(values.archivePath);
+    } catch (err) {
+      throw missing(err);
+    }
+    const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
+    if (sha256 !== values.sha256) throw mismatch(sha256);
+    proc.execSync(pushSettingsCommand(user, host, remoteDirs, remoteStageDir()), {
+      input: buf.toString("base64"),
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: BUFFERED_LIMIT_BYTES,
+      shell: shellCmd(),
+    });
+  }
 
   // Best-effort cleanup: the run file is cleared by the caller right after
   // this, and leaving stale tarballs behind is exactly the kind of manual
@@ -264,7 +468,14 @@ export interface SnapshotSettingsOptions {
   now?: () => number;
 }
 
-export type SnapshotSettingsResult = TakeReport<SettingsSnapshotValues> & { summary: string };
+export type SnapshotSettingsResult = TakeReport<SettingsSnapshotValues> & {
+  summary: string;
+  /** How the copy was made: "buffered" (one piece, small folders) or "streamed"
+   * (straight to a file, big folders). */
+  method: SnapshotMethod;
+  /** One plain line saying why. */
+  methodNote: string;
+};
 
 export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Promise<SnapshotSettingsResult> {
   const ttlMinutes = opts.ttlMinutes ?? DEFAULT_TTL_MINUTES;
@@ -281,10 +492,12 @@ export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Prom
   // itself, unlike deck_holdAwake -- it only captures. See the module header.
   const report = await takeSnapshot(ctrl, undefined, { note: opts.note, now: opts.now });
 
+  const method: SnapshotMethod = report.previous.method ?? "buffered";
+  const methodNote = report.previous.methodNote ?? "copied in one piece over ssh";
   const summary =
     `copied ${report.previous.remoteSettingsDir}` +
     (report.previous.remoteDataDir ? ` and ${report.previous.remoteDataDir}` : "") +
-    ` (${report.previous.sizeBytes} bytes) to ${report.path}. Call ${RESTORE_SETTINGS_TOOL_HINT} ` +
+    ` (${report.previous.sizeBytes} bytes, ${method}: ${methodNote}) to ${report.path}. Call ${RESTORE_SETTINGS_TOOL_HINT} ` +
     `to put it back -- it also restores itself automatically at ${report.expiresAt} if nothing ` +
     "calls it first." +
     (report.autoRestoredExpired
@@ -292,7 +505,7 @@ export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Prom
         "restored first."
       : "");
 
-  return { ...report, summary };
+  return { ...report, summary, method, methodNote };
 }
 
 export type RestoreSettingsResult = RestoreReport<SettingsSnapshotValues> & { summary: string };

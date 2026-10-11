@@ -18,6 +18,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execSync as realExecSync, spawn } from "node:child_process";
 
 const realEnv = {
   USERPROFILE: process.env.USERPROFILE,
@@ -39,6 +40,7 @@ const {
   restoreSettings,
   pullSettingsCommand,
   pushSettingsCommand,
+  streamProc,
   RESTORE_SETTINGS_TOOL_HINT,
 } = await import("./settingsSnapshot.js");
 
@@ -269,4 +271,213 @@ test("an expired settings snapshot is auto-restored onto the Deck the next time 
   const pushCall = calls.find((c) => c.cmd.includes("tar xf -"));
   assert.ok(pushCall, "expected the expired snapshot's archive to be pushed back automatically");
   assert.equal(pushCall!.input, FAKE_TAR_B64, "the auto-restore must push the ORIGINAL captured bytes");
+});
+
+// ---------------------------------------------------------------------------
+// A big settings folder (saved chats) must never fail for output size.
+//
+// 2026-10-11: deck_snapshotSettings died with `spawnSync cmd.exe ENOBUFS` on a
+// ~72 MB folder. The tar is base64-encoded for the buffered path, so 72 MB of
+// tar is ~96 MB of text, past the 64 MB maxBuffer of the one execSync call that
+// reads it. These tests use the REAL child_process behind the fake seam so the
+// overflow is node's own, not a pretend one.
+// ---------------------------------------------------------------------------
+
+const STANDIN_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "dps-settingssnap-standin-"));
+after(() => fs.rmSync(STANDIN_DIR, { recursive: true, force: true }));
+
+/** A stand-in for `ssh deck@host "<remote script>"`: for a tar-out script it
+ * writes `bytes` of deterministic data to stdout; for a tar-in script it copies
+ * stdin to a capture file. The last argument lets a case simulate a dropped
+ * link (ssh itself exits 255). */
+const STANDIN_SCRIPT = path.join(STANDIN_DIR, "fake-ssh.js");
+fs.writeFileSync(
+  STANDIN_SCRIPT,
+  [
+    'const fs = require("fs");',
+    "const [mode, arg, exitCode] = process.argv.slice(2);",
+    'if (mode === "out") {',
+    "  const total = Number(arg);",
+    "  let sent = 0;",
+    "  const chunk = Buffer.alloc(64 * 1024);",
+    "  (function pump() {",
+    "    while (sent < total) {",
+    "      const n = Math.min(chunk.length, total - sent);",
+    "      for (let i = 0; i < n; i++) chunk[i] = (sent + i) % 251;",
+    "      sent += n;",
+    '      if (!process.stdout.write(Buffer.from(chunk.subarray(0, n)))) return process.stdout.once("drain", pump);',
+    "    }",
+    "    process.stdout.end(() => process.exit(Number(exitCode || 0)));",
+    "  })();",
+    "} else {",
+    "  const out = fs.createWriteStream(arg);",
+    "  process.stdin.pipe(out);",
+    '  out.on("finish", () => process.exit(Number(exitCode || 0)));',
+    "}",
+    "",
+  ].join("\n")
+);
+
+function expectedStandinSha(total: number): string {
+  const h = crypto.createHash("sha256");
+  const chunk = Buffer.alloc(64 * 1024);
+  let sent = 0;
+  while (sent < total) {
+    const n = Math.min(chunk.length, total - sent);
+    for (let i = 0; i < n; i++) chunk[i] = (sent + i) % 251;
+    h.update(chunk.subarray(0, n));
+    sent += n;
+  }
+  return h.digest("hex");
+}
+
+/** Points the streamed-copy seam at the stand-in and records the remote script
+ * each launch was asked to run. */
+function withStandinSsh(opts: { tarBytes?: number; captureFile?: string; exitCode?: number }): {
+  scripts: string[];
+  restore: () => void;
+} {
+  const scripts: string[] = [];
+  // Written so that code without the streamed copy (no seam) still reaches its own
+  // real ENOBUFS in the tests below, instead of dying on a missing import.
+  const seam = streamProc as typeof streamProc | undefined;
+  if (!seam) return { scripts, restore: () => {} };
+  const original = seam.launch;
+  seam.launch = ((args: string[]) => {
+    const remote = args[args.length - 1];
+    scripts.push(remote);
+    const pullingOut = remote.includes("tar cf -");
+    return spawn(
+      process.execPath,
+      pullingOut
+        ? [STANDIN_SCRIPT, "out", String(opts.tarBytes ?? 0), String(opts.exitCode ?? 0)]
+        : [STANDIN_SCRIPT, "in", String(opts.captureFile), String(opts.exitCode ?? 0)],
+      { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
+    );
+  }) as typeof seam.launch;
+  return { scripts, restore: () => (seam.launch = original) };
+}
+
+/** Runs the REAL execSync, but swaps the remote command for a local one that
+ * prints a chosen amount of text, under the REAL options (maxBuffer, shell) the
+ * production call passed. So an oversized reply fails exactly as it did on the
+ * maintainer's PC: spawnSync <shell> ENOBUFS. */
+function realBufferedExecPrinting(outputBytes: (maxBuffer: number) => number): typeof proc.execSync {
+  return ((_cmd: string, opts: { maxBuffer: number } & Record<string, unknown>) => {
+    const n = outputBytes(opts.maxBuffer);
+    return realExecSync(`node -e "process.stdout.write('A'.repeat(${n}))"`, opts as never);
+  }) as unknown as typeof proc.execSync;
+}
+
+test("a settings folder too big for the buffered copy is streamed instead of failing with ENOBUFS", async () => {
+  const TAR_BYTES = 24 * 1024 * 1024;
+  const original = proc.execSync;
+  // The buffered attempt gets a reply one byte over whatever limit it asked for.
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  const standin = withStandinSsh({ tarBytes: TAR_BYTES });
+  try {
+    const result = await snapshotSettings();
+
+    assert.equal(result.method, "streamed");
+    assert.match(result.methodNote, /streamed/i);
+    assert.match(result.summary, /streamed/i);
+    assert.equal(result.previous.method, "streamed");
+    assert.equal(result.previous.sizeBytes, TAR_BYTES);
+    assert.equal(result.previous.sha256, expectedStandinSha(TAR_BYTES));
+
+    const onDisk = fs.statSync(result.previous.archivePath);
+    assert.equal(onDisk.size, TAR_BYTES, "the whole archive must be on disk, not a truncated copy");
+    assert.equal(standin.scripts.length, 1);
+    assert.doesNotMatch(standin.scripts[0], /base64/, "the streamed copy sends raw tar, no base64 inflation");
+    assert.ok(fs.existsSync(snapshotPath("settings-hold")), "the run file is written, so restore can find it");
+  } finally {
+    standin.restore();
+    proc.execSync = original;
+  }
+});
+
+test("a small settings folder is still copied the buffered way, and the result says so", async () => {
+  const { result } = await withFakeExec(() => FAKE_TAR_B64, () => snapshotSettings());
+  assert.equal(result.method, "buffered");
+  assert.equal(typeof result.methodNote, "string");
+  assert.ok(result.methodNote.length > 0);
+  assert.equal(result.previous.method, "buffered");
+  // Existing fields that bonsAI's drivers read stay where they were.
+  assert.equal(result.previous.sizeBytes, FAKE_TAR_BYTES.length);
+  assert.ok(result.path && result.expiresAt && result.summary);
+});
+
+test("restoreSettings puts a streamed snapshot back: raw tar over a stream, checksum verified, nothing buffered", async () => {
+  const TAR_BYTES = 20 * 1024 * 1024;
+  const capture = path.join(STANDIN_DIR, "pushed.tar");
+  fs.rmSync(capture, { force: true });
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  const takeStandin = withStandinSsh({ tarBytes: TAR_BYTES });
+  let taken: Awaited<ReturnType<typeof snapshotSettings>>;
+  try {
+    taken = await snapshotSettings();
+  } finally {
+    takeStandin.restore();
+  }
+  assert.equal(taken.method, "streamed");
+
+  // From here the buffered seam must not be touched at all.
+  const calls: string[] = [];
+  proc.execSync = ((cmd: string) => {
+    calls.push(cmd);
+    return "";
+  }) as unknown as typeof proc.execSync;
+  const pushStandin = withStandinSsh({ captureFile: capture });
+  try {
+    const restored = await restoreSettings();
+    assert.equal(restored.restored, true);
+  } finally {
+    pushStandin.restore();
+    proc.execSync = original;
+  }
+
+  assert.equal(calls.length, 0, "a streamed snapshot is restored by streaming, not through the buffered seam");
+  assert.equal(pushStandin.scripts.length, 1);
+  assert.match(pushStandin.scripts[0], /tar xf -/);
+  assert.doesNotMatch(pushStandin.scripts[0], /base64/);
+  assert.match(pushStandin.scripts[0], /rm -rf ~\/'homebrew\/settings\/bonsAI'/);
+  const sent = fs.readFileSync(capture);
+  assert.equal(sent.length, TAR_BYTES);
+  assert.equal(crypto.createHash("sha256").update(sent).digest("hex"), expectedStandinSha(TAR_BYTES));
+  assert.equal(fs.existsSync(taken.previous.archivePath), false, "the archive is removed after a good restore");
+  assert.equal(fs.existsSync(snapshotPath("settings-hold")), false);
+});
+
+test("a streamed copy that dies (ssh exit 255) fails loudly and leaves no run file or half archive", async () => {
+  const archiveDir = path.join(path.dirname(snapshotPath("settings-hold")), "settings-archives");
+  const listing = () => (fs.existsSync(archiveDir) ? fs.readdirSync(archiveDir).sort() : []);
+  const before = listing();
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  const standin = withStandinSsh({ tarBytes: 3 * 1024 * 1024, exitCode: 255 });
+  try {
+    await assert.rejects(() => snapshotSettings(), /255|ssh/i);
+  } finally {
+    standin.restore();
+    proc.execSync = original;
+  }
+  assert.equal(fs.existsSync(snapshotPath("settings-hold")), false, "no run file for a copy that never completed");
+  assert.deepEqual(listing(), before, "a half-written archive must be cleaned up");
+});
+
+test("a buffered failure that is NOT an overflow is still an error, with no silent second attempt", async () => {
+  const standin = withStandinSsh({ tarBytes: 10 });
+  try {
+    await assert.rejects(
+      () =>
+        withFakeExec(() => {
+          throw new Error("ssh: connect to host 203.0.113.9 port 22: Connection timed out");
+        }, () => snapshotSettings()),
+      /timed out/
+    );
+    assert.equal(standin.scripts.length, 0, "an unreachable Deck must not trigger a second attempt");
+  } finally {
+    standin.restore();
+  }
 });
