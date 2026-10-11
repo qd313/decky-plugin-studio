@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
 import { openPluginDriven } from "./openPlugin.js";
+import { noteLoaderRestart, msSinceLoaderRestart, clearLoaderRestart, RESTART_WINDOW_MS } from "./loaderRestart.js";
 import type { PressOptions, PressResult } from "./pressButton.js";
 
 const TARGETS = ["SharedJSContext", "QuickAccess_uid2"];
@@ -161,4 +162,111 @@ test("the chord over a surface that owns input, with no pane appearing afterward
   } finally {
     await fake.close();
   }
+});
+
+/*
+ * After a plugin reload (2026-10-11, seen twice before): the loader answers and
+ * Steam's Big Picture page is listed, but the Quick Access page comes back some
+ * seconds later. The open tool used to read at once, find the ring on a library
+ * tile, ask for the Quick Access page for ten seconds, and refuse; the second
+ * try then fired the toggle chord into a menu it had not read, and the third
+ * worked. Now a reload leaves a note, and the open tool waits for the Quick
+ * Access page to be listed AND readable before its first read.
+ */
+test("right after a reload, the first open waits for the Quick Access page and never fires the chord before it is readable", async () => {
+  const t0 = Date.now();
+  const qamBackAt = t0 + 900;
+  const qamListed = (): boolean => Date.now() >= qamBackAt;
+  const titles = (): string[] =>
+    qamListed()
+      ? ["SharedJSContext", "Steam Big Picture Mode", "QuickAccess_uid2"]
+      : ["SharedJSContext", "Steam Big Picture Mode"];
+  const libraryTile = {
+    ...unfocusedPage,
+    hasGpfocus: true,
+    gpfocus: { ...focusedPage.gpfocus, selector: "#library-tile", text: "Half-Life 2", ownerText: "Half-Life 2" },
+  };
+  // Per page: the Quick Access page is asked (in this order) by the pre-read
+  // wait, the focus scan, the menu probe, then reads after the chord.
+  const asked: Record<string, number> = {};
+  let chordSent = false;
+  const fake = await startFakeCdp(titles, (title) => {
+    const n = (asked[title] = (asked[title] ?? -1) + 1);
+    if (title === "Steam Big Picture Mode") return chordSent ? unfocusedPage : libraryTile;
+    if (title === "QuickAccess_uid2") {
+      if (n === 0 || n === 2) return MENU_SHUT; // the waits' / probe's own word
+      if (n === 1) return unfocusedPage; // the scan
+      return focusedPage;
+    }
+    return unfocusedPage;
+  });
+  const log: string[] = [];
+  const rig = recorder();
+  try {
+    noteLoaderRestart("test-reload");
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 200, // the old limit is far shorter than the Deck's gap
+      afterRestartSettleMs: 5000,
+      restartMachine: "test-reload",
+      pressFn: rig.pressFn,
+      chordFn: async (hold, tap) => {
+        log.push(`chord when the Quick Access page was ${qamListed() ? "listed" : "NOT listed"}`);
+        chordSent = true;
+        return rig.chordFn(hold, tap);
+      },
+    });
+    assert.equal(r.ok, true, r.reason);
+    assert.deepEqual(log, ["chord when the Quick Access page was listed"], "one chord, and only after the page was readable");
+    assert.ok(
+      r.stages.some((s) => s.stage === "wait-qam-after-restart" && s.ok),
+      "the wait is recorded as a stage",
+    );
+  } finally {
+    clearLoaderRestart("test-reload");
+    await fake.close();
+  }
+});
+
+test("with no reload noted, the open tool does not add the wait: a late Quick Access page is refused at the old limit, nothing pressed", async () => {
+  const qamBackAt = Date.now() + 900;
+  const titles = (): string[] =>
+    Date.now() >= qamBackAt
+      ? ["SharedJSContext", "Steam Big Picture Mode", "QuickAccess_uid2"]
+      : ["SharedJSContext", "Steam Big Picture Mode"];
+  const fake = await startFakeCdp(titles, (title) =>
+    title === "Steam Big Picture Mode"
+      ? { ...unfocusedPage, hasGpfocus: true, gpfocus: { ...focusedPage.gpfocus, text: "Half-Life 2", ownerText: "Half-Life 2" } }
+      : title === "QuickAccess_uid2"
+        ? MENU_SHUT
+        : unfocusedPage,
+  );
+  const rig = recorder();
+  try {
+    clearLoaderRestart("test-plain");
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 200,
+      afterRestartSettleMs: 5000,
+      restartMachine: "test-plain",
+      pressFn: rig.pressFn,
+      chordFn: rig.chordFn,
+    });
+    assert.equal(r.ok, false);
+    assert.deepEqual(rig.log, [], "nothing was pressed");
+    assert.equal(r.stages.find((s) => s.stage === "wait-qam-after-restart"), undefined);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a reload note that is too old is ignored", () => {
+  noteLoaderRestart("old-note", Date.now() - RESTART_WINDOW_MS - 1000);
+  assert.equal(msSinceLoaderRestart("old-note"), null);
+  noteLoaderRestart("fresh-note");
+  assert.ok((msSinceLoaderRestart("fresh-note") ?? Infinity) < 1000);
+  clearLoaderRestart("fresh-note");
+  assert.equal(msSinceLoaderRestart("fresh-note"), null);
 });

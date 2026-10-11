@@ -25,6 +25,7 @@ import {
 } from "../machines.js";
 import { openPadEndpoint } from "../deck/cdpTunnel.js";
 import { padStatus, PadEndpoint, PadExchange } from "../deck/padClient.js";
+import { noteLoaderRestart } from "../deck/loaderRestart.js";
 
 function shellCmd(): string {
   return process.platform === "win32" ? "cmd.exe" : "/bin/sh";
@@ -50,6 +51,8 @@ export async function reloadPlugin(
 
   if (deployMode === "local") {
     const method = await restartLoaderLocal(undefined, m);
+    // Leave a note for deck_openPlugin: the Quick Access page is still coming back.
+    noteLoaderRestart(m.name);
     const loader =
       opts.waitForLoader === false
         ? null
@@ -65,6 +68,7 @@ export async function reloadPlugin(
   if (!host) throw new Error("DECK_IP not configured — run deck.configure first");
 
   sshRestartLoader(user, host);
+  noteLoaderRestart(m.name);
   // Same restart as deck_deploy, same window after it (issue #3): return
   // when the Deck is usable again, and say so if the deadline passed.
   const loader =

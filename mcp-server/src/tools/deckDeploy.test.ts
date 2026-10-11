@@ -30,6 +30,9 @@ import path from "node:path";
 
 import { deployPlugin, localPluginDirName, remotePluginDirName } from "./plugin.js";
 import { deployRemote } from "./deck.js";
+import { reloadPlugin } from "./deckAutonomy.js";
+import { msSinceLoaderRestart, clearLoaderRestart } from "../deck/loaderRestart.js";
+import { currentMachine } from "../machines.js";
 import {
   proc,
   quoteRemotePath,
@@ -542,5 +545,32 @@ test("deployRemote with waitForLoader:false returns as soon as the restart is is
     assert.ok(calls.some((c) => c.includes("restart plugin_loader")), "the restart itself still happens");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("deck_reloadPlugin leaves a note that the loader just restarted, for deck_openPlugin to wait on", async () => {
+  // Without this note the open tool cannot tell a reload from a quiet Deck, and
+  // reads before the Quick Access page is back (2026-10-11).
+  const ranCommands: string[] = [];
+  const savedIp = process.env.DECK_IP;
+  process.env.DECK_IP = "192.0.2.7";
+  try {
+    const name = currentMachine().name;
+    clearLoaderRestart(name);
+    assert.equal(msSinceLoaderRestart(name), null);
+    await withFakeExec(
+      (cmd) => {
+        ranCommands.push(cmd);
+        return "";
+      },
+      () => reloadPlugin("remote", { waitForLoader: false }),
+    );
+    assert.ok(ranCommands.some((c) => c.includes("systemctl restart plugin_loader")), "the restart ran");
+    const age = msSinceLoaderRestart(name);
+    assert.ok(age !== null && age < 5000, "a fresh note exists for this machine");
+    clearLoaderRestart(name);
+  } finally {
+    if (savedIp === undefined) delete process.env.DECK_IP;
+    else process.env.DECK_IP = savedIp;
   }
 });

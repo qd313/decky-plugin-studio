@@ -39,6 +39,7 @@ import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned } from "./walkTo.js";
 import { readPage } from "./readPage.js";
 import { readRunningApps } from "./gameSession.js";
+import { clearLoaderRestart, msSinceLoaderRestart } from "./loaderRestart.js";
 
 export interface OpenStage {
   stage: string;
@@ -106,6 +107,15 @@ export interface OpenPluginOptions {
    */
   targetsSettleMs?: number;
   /**
+   * Upper bound on waiting for the Quick Access page to be listed and readable
+   * before the first read, when a plugin reload was issued moments ago (see
+   * loaderRestart.ts). Default 45 s: the page has been seen to take longer than
+   * the 10 s the other waits allow. Tests shorten it.
+   */
+  afterRestartSettleMs?: number;
+  /** Test-only: which machine's reload note to look at. Defaults to the current one. */
+  restartMachine?: string;
+  /**
    * Test-only seam: substitutes every D-pad press, so the navigation ORDER can
    * be exercised without the bridge board. Production code never sets this and
    * always gets the real press.
@@ -135,6 +145,9 @@ const CHECKLIST = (name: string): string[] => [
 
 /** Decky's Quick Access tab. Steam's own are 0 and 3-7. */
 const DECKY_TAB = "999";
+
+/** How long to wait for the Quick Access page after a plugin reload, before the first read. */
+const AFTER_RESTART_SETTLE_MS = 45_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -334,6 +347,45 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     // failed. Waiting here is what turns that into a first-attempt success;
     // a list that stays partial comes back as its own reason, not as unowned.
     const settle = { targetsSettleMs: opts.targetsSettleMs ?? DEFAULT_TARGETS_SETTLE_MS };
+
+    /*
+     * RIGHT AFTER A RELOAD: WAIT FOR THE QUICK ACCESS PAGE ITSELF.
+     *
+     * deck_reloadPlugin returns once the loader is active and ANY Steam page is
+     * listed -- usually Big Picture, which is back long before the Quick Access
+     * page. Without this wait the first read below found a ring on a library
+     * tile, asked for the Quick Access page for ten seconds and refused; the
+     * second call then fired the toggle chord into a menu it had not read; the
+     * third worked (2026-10-11, and 2026-09-26 and 2026-10-01 before it). The
+     * reload tool leaves a note (loaderRestart.ts); while it is fresh, nothing
+     * is read or pressed until the Quick Access page is listed and has
+     * answered. If it never does, the call refuses with nothing pressed.
+     */
+    const sinceRestart = msSinceLoaderRestart(opts.restartMachine);
+    if (sinceRestart !== null) {
+      const wait = await probeQuickAccess(cdpBase, {
+        timeoutMs: 10_000,
+        targetsSettleMs: opts.afterRestartSettleMs ?? AFTER_RESTART_SETTLE_MS,
+      });
+      stages.push({
+        stage: "wait-qam-after-restart",
+        ok: wait.answered,
+        detail: wait.answered
+          ? `the plugin was reloaded ${Math.round(sinceRestart / 1000)} s ago; the Quick Access page (${wait.target}) ` +
+            `was listed and readable after ${wait.waitedMs} ms`
+          : `the plugin was reloaded ${Math.round(sinceRestart / 1000)} s ago; ${wait.reason ?? "the Quick Access page could not be read"}`,
+        presses: 0,
+      });
+      if (!wait.answered) {
+        return fail(
+          wait.reason ?? "the Quick Access page could not be read after the plugin reload",
+          null,
+          `the Quick Access page was not readable ${Math.round(wait.waitedMs / 1000)} s into waiting after the ` +
+            "plugin reload, so nothing was pressed; wait a few seconds and call again",
+        );
+      }
+      clearLoaderRestart(opts.restartMachine);
+    }
     let focus = await readFocusAt(cdpBase, 10_000, undefined, settle);
 
     /*
