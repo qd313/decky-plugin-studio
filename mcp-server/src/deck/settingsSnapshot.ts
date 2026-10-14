@@ -25,6 +25,12 @@
  * and its stdout goes straight into the archive file; restore streams that file
  * back the same way. The result says which way was used (`method`).
  *
+ * A STREAMED COPY IS CHECKED, NOT TRUSTED (plan 93). On 2026-10-12 the third of three
+ * snapshots said "streamed", ssh exited 0, and the file was 102,400 bytes short and could not
+ * be restored. The Deck now counts and hashes what it sends in the same pass; the PC compares
+ * that with what arrived and refuses a mismatch (one automatic second try, then an error that
+ * names both sizes). The small buffered copy has no such check yet.
+ *
  * UNVERIFIED ON HARDWARE. This assumes the real, well-documented Decky Loader
  * convention -- `~/homebrew/settings/<plugin name>` and
  * `~/homebrew/data/<plugin name>` -- but nothing here has been run against a
@@ -145,6 +151,31 @@ function tarOutScript(name: string, includeData: boolean): string {
   return `tar cf - -C ${quoteRemotePath(HOMEBREW_ROOT)} ${quotedRels}`;
 }
 
+/** The line the Deck prints (on stderr) for what its own side sent. */
+const TRAILER_RE = /DECKSUM size=(\d+) sha=([0-9a-f]{64})/;
+
+/**
+ * The remote half of the streamed copy: the tar goes to stdout exactly as
+ * before, and in the same pass the Deck counts it (`wc -c`) and hashes it
+ * (`sha256sum`) and prints `DECKSUM size=<n> sha=<hex>` on stderr. The PC then
+ * compares that with what actually arrived, so a copy that came back short or
+ * damaged is caught instead of being called "streamed" (plan 92: 102,400 bytes
+ * short, ssh exit 0, no error).
+ *
+ * Plain POSIX sh (two named pipes and `tee`), because this string goes to the
+ * Deck's login shell with no local shell in between. tar exit 1 ("a file changed
+ * while it was read") still counts as a whole archive; exit 2 and up fails.
+ */
+export function verifiedTarOutScript(name: string, includeData: boolean): string {
+  return (
+    'D=$(mktemp -d) && mkfifo "$D/a" "$D/b" && { ' +
+    'sha256sum < "$D/a" > "$D/sha" & wc -c < "$D/b" > "$D/n" & ' +
+    `{ ${tarOutScript(name, includeData)} 2>/dev/null; echo $? > "$D/rc"; } | tee "$D/a" "$D/b"; wait; ` +
+    'echo "DECKSUM size=$(tr -dc 0-9 < "$D/n") sha=$(cut -d" " -f1 < "$D/sha")" >&2; ' +
+    'R=$(cat "$D/rc"); rm -rf "$D"; [ "$R" -le 1 ]; }'
+  );
+}
+
 /** ssh arguments for the streamed copy (spawned without a shell). The keep-alive
  * options end a copy over a dead link instead of hanging forever. */
 function streamSshArgs(user: string, host: string, remote: string): string[] {
@@ -228,10 +259,24 @@ function newArchivePath(): string {
   return path.join(archiveDir(), `${SETTINGS_KIND}-${Date.now()}-${process.pid}.tar`);
 }
 
+/** The copy that arrived is not the copy the Deck sent. */
+export class IncompleteCopyError extends Error {
+  constructor(
+    message: string,
+    readonly deckBytes: number | null,
+    readonly arrivedBytes: number
+  ) {
+    super(message);
+    this.name = "IncompleteCopyError";
+  }
+}
+
 /** Runs ssh and writes its stdout straight to `destFile`, hashing as it goes.
  * Nothing is held in memory and no shell sits in between, so the size of the
  * folder cannot overflow anything. A copy that does not finish cleanly leaves
- * no file behind. */
+ * no file behind. When it does finish, the size and checksum the Deck printed
+ * for its own side (`verifiedTarOutScript`) must equal what arrived; otherwise
+ * the copy is thrown away and an IncompleteCopyError names both sizes. */
 async function streamArchiveToFile(args: string[], destFile: string): Promise<{ sizeBytes: number; sha256: string }> {
   const partFile = `${destFile}.part`;
   const child = streamProc.launch(args);
@@ -240,7 +285,7 @@ async function streamArchiveToFile(args: string[], destFile: string): Promise<{ 
   let sizeBytes = 0;
   let stderr = "";
   child.stderr?.on("data", (c: Buffer) => {
-    if (stderr.length < 2000) stderr += c.toString("utf8");
+    if (stderr.length < 20000) stderr += c.toString("utf8");
   });
   child.stdout?.on("data", (c: Buffer) => {
     hash.update(c);
@@ -270,13 +315,69 @@ async function streamArchiveToFile(args: string[], destFile: string): Promise<{ 
     if (sizeBytes === 0) {
       throw new Error("No data came back in the streamed copy -- does the settings directory exist yet?");
     }
+    const sha256 = hash.digest("hex");
+    const trailer = TRAILER_RE.exec(stderr);
+    if (!trailer) {
+      throw new IncompleteCopyError(
+        `The streamed copy could not be checked: the Deck did not report the size and checksum of what it sent, ` +
+          `so the ${sizeBytes} bytes that arrived cannot be trusted. Nothing was saved.`,
+        null,
+        sizeBytes
+      );
+    }
+    const deckBytes = Number(trailer[1]);
+    if (deckBytes !== sizeBytes) {
+      throw new IncompleteCopyError(
+        `The streamed copy is not whole: the Deck sent ${deckBytes} bytes but ${sizeBytes} arrived on this PC ` +
+          `(${deckBytes - sizeBytes} bytes ${deckBytes > sizeBytes ? "short" : "too many"}). Nothing was saved.`,
+        deckBytes,
+        sizeBytes
+      );
+    }
+    if (trailer[2] !== sha256) {
+      throw new IncompleteCopyError(
+        `The streamed copy is damaged: it is ${sizeBytes} bytes on both sides, but the checksum on the Deck ` +
+          `(${trailer[2]}) differs from the one on this PC (${sha256}). Nothing was saved.`,
+        deckBytes,
+        sizeBytes
+      );
+    }
     fs.renameSync(partFile, destFile);
-    return { sizeBytes, sha256: hash.digest("hex") };
+    return { sizeBytes, sha256 };
   } catch (err) {
     out.destroy();
     fs.rmSync(partFile, { force: true });
     throw err;
   }
+}
+
+/** One streamed copy, taken again once if it does not match the Deck's own word.
+ * Anything else (ssh down, no data) is not retried. */
+async function streamVerifiedCopy(
+  user: string,
+  host: string,
+  name: string,
+  includeData: boolean
+): Promise<{ archivePath: string; sizeBytes: number; sha256: string; attempts: number }> {
+  const args = streamSshArgs(user, host, verifiedTarOutScript(name, includeData));
+  const failures: IncompleteCopyError[] = [];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const archivePath = newArchivePath();
+    try {
+      const { sizeBytes, sha256 } = await streamArchiveToFile(args, archivePath);
+      return { archivePath, sizeBytes, sha256, attempts: attempt };
+    } catch (err) {
+      if (!(err instanceof IncompleteCopyError)) throw err;
+      failures.push(err);
+    }
+  }
+  throw new Error(
+    "The streamed copy of the settings folder did not match the Deck's own size and checksum on either of two " +
+      "tries, so nothing was saved. First try: " +
+      failures[0].message.replace(/ Nothing was saved\.$/, "") +
+      " Second try: " +
+      failures[1].message.replace(/ Nothing was saved\.$/, "")
+  );
 }
 
 /** Streams `srcFile` into ssh's stdin (raw bytes, no shell) and waits for the
@@ -336,11 +437,10 @@ async function readCurrentSettings(includeData: boolean): Promise<SettingsSnapsh
   } catch (err) {
     if (!isBufferOverflow(err)) throw err;
     // Too big to hold as one piece (this is the 2026-10-11 ENOBUFS). Copy it
-    // again, streaming straight to a file. tar exit 1 only means a file changed
-    // while it was being read; the archive is still whole.
-    const remote = `${tarOutScript(name, includeData)} 2>/dev/null || [ $? -eq 1 ]`;
-    const archivePath = newArchivePath();
-    const { sizeBytes, sha256 } = await streamArchiveToFile(streamSshArgs(user, host, remote), archivePath);
+    // again, streaming straight to a file and checking it against the Deck's
+    // own size and checksum. tar exit 1 only means a file changed while it was
+    // being read; the archive is still whole.
+    const { archivePath, sizeBytes, sha256, attempts } = await streamVerifiedCopy(user, host, name, includeData);
     return {
       pluginName: name,
       remoteSettingsDir,
@@ -351,7 +451,8 @@ async function readCurrentSettings(includeData: boolean): Promise<SettingsSnapsh
       method: "streamed",
       methodNote:
         "the folder was too big for the one-piece copy (it hit the buffer limit, ENOBUFS), so it was " +
-        "streamed straight to a file instead",
+        "streamed straight to a file instead; the size and checksum match what the Deck reported for its own side" +
+        (attempts > 1 ? " (the first copy came back short or damaged, so it was taken again)" : ""),
     };
   }
   const b64 = out.trim();

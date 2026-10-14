@@ -910,7 +910,9 @@ export const TOOLS: ToolDef[] = [
       "was never restored, naming when it was taken and pointing at deck_restoreSettings; it also " +
       "expires and restores itself automatically after ttlMinutes if nothing calls restore first. " +
       "The result says how it copied in `method` (\"buffered\" for a small folder, \"streamed\" when a big folder " +
-      "is streamed straight to a file) with a one-line `methodNote`.",
+      "is streamed straight to a file) with a one-line `methodNote`. A streamed copy is checked against the size and " +
+      "checksum the Deck computed for what it sent; a short or damaged copy is taken once more, and if it is still " +
+      "wrong the call fails with both sizes instead of reporting \"streamed\".",
     inputSchema: {
       type: "object",
       properties: {

@@ -295,7 +295,7 @@ fs.writeFileSync(
   STANDIN_SCRIPT,
   [
     'const fs = require("fs");',
-    "const [mode, arg, exitCode] = process.argv.slice(2);",
+    "const [mode, arg, exitCode, claimSize, claimSha] = process.argv.slice(2);",
     'if (mode === "out") {',
     "  const total = Number(arg);",
     "  let sent = 0;",
@@ -307,6 +307,8 @@ fs.writeFileSync(
     "      sent += n;",
     '      if (!process.stdout.write(Buffer.from(chunk.subarray(0, n)))) return process.stdout.once("drain", pump);',
     "    }",
+    // What the Deck's own side says it sent (see verifiedTarOutScript). Absent: no trailer at all.
+    "    if (claimSize) process.stderr.write('DECKSUM size=' + claimSize + ' sha=' + claimSha + '\\n');",
     "    process.stdout.end(() => process.exit(Number(exitCode || 0)));",
     "  })();",
     "} else {",
@@ -333,7 +335,17 @@ function expectedStandinSha(total: number): string {
 
 /** Points the streamed-copy seam at the stand-in and records the remote script
  * each launch was asked to run. */
-function withStandinSsh(opts: { tarBytes?: number; captureFile?: string; exitCode?: number }): {
+function withStandinSsh(opts: {
+  tarBytes?: number;
+  captureFile?: string;
+  exitCode?: number;
+  /** What the Deck says it sent, when that differs from what arrived (a stream that ended early). */
+  claimedBytes?: number;
+  /** The Deck sends no size-and-checksum line at all. */
+  noTrailer?: boolean;
+  /** Per launch (0-based), overrides for the bytes that arrive and the bytes the Deck claims. */
+  perLaunch?: (n: number) => { tarBytes: number; claimedBytes?: number };
+}): {
   scripts: string[];
   restore: () => void;
 } {
@@ -345,12 +357,19 @@ function withStandinSsh(opts: { tarBytes?: number; captureFile?: string; exitCod
   const original = seam.launch;
   seam.launch = ((args: string[]) => {
     const remote = args[args.length - 1];
+    const launchNo = scripts.length;
     scripts.push(remote);
     const pullingOut = remote.includes("tar cf -");
+    const per = opts.perLaunch?.(launchNo);
+    const sent = per?.tarBytes ?? opts.tarBytes ?? 0;
+    const claimed = per?.claimedBytes ?? opts.claimedBytes ?? sent;
     return spawn(
       process.execPath,
       pullingOut
-        ? [STANDIN_SCRIPT, "out", String(opts.tarBytes ?? 0), String(opts.exitCode ?? 0)]
+        ? [
+            STANDIN_SCRIPT, "out", String(sent), String(opts.exitCode ?? 0),
+            ...(opts.noTrailer ? [] : [String(claimed), expectedStandinSha(claimed)]),
+          ]
         : [STANDIN_SCRIPT, "in", String(opts.captureFile), String(opts.exitCode ?? 0)],
       { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
     );
@@ -479,5 +498,138 @@ test("a buffered failure that is NOT an overflow is still an error, with no sile
     assert.equal(standin.scripts.length, 0, "an unreachable Deck must not trigger a second attempt");
   } finally {
     standin.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The saved copy is checked against the Deck's own word before it is called good
+// (plan 92, 2026-10-12: the third of three snapshots of a 228 MB folder said
+// "streamed", returned no error, and was 102,400 bytes short and damaged -- it
+// could not be restored). The Deck side now reports the size and checksum of
+// what it sent; a copy that does not match is an error, not "streamed".
+// ---------------------------------------------------------------------------
+
+test("a streamed copy that ends early is an error naming both sizes, not 'streamed', and leaves nothing behind", async () => {
+  const SENT = 24 * 1024 * 1024;
+  const SHORT_BY = 102_400; // the number from the Deck night
+  const archiveDir = path.join(path.dirname(snapshotPath("settings-hold")), "settings-archives");
+  const listing = () => (fs.existsSync(archiveDir) ? fs.readdirSync(archiveDir).sort() : []);
+  const before = listing();
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  // ssh itself exits 0 and every byte that arrived is a byte written: only the Deck's own count shows the gap.
+  const standin = withStandinSsh({ tarBytes: SENT - SHORT_BY, claimedBytes: SENT });
+  try {
+    await assert.rejects(
+      () => snapshotSettings(),
+      (err: unknown) => {
+        const msg = (err as Error).message;
+        assert.match(msg, new RegExp(String(SENT)), "the Deck's size is in the message");
+        assert.match(msg, new RegExp(String(SENT - SHORT_BY)), "the size that arrived is in the message");
+        assert.match(msg, /not (whole|complete)|incomplete|short/i);
+        assert.doesNotMatch(msg, /^streamed/i);
+        return true;
+      }
+    );
+  } finally {
+    standin.restore();
+    proc.execSync = original;
+  }
+  assert.equal(fs.existsSync(snapshotPath("settings-hold")), false, "no run file for a copy that did not match");
+  assert.deepEqual(listing(), before, "the damaged copy is not kept");
+});
+
+test("a copy whose bytes differ at the same length is caught by the checksum", async () => {
+  const TAR_BYTES = 3 * 1024 * 1024;
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  // The Deck claims the same size, but a different checksum than what arrived.
+  const seam = streamProc;
+  const real = seam.launch;
+  seam.launch = ((args: string[]) =>
+    spawn(
+      process.execPath,
+      [STANDIN_SCRIPT, "out", String(TAR_BYTES), "0", String(TAR_BYTES), "0".repeat(64)],
+      { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
+    )) as typeof seam.launch;
+  try {
+    await assert.rejects(() => snapshotSettings(), /checksum/i);
+  } finally {
+    seam.launch = real;
+    proc.execSync = original;
+  }
+  assert.equal(fs.existsSync(snapshotPath("settings-hold")), false);
+});
+
+test("a streamed copy that the Deck never vouched for (no size-and-checksum line) is an error", async () => {
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  const standin = withStandinSsh({ tarBytes: 2 * 1024 * 1024, noTrailer: true });
+  try {
+    await assert.rejects(() => snapshotSettings(), /could not be checked|did not (report|say)|no size/i);
+  } finally {
+    standin.restore();
+    proc.execSync = original;
+  }
+  assert.equal(fs.existsSync(snapshotPath("settings-hold")), false);
+});
+
+test("a short copy is taken again once; if the second is whole the result is good and says it was retried", async () => {
+  const GOOD = 5 * 1024 * 1024;
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  const standin = withStandinSsh({
+    perLaunch: (n) => (n === 0 ? { tarBytes: GOOD - 102_400, claimedBytes: GOOD } : { tarBytes: GOOD }),
+  });
+  try {
+    const result = await snapshotSettings();
+    assert.equal(result.method, "streamed");
+    assert.equal(result.previous.sizeBytes, GOOD);
+    assert.equal(result.previous.sha256, expectedStandinSha(GOOD));
+    assert.equal(fs.statSync(result.previous.archivePath).size, GOOD);
+    assert.equal(standin.scripts.length, 2, "exactly one retry");
+    assert.match(result.methodNote, /again|retr/i, "the retry is recorded in the result");
+  } finally {
+    standin.restore();
+    proc.execSync = original;
+  }
+});
+
+test("a short copy twice in a row is an error that names both attempts", async () => {
+  const SENT = 4 * 1024 * 1024;
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  const standin = withStandinSsh({ tarBytes: SENT - 102_400, claimedBytes: SENT });
+  try {
+    await assert.rejects(
+      () => snapshotSettings(),
+      (err: unknown) => {
+        const msg = (err as Error).message;
+        assert.match(msg, /either of two tries/);
+        assert.match(msg, /First try:.*Second try:/);
+        assert.match(msg, new RegExp(String(SENT)));
+        return true;
+      }
+    );
+    assert.equal(standin.scripts.length, 2);
+  } finally {
+    standin.restore();
+    proc.execSync = original;
+  }
+});
+
+test("the streamed copy asks the Deck for its own size and checksum in the same pass", async () => {
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  const standin = withStandinSsh({ tarBytes: 1024 * 1024 });
+  try {
+    await snapshotSettings();
+    assert.match(standin.scripts[0], /sha256sum/);
+    assert.match(standin.scripts[0], /wc -c/);
+    assert.match(standin.scripts[0], /DECKSUM/);
+    assert.match(standin.scripts[0], /tar cf -/);
+  } finally {
+    standin.restore();
+    proc.execSync = original;
   }
 });
