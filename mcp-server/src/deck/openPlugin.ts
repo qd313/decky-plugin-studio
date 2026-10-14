@@ -32,6 +32,7 @@ import {
   probeQuickAccess,
   readFocusAt,
   DEFAULT_TARGETS_SETTLE_MS,
+  QuickAccessProbe,
   ReadFocusResult,
 } from "./readFocus.js";
 import { focusKey, describe, labelIsBorrowed } from "./focusKey.js";
@@ -69,6 +70,17 @@ export interface OpenPluginResult {
   /** Present only when the tool could not do it, so a human still can. */
   checklist?: string[];
   summary: string;
+  /**
+   * Present only when the tool entry (openPluginRetry.ts) needed a second try
+   * inside one call: why the first try failed and what it had done. The stages
+   * above then carry both tries, prefixed try1: and try2:.
+   */
+  retried?: {
+    attempts: number;
+    firstReason: string;
+    firstSummary: string;
+    firstStages: OpenStage[];
+  };
 }
 
 /**
@@ -153,6 +165,15 @@ const AFTER_RESTART_SETTLE_MS = 45_000;
 const AFTER_CHORD_REREAD_MS = 3000;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** What the Quick Access page said about itself after a chord that opened nothing, as a detail suffix. */
+function describeProbe(p: QuickAccessProbe | null): string {
+  if (!p || !p.answered) return "";
+  return (
+    `; the Quick Access page then reported visibilityState=${p.visibilityState ?? "unknown"}, ` +
+    `${p.paneCount ?? "an unknown number of"} pane(s) mounted, pane on screen: ${p.visiblePane ?? "none"}`
+  );
+}
 
 /**
  * The focused control's OWN name, never a borrowed one.
@@ -446,8 +467,10 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         // from a page other than the Quick Access one; the page's own word
         // decides whether Steam UI is on screen now.
         let paneAfter: string | null = focus.ok ? focus.visibleQuickAccessTab : null;
+        let lastProbe: QuickAccessProbe | null = null;
         if (paneAfter === null) {
           const again = await probeQuickAccess(cdpBase, { ...settle, timeoutMs: 10_000 });
+          lastProbe = again;
           paneAfter = again.answered ? again.visiblePane : null;
         }
         const opened = paneAfter !== null;
@@ -459,7 +482,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
             `else owns input (${why}); the QAM chord was sent before any D-pad press` +
             (opened
               ? `, and pane ${paneAfter} is on screen${focus.ok ? `, ring on ${describe(focus)}` : ", ring still unowned"}`
-              : ", and no pane appeared"),
+              : ", and no pane appeared" + describeProbe(lastProbe)),
           presses: 1,
         });
         if (!opened) {
@@ -653,12 +676,15 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
           focus = await readFocusAt(cdpBase, 10_000);
         }
         const opened = focus.ok && focus.visibleQuickAccessTab !== null;
+        // A chord that opened nothing: record what the Quick Access page says about
+        // itself, so the next failure shows whether the overlay was ever shown.
+        const diag = opened ? null : await probeQuickAccess(cdpBase, { targetsSettleMs: 0, timeoutMs: 5000 });
         stages.push({
           stage: "open-qam",
           ok: opened,
           detail: opened
             ? `QAM open, pane ${focus.visibleQuickAccessTab} on screen`
-            : "no quickaccess pane became visible after the chord",
+            : "no quickaccess pane became visible after the chord" + describeProbe(diag),
           presses: 1,
         });
         if (!opened) {

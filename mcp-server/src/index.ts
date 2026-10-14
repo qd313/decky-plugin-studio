@@ -42,7 +42,7 @@ import { pressButton, pressChord } from "./deck/pressButton.js";
 import { launchGame, exitGame } from "./deck/gameSession.js";
 import { assertFocusMove } from "./deck/assertFocusMove.js";
 import { runSequence, SequenceStep } from "./deck/runSequence.js";
-import { openPluginDriven } from "./deck/openPlugin.js";
+import { openPluginWithRetry } from "./deck/openPluginRetry.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
@@ -348,7 +348,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       // Without either, already-open falls back to inferring from Decky's pane
       // labels, which is what reported an unmounted panel as open (P1-9).
       const configured = loadPreviewConfig().panelRootSelector;
-      return openPluginDriven({
+      return openPluginWithRetry({
         pluginName: params.pluginName != null ? String(params.pluginName) : info.pluginName,
         port: params.port != null ? String(params.port) : undefined,
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,

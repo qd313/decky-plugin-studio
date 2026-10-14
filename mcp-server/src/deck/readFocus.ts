@@ -873,6 +873,18 @@ export async function readFocusAt(
     try {
       targets = await listTargets(base, timeoutMs);
     } catch (err) {
+      /*
+       * A reset or refused connection INSIDE the wait is what the seconds after
+       * a plugin_loader restart look like from here (deck_openPlugin, round 1 of
+       * 2026-10-12: "read ECONNRESET", 3 s after the reload). When the caller
+       * asked to wait, that is "not up yet", so keep polling until the wait is
+       * spent; only then is it "could not reach".
+       */
+      const spent = Date.now() - started;
+      if (settleMs > 0 && spent < settleMs) {
+        await sleep(Math.min(pollMs, settleMs - spent));
+        continue;
+      }
       return { ...empty, reason: `${PREFLIGHT} (${(err as Error).message})` };
     }
     if (settleMs === 0 || hasSteamUiTargets(targets)) break;
@@ -1030,6 +1042,14 @@ export interface QuickAccessProbe {
   visiblePane: string | null;
   /** Whether that page carries Steam's gpfocus marker right now. */
   ownsFocus: boolean;
+  /**
+   * What the page says about itself, for post-mortems only (never a decision):
+   * `document.visibilityState` and how many quickaccess panes are mounted. After
+   * a chord that opened nothing, these tell "the overlay was never shown" from
+   * "shown, with no panes drawn yet" (plan 93 lane R).
+   */
+  visibilityState?: string;
+  paneCount?: number;
   waitedMs: number;
   reason?: string;
 }
@@ -1070,6 +1090,12 @@ export async function probeQuickAccess(
     try {
       targets = await listTargets(base, timeoutMs);
     } catch (err) {
+      // Same reasoning as readFocusAt: a reset inside the wait is "not up yet".
+      const spent = Date.now() - started;
+      if (spent < settleMs) {
+        await sleep(Math.min(pollMs, settleMs - spent));
+        continue;
+      }
       return unknown(`${PREFLIGHT} (${(err as Error).message})`);
     }
     qam = targets.find(
@@ -1092,9 +1118,10 @@ export async function probeQuickAccess(
     "(() => { var panes = document.querySelectorAll('[id^=\"quickaccess_content_\"]'); var visible = null; " +
     "for (var i = 0; i < panes.length; i++) { var r = panes[i].getBoundingClientRect(); " +
     "if (r.width > 0 && r.height > 0) { visible = panes[i].id.replace('quickaccess_content_', ''); break; } } " +
-    "return { visiblePane: visible, ownsFocus: !!document.querySelector('.gpfocus') }; })()";
+    "return { visiblePane: visible, ownsFocus: !!document.querySelector('.gpfocus'), " +
+    "visibilityState: String(document.visibilityState), paneCount: panes.length }; })()";
   try {
-    const page = await evaluate<{ visiblePane?: unknown; ownsFocus?: unknown }>(
+    const page = await evaluate<{ visiblePane?: unknown; ownsFocus?: unknown; visibilityState?: unknown; paneCount?: unknown }>(
       rewriteWsHost(qam.webSocketDebuggerUrl!, base),
       expr,
       timeoutMs,
@@ -1105,6 +1132,8 @@ export async function probeQuickAccess(
       target: qam.title,
       visiblePane: typeof page?.visiblePane === "string" ? page.visiblePane : null,
       ownsFocus: page?.ownsFocus === true,
+      ...(typeof page?.visibilityState === "string" ? { visibilityState: page.visibilityState } : {}),
+      ...(typeof page?.paneCount === "number" ? { paneCount: page.paneCount } : {}),
       waitedMs: Date.now() - started,
     };
   } catch (err) {
