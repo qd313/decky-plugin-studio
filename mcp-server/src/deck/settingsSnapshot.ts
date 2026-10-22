@@ -53,6 +53,7 @@ import {
   restoreSnapshot,
   takeSnapshot,
   UnrestorableSnapshotError,
+  describeAge,
 } from "./snapshotLease.js";
 
 export interface SettingsSnapshotValues {
@@ -95,6 +96,16 @@ export const archiveCheck = {
 const SETTINGS_KIND = "settings-hold";
 export const RESTORE_SETTINGS_TOOL_HINT = "deck_restoreSettings";
 const DEFAULT_TTL_MINUTES = 30;
+
+/**
+ * The oldest earlier snapshot a new snapshot will put back on its own. A snapshot's lease is 30
+ * minutes, and putting an expired one back is meant to heal a test round that was abandoned
+ * (a crashed chat, a closed laptop) from the same working session. After a few hours the Deck's
+ * settings have legitimately moved on (a person changed one, an update ran), and putting a copy
+ * back would silently undo that: a whole, valid copy from ten days ago would overwrite ten days of
+ * changes. Older than this it is set aside, never sent, and deck_restoreSettings by hand still works.
+ */
+export const MAX_AUTO_RESTORE_AGE_MS = 6 * 60 * 60_000;
 
 /** Both settings and data live directly under here, so one `-C` root lets a
  * single tar call pack (or unpack) both without their identical basenames
@@ -606,6 +617,7 @@ export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Prom
     kind: SETTINGS_KIND,
     restoreToolHint: RESTORE_SETTINGS_TOOL_HINT,
     ttlMinutes,
+    maxAutoRestoreAgeMs: MAX_AUTO_RESTORE_AGE_MS,
     readCurrent: () => readCurrentSettings(includeData),
     apply: applySettings,
   };
@@ -625,6 +637,11 @@ export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Prom
     (report.autoRestoredExpired
       ? ` Note: an earlier snapshot from ${report.autoRestoredExpired.at} had expired and was ` +
         "restored first."
+      : "") +
+    (report.setAsideStale
+      ? ` Note: an old snapshot from ${report.setAsideStale.takenAt} (${describeAge(report.setAsideStale.ageMs)} old) was set aside, ` +
+        `not restored, because it is older than ${describeAge(MAX_AUTO_RESTORE_AGE_MS)}; it is kept at ${report.setAsideStale.file}. ` +
+        `Call ${RESTORE_SETTINGS_TOOL_HINT} by hand only if you want it back. The Deck was not touched by that.`
       : "") +
     (report.setAsideUnrestorable
       ? ` Note: an earlier snapshot from ${report.setAsideUnrestorable.at} had expired but its saved copy is ` +

@@ -42,6 +42,7 @@ const {
   pushSettingsCommand,
   streamProc,
   archiveCheck,
+  MAX_AUTO_RESTORE_AGE_MS,
   RESTORE_SETTINGS_TOOL_HINT,
 } = await import("./settingsSnapshot.js");
 const { makeTar } = await import("./__testutil__/tarBuilder.js");
@@ -779,3 +780,63 @@ function hashOnDisk(file: string): Promise<string> {
       .on("end", () => resolve(h.digest("hex")));
   });
 }
+
+// ---------------------------------------------------------------------------
+// A snapshot only heals a RECENT earlier one (plan 97, 2026-10-22). Putting a
+// whole, valid but 10-day-old copy over the Deck's current settings would
+// silently undo ten days of changes. Older than MAX_AUTO_RESTORE_AGE_MS: set
+// aside, never sent to the Deck, and the new snapshot goes ahead.
+// ---------------------------------------------------------------------------
+
+const DAY = 24 * 60 * 60_000;
+
+test("a whole, valid archive 10 days old is NOT restored by a snapshot call: it is set aside, the summary says so, and the new snapshot goes ahead", async () => {
+  archiveCheck.verify = realArchiveCheck;
+  try {
+    const clock = { t: 1_700_000_000_000 };
+    const tar = sampleTar();
+    const oldArchive = await takeThenExpire(tar, clock);
+    clock.t += 10 * DAY;
+    const { result, calls } = await withFakeExec(() => tar.toString("base64"), () =>
+      snapshotSettings({ ttlMinutes: 1, now: () => clock.t })
+    );
+    assert.equal(calls.some((c) => c.cmd.includes("tar xf -")), false, "nothing was pushed onto the Deck");
+    assert.equal(result.autoRestoredExpired, null);
+    assert.ok(result.setAsideStale, "the report says the old one was set aside");
+    assert.match(path.basename(result.setAsideStale!.file), /^settings-hold\.stale-\d+\.json$/);
+    assert.ok(fs.existsSync(result.setAsideStale!.file), "kept, not deleted");
+    assert.ok(fs.existsSync(oldArchive), "and its archive is kept");
+    assert.match(result.summary, /an old snapshot from .* was set aside, not restored/);
+    assert.match(result.summary, /10 days/);
+    assert.ok(fs.existsSync(snapshotPath("settings-hold")), "the new snapshot's run file is in place");
+    assert.ok(result.previous.archivePath && result.previous.archivePath !== oldArchive);
+  } finally {
+    archiveCheck.verify = async () => ({ ok: true, entries: 0, bytes: 0 });
+  }
+});
+
+test("a snapshot just inside the age limit is still healed first, and one just past it is not", async () => {
+  const tar = sampleTar();
+  for (const [offset, restored] of [[MAX_AUTO_RESTORE_AGE_MS - 10 * 60_000, true], [MAX_AUTO_RESTORE_AGE_MS + 60_000, false]] as const) {
+    fs.rmSync(snapshotPath("settings-hold"), { force: true });
+    const clock = { t: 1_700_000_000_000 };
+    await takeThenExpire(tar, clock);
+    clock.t += offset;
+    const { result, calls } = await withFakeExec(() => tar.toString("base64"), () =>
+      snapshotSettings({ ttlMinutes: 1, now: () => clock.t })
+    );
+    assert.equal(calls.some((c) => c.cmd.includes("tar xf -")), restored);
+    assert.equal(Boolean(result.autoRestoredExpired), restored);
+    assert.equal(Boolean(result.setAsideStale), !restored);
+  }
+});
+
+test("restoreSettings called by hand on an old snapshot still works, and its result names the age", async () => {
+  const clock = { t: Date.now() - 10 * DAY };
+  const tar = sampleTar();
+  await takeThenExpire(tar, clock);
+  const { result, calls } = await withFakeExec(() => "", () => restoreSettings());
+  assert.equal(result.restored, true);
+  assert.ok(calls.some((c) => c.cmd.includes("tar xf -")), "it was pushed");
+  assert.match(result.summary, /10 days old/);
+});
