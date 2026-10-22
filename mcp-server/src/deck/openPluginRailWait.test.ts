@@ -57,6 +57,7 @@ function recorder() {
   return {
     log,
     count: (b: string) => log.filter((l) => l === `press:${b}`).length,
+    chords: () => log.filter((l) => l.startsWith("chord:")).length,
     pressFn: async ({ buttons }: PressOptions): Promise<PressResult> => {
       log.push(`press:${buttons.join("+")}`);
       return ok(buttons, "fake");
@@ -129,7 +130,7 @@ test("Decky's tab never comes back: a clear refusal after the wait, nothing pres
     assert.equal(r.ok, false);
     assert.deepEqual(rig.log, [], "no press went along a rail that has no Decky entry");
     assert.match(r.reason ?? "", /Decky's tab did not come back/);
-    assert.match(r.summary, /close and reopen the Quick Access menu/);
+    assert.match(r.summary, /reload the plugin again/);
     const wait = r.stages.find((s) => s.stage === "wait-decky-tab");
     assert.equal(wait?.ok, false);
     assert.match(wait?.detail ?? "", /still missing from the Quick Access rail after \d+ ms/);
@@ -170,4 +171,140 @@ test("a failed rail wait is never retried, but other no-press failures still are
     false,
   );
   assert.equal(isRetryableOpenFailure({ ...base, stages: [{ stage: "wait-decky-tab", ok: true, detail: "", presses: 0 }] }), true);
+});
+
+/**
+ * The Deck, 2026-10-22 (plan 97 block A): the Decky tab did not come back in 90 s with the menu open; closing
+ * the menu and opening it again brought it back, and the next try worked. This page behaves so: the tab is
+ * mounted only once the menu has been closed and opened again (two chords), whatever the clock says. The menu
+ * is shut after an odd number of chords. `ignoresChord` models a menu that does not react at all.
+ */
+function deckyTabNeedsReopen(rig: ReturnType<typeof recorder>, opts: { returnsAfterReopens?: number; ignoresChord?: boolean } = {}) {
+  const need = opts.returnsAfterReopens ?? 1;
+  return (title: string): unknown => {
+    if (title !== "QuickAccess_uid2") return unfocusedPage;
+    const chords = opts.ignoresChord ? 0 : rig.chords();
+    if (chords % 2 === 1) return { ...unfocusedPage, visiblePane: null, ownsFocus: false, deckyPaneMounted: false };
+    if (Math.floor(chords / 2) < need) return RAIL_NO_DECKY;
+    if (rig.count("RIGHT") > 0) return IN_DECKY;
+    if (rig.count("DOWN") > 0) return RAIL_AT_DECKY;
+    return RAIL_WITH_DECKY;
+  };
+}
+
+test("waiting alone does not bring the tab back: the menu is closed and opened again, and ONE call then opens the panel", async () => {
+  const rig = recorder();
+  const fake = await startFakeCdp(TARGETS, deckyTabNeedsReopen(rig));
+  const started = Date.now();
+  let firstRailPressAt = 0;
+  let secondChordAt = 0;
+  try {
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 300,
+      deckyTabWaitMs: 5000,
+      deckyTabPollMs: 30,
+      deckyTabReopenEveryMs: 200,
+      pressFn: async (o) => {
+        firstRailPressAt ||= Date.now();
+        return rig.pressFn(o);
+      },
+      chordFn: async (h, t) => {
+        const res = await rig.chordFn(h, t);
+        if (rig.chords() === 2) secondChordAt = Date.now();
+        return res;
+      },
+    });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(rig.chords(), 2, "closed once, opened once, and no third chord");
+    assert.ok(Date.now() - started >= 200, "it waited the 'every N ms' before the first reopen");
+    assert.ok(firstRailPressAt > secondChordAt, "the rail was walked only after the menu was open again");
+    const reopen = r.stages.filter((s) => s.stage === "reopen-qam");
+    assert.equal(reopen.length, 1);
+    assert.equal(reopen[0].ok, true);
+    assert.equal(reopen[0].presses, 2);
+    assert.match(reopen[0].detail, /closed the menu and opened it again/);
+    const wait = r.stages.find((s) => s.stage === "wait-decky-tab");
+    assert.equal(wait?.ok, true);
+    assert.match(wait?.detail ?? "", /1 close-and-reopen of the menu/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a tab that needs two reopens gets two, each in the stage log, and the menu is left open", async () => {
+  const rig = recorder();
+  const fake = await startFakeCdp(TARGETS, deckyTabNeedsReopen(rig, { returnsAfterReopens: 2 }));
+  try {
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 300,
+      deckyTabWaitMs: 8000,
+      deckyTabPollMs: 30,
+      deckyTabReopenEveryMs: 150,
+      pressFn: rig.pressFn,
+      chordFn: rig.chordFn,
+    });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(rig.chords(), 4);
+    assert.equal(r.stages.filter((s) => s.stage === "reopen-qam").length, 2);
+    assert.match(r.stages.find((s) => s.stage === "wait-decky-tab")?.detail ?? "", /2 close-and-reopens/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a tab that never comes back is reopened a bounded number of times, then a clear refusal, with the menu left OPEN", async () => {
+  const rig = recorder();
+  const fake = await startFakeCdp(TARGETS, deckyTabNeedsReopen(rig, { returnsAfterReopens: 1000 }));
+  try {
+    const r = await openPluginWithRetry({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 300,
+      deckyTabWaitMs: 6000,
+      deckyTabPollMs: 30,
+      deckyTabReopenEveryMs: 250,
+      retryDelayMs: 50,
+      pressFn: rig.pressFn,
+      chordFn: rig.chordFn,
+    });
+    assert.equal(r.ok, false);
+    const reopens = r.stages.filter((s) => s.stage === "reopen-qam").length;
+    assert.ok(reopens >= 2 && reopens <= 5, `bounded by the wait over the interval, got ${reopens}`);
+    assert.equal(rig.chords(), reopens * 2);
+    assert.equal(rig.count("DOWN") + rig.count("LEFT") + rig.count("RIGHT"), 0, "no D-pad press along a rail with no Decky entry");
+    assert.match(r.reason ?? "", /Decky's tab did not come back/);
+    assert.equal(r.retried, undefined, "no second whole wait");
+    assert.equal(rig.chords() % 2, 0, "every close was followed by an open");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("a menu that does not shut when asked is not toggled again on a guess", async () => {
+  const rig = recorder();
+  const fake = await startFakeCdp(TARGETS, deckyTabNeedsReopen(rig, { returnsAfterReopens: 1000, ignoresChord: true }));
+  try {
+    const r = await openPluginDriven({
+      pluginName: "bonsAI",
+      cdpUrl: fake.base,
+      targetsSettleMs: 300,
+      deckyTabWaitMs: 5000,
+      deckyTabPollMs: 30,
+      deckyTabReopenEveryMs: 100,
+      pressFn: rig.pressFn,
+      chordFn: rig.chordFn,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(rig.chords(), 1, "one close chord, no open chord on top of it");
+    assert.match(r.reason ?? "", /did not close when asked/);
+    const reopen = r.stages.find((s) => s.stage === "reopen-qam");
+    assert.equal(reopen?.ok, false);
+    assert.equal(reopen?.presses, 1);
+  } finally {
+    await fake.close();
+  }
 });

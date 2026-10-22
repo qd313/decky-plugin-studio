@@ -134,6 +134,12 @@ export interface OpenPluginOptions {
   deckyTabWaitMs?: number;
   /** Poll interval for that wait. Default 1 s. Tests shorten it. */
   deckyTabPollMs?: number;
+  /**
+   * While the tab is missing, close the Quick Access menu and open it again every
+   * this many ms (default 10 s). Waiting alone did not bring the tab back in 90 s
+   * on the Deck (2026-10-22); a close and reopen did. Tests shorten it.
+   */
+  deckyTabReopenEveryMs?: number;
   /** Test-only: which machine's reload note to look at. Defaults to the current one. */
   restartMachine?: string;
   /**
@@ -172,6 +178,9 @@ const AFTER_RESTART_SETTLE_MS = 45_000;
 
 /** How long to wait for Decky's tab to come back to the rail when the menu is open without it. */
 const DECKY_TAB_WAIT_MS = 120_000;
+
+/** While it is missing, how often the menu is closed and opened again. */
+const DECKY_TAB_REOPEN_EVERY_MS = 10_000;
 
 /** How long to keep re-reading for the menu after the open chord before calling it a failure. */
 const AFTER_CHORD_REREAD_MS = 3000;
@@ -374,14 +383,37 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
   };
 
   /**
-   * Poll the Quick Access page until Decky's pane is mounted, while the menu is
-   * open. Null when the tab is already there (the usual case: no stage, no wait).
+   * Get Decky's tab back onto the Quick Access rail while the menu is open
+   * without it. Null when the tab is already there (the usual case: no stage).
+   *
+   * Waiting alone does not bring the tab back (Deck, 2026-10-22: 90 s with the
+   * menu open and it was still missing); closing the menu and opening it again
+   * does. So: ask the page once a second; every deckyTabReopenEveryMs (10 s)
+   * that the tab is still missing, close the menu with the toggle chord, check it
+   * shut, open it again, check it open, and ask again. All of it inside
+   * deckyTabWaitMs (120 s). Each close-and-reopen is its own stage. A menu that
+   * does not close or open as asked ends the loop: the chord is a toggle, and a
+   * third press on a guess could undo the second.
    */
-  const waitForDeckyTab = async (): Promise<{ stage: OpenStage; reason: string; summary: string } | null> => {
+  const recoverDeckyTab = async (): Promise<{
+    ok: boolean;
+    reopened: boolean;
+    reason: string;
+    summary: string;
+  } | null> => {
     const budget = opts.deckyTabWaitMs ?? DECKY_TAB_WAIT_MS;
     const pollMs = Math.max(20, opts.deckyTabPollMs ?? 1000);
+    const reopenEvery = Math.max(50, opts.deckyTabReopenEveryMs ?? DECKY_TAB_REOPEN_EVERY_MS);
     const started = Date.now();
+    let lastReopen = started;
     let polls = 0;
+    let reopens = 0;
+    const secs = (ms: number): number => Math.round(ms / 1000);
+    const done = (ok: boolean, detail: string, reason: string, summary: string) => {
+      stages.push({ stage: "wait-decky-tab", ok, detail, presses: 0 });
+      return { ok, reopened: reopens > 0, reason, summary };
+    };
+
     for (;;) {
       abortIfStopped();
       const p = await probeQuickAccess(cdpBase!, { targetsSettleMs: 0, timeoutMs: 5000 });
@@ -390,33 +422,98 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
       const missing = p.answered && p.visiblePane !== null && p.deckyPaneMounted === false;
       if (!missing) {
         if (polls === 0) return null;
-        return {
-          stage: {
-            stage: "wait-decky-tab",
-            ok: p.answered && p.deckyPaneMounted !== false,
-            detail: p.answered && p.deckyPaneMounted !== false
-              ? `Decky's tab was missing from the Quick Access rail and came back after ${waitedMs} ms (${polls} reads)`
-              : `Decky's tab was missing from the rail; after ${waitedMs} ms the page ${p.answered ? "had no pane on screen" : "could not be read"}`,
-            presses: 0,
-          },
-          reason: "Decky's tab was missing from the Quick Access rail and the menu changed while waiting for it",
-          summary: `waited ${Math.round(waitedMs / 1000)} s for Decky's tab and the menu changed; nothing was pressed - call again`,
-        };
+        if (p.answered && p.deckyPaneMounted !== false) {
+          return done(
+            true,
+            `Decky's tab was missing from the Quick Access rail and came back after ${waitedMs} ms ` +
+              `(${polls} reads, ${reopens} close-and-reopen${reopens === 1 ? "" : "s"} of the menu)`,
+            "",
+            "",
+          );
+        }
+        return done(
+          false,
+          `Decky's tab was missing from the rail; after ${waitedMs} ms the page ${p.answered ? "had no pane on screen" : "could not be read"}`,
+          "Decky's tab was missing from the Quick Access rail and the menu changed while waiting for it",
+          `waited ${secs(waitedMs)} s for Decky's tab and the menu changed; call again`,
+        );
       }
       polls++;
       if (waitedMs >= budget) {
-        return {
-          stage: {
-            stage: "wait-decky-tab",
-            ok: false,
-            detail: `Decky's tab was still missing from the Quick Access rail after ${waitedMs} ms (${polls} reads); nothing was pressed`,
-            presses: 0,
-          },
-          reason: `Decky's tab did not come back to the Quick Access rail within ${Math.round(budget / 1000)} s`,
-          summary:
-            `waited ${Math.round(waitedMs / 1000)} s for Decky's tab to return to the rail and it did not, so nothing was ` +
-            "pressed; close and reopen the Quick Access menu, or reload the plugin again, then call again",
+        return done(
+          false,
+          `Decky's tab was still missing from the Quick Access rail after ${waitedMs} ms ` +
+            `(${polls} reads, ${reopens} close-and-reopen${reopens === 1 ? "" : "s"} of the menu)`,
+          `Decky's tab did not come back to the Quick Access rail within ${secs(budget)} s`,
+          `waited ${secs(waitedMs)} s for Decky's tab to return to the rail, closing and reopening the menu ` +
+            `${reopens} time${reopens === 1 ? "" : "s"}, and it did not; reload the plugin again, then call again`,
+        );
+      }
+
+      if (Date.now() - lastReopen >= reopenEvery) {
+        // Close, check shut, open, check open. Two chord presses, each read back.
+        abortIfStopped();
+        const stage = (ok: boolean, detail: string, presses: number): void => {
+          stages.push({ stage: "reopen-qam", ok, detail, presses });
         };
+        const n = ++reopens;
+        const tag = `Decky's tab was still missing from the rail after ${waitedMs} ms; reopen ${n}`;
+        const close = await chord("GUIDE", "A", { port: opts.port });
+        if (!close.ok) {
+          stage(false, `${tag}: the close chord could not be delivered (${close.reason ?? "chord failed"})`, 0);
+          return { ok: false, reopened: n > 1, reason: close.reason ?? "chord failed", summary: "could not close the Quick Access menu to bring Decky's tab back" };
+        }
+        await sleep(900);
+        let shut = false;
+        for (const until = Date.now() + AFTER_CHORD_REREAD_MS; ; ) {
+          const q = await probeQuickAccess(cdpBase!, { targetsSettleMs: 0, timeoutMs: 5000 });
+          if (q.answered && q.visiblePane === null) {
+            shut = true;
+            break;
+          }
+          if (Date.now() >= until) break;
+          await sleep(300);
+        }
+        if (!shut) {
+          stage(false, `${tag}: the close chord was sent but the menu did not shut; not pressed again`, 1);
+          return {
+            ok: false,
+            reopened: n > 1,
+            reason: "the Quick Access menu did not close when asked, so it was not reopened",
+            summary: "the open chord was NOT sent a second time because the menu did not shut; check the Deck's screen",
+          };
+        }
+        const open = await chord("GUIDE", "A", { port: opts.port });
+        if (!open.ok) {
+          stage(false, `${tag}: the menu was closed but the open chord could not be delivered (${open.reason ?? "chord failed"})`, 1);
+          return { ok: false, reopened: true, reason: open.reason ?? "chord failed", summary: "the Quick Access menu was closed and could not be opened again; open it by hand" };
+        }
+        await sleep(900);
+        let opened = false;
+        for (const until = Date.now() + AFTER_CHORD_REREAD_MS; ; ) {
+          const q = await probeQuickAccess(cdpBase!, { targetsSettleMs: 0, timeoutMs: 5000 });
+          if (q.answered && q.visiblePane !== null) {
+            opened = true;
+            break;
+          }
+          if (Date.now() >= until) break;
+          await sleep(300);
+        }
+        stage(
+          opened,
+          opened ? `${tag}: closed the menu and opened it again` : `${tag}: closed the menu, sent the open chord and no pane appeared; not pressed again`,
+          2,
+        );
+        if (!opened) {
+          return {
+            ok: false,
+            reopened: true,
+            reason: "the Quick Access menu was closed to bring Decky's tab back and did not open again",
+            summary: "the Quick Access menu is probably shut now; open it by hand, then call again",
+          };
+        }
+        lastReopen = Date.now();
+        continue;
       }
       await sleep(Math.min(pollMs, budget - waitedMs));
     }
@@ -769,15 +866,45 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
        * the tab back). A walk along a rail that has no Decky entry can only
        * fail, and a failure that spends presses and ends the call is not a
        * reading of the tab, it is a reading of the moment. So while the menu is
-       * open and the Quick Access page has no Decky pane mounted, nothing is
-       * pressed: the page is asked once a second, for up to deckyTabWaitMs
-       * (120 s), and the stage says how long the tab took.
+       * open and the Quick Access page has no Decky pane mounted, the page is
+       * asked once a second for up to deckyTabWaitMs (120 s), and every 10 s
+       * the menu is closed and opened again, because waiting alone did not
+       * bring the tab back in 90 s on the Deck (2026-10-22) and a reopen did.
+       * The stages say how long the tab took and how many reopens it needed.
        */
-      const railWait = await waitForDeckyTab();
+      const railWait = await recoverDeckyTab();
       if (railWait) {
-        stages.push(railWait.stage);
-        if (!railWait.stage.ok) {
+        if (!railWait.ok) {
           return fail(railWait.reason, focus, railWait.summary);
+        }
+        if (railWait.reopened) {
+          // The menu is a fresh one: the old read of the ring is stale.
+          focus = await readFocusAt(cdpBase, 10_000);
+          if (!focus.ok) {
+            abortIfStopped();
+            const outcome = await acquireFocusIfUnowned(focus, {
+              cdpBase,
+              direction: "DOWN",
+              port: opts.port,
+              pressFn: opts.pressFn,
+            });
+            focus = outcome.focus;
+            if (outcome.acquired) {
+              stages.push({
+                stage: "acquire-focus-after-reopen",
+                ok: focus.ok,
+                detail: "the reopened menu owned no ring, so one DOWN press placed it",
+                presses: outcome.presses,
+              });
+            }
+          }
+          if (!focus.ok) {
+            return fail(
+              focus.reason ?? "could not read focus",
+              focus,
+              "the Quick Access menu was reopened but the ring could not be read; call again",
+            );
+          }
         }
       }
 
