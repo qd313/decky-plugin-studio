@@ -1093,6 +1093,13 @@ export interface QuickAccessProbe {
    */
   visibilityState?: string;
   paneCount?: number;
+  /**
+   * Whether Decky's own pane (`quickaccess_content_999`) is mounted in the page,
+   * which is how its tab shows on the rail: after a plugin reload the tab can
+   * be missing for a minute or more. Meaningful only while a pane is on screen
+   * (a shut menu may mount none); absent in payloads from older fakes.
+   */
+  deckyPaneMounted?: boolean;
   waitedMs: number;
   reason?: string;
 }
@@ -1162,9 +1169,10 @@ export async function probeQuickAccess(
     "for (var i = 0; i < panes.length; i++) { var r = panes[i].getBoundingClientRect(); " +
     "if (r.width > 0 && r.height > 0) { visible = panes[i].id.replace('quickaccess_content_', ''); break; } } " +
     "return { visiblePane: visible, ownsFocus: !!document.querySelector('.gpfocus'), " +
-    "visibilityState: String(document.visibilityState), paneCount: panes.length }; })()";
+    "visibilityState: String(document.visibilityState), paneCount: panes.length, " +
+    "deckyPaneMounted: !!document.getElementById('quickaccess_content_999') }; })()";
   try {
-    const page = await evaluate<{ visiblePane?: unknown; ownsFocus?: unknown; visibilityState?: unknown; paneCount?: unknown }>(
+    const page = await evaluate<{ visiblePane?: unknown; ownsFocus?: unknown; visibilityState?: unknown; paneCount?: unknown; deckyPaneMounted?: unknown }>(
       rewriteWsHost(qam.webSocketDebuggerUrl!, base),
       expr,
       timeoutMs,
@@ -1177,6 +1185,7 @@ export async function probeQuickAccess(
       ownsFocus: page?.ownsFocus === true,
       ...(typeof page?.visibilityState === "string" ? { visibilityState: page.visibilityState } : {}),
       ...(typeof page?.paneCount === "number" ? { paneCount: page.paneCount } : {}),
+      ...(typeof page?.deckyPaneMounted === "boolean" ? { deckyPaneMounted: page.deckyPaneMounted } : {}),
       waitedMs: Date.now() - started,
     };
   } catch (err) {

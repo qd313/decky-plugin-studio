@@ -125,6 +125,15 @@ export interface OpenPluginOptions {
    * the 10 s the other waits allow. Tests shorten it.
    */
   afterRestartSettleMs?: number;
+  /**
+   * Upper bound on waiting for Decky's tab to be back on the Quick Access rail,
+   * once the menu is open on some other pane. Default 120 s: after a plugin
+   * reload the tab has been seen missing for 100 s and more (plan 94, 2026-10-17).
+   * Nothing is pressed while waiting. Tests shorten it.
+   */
+  deckyTabWaitMs?: number;
+  /** Poll interval for that wait. Default 1 s. Tests shorten it. */
+  deckyTabPollMs?: number;
   /** Test-only: which machine's reload note to look at. Defaults to the current one. */
   restartMachine?: string;
   /**
@@ -160,6 +169,9 @@ const DECKY_TAB = "999";
 
 /** How long to wait for the Quick Access page after a plugin reload, before the first read. */
 const AFTER_RESTART_SETTLE_MS = 45_000;
+
+/** How long to wait for Decky's tab to come back to the rail when the menu is open without it. */
+const DECKY_TAB_WAIT_MS = 120_000;
 
 /** How long to keep re-reading for the menu after the open chord before calling it a failure. */
 const AFTER_CHORD_REREAD_MS = 3000;
@@ -359,6 +371,55 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     if (!p.ok) throw new Error(p.reason ?? "press failed");
     await sleep(180);
     return readFocusAt(cdpBase!, 10_000);
+  };
+
+  /**
+   * Poll the Quick Access page until Decky's pane is mounted, while the menu is
+   * open. Null when the tab is already there (the usual case: no stage, no wait).
+   */
+  const waitForDeckyTab = async (): Promise<{ stage: OpenStage; reason: string; summary: string } | null> => {
+    const budget = opts.deckyTabWaitMs ?? DECKY_TAB_WAIT_MS;
+    const pollMs = Math.max(20, opts.deckyTabPollMs ?? 1000);
+    const started = Date.now();
+    let polls = 0;
+    for (;;) {
+      abortIfStopped();
+      const p = await probeQuickAccess(cdpBase!, { targetsSettleMs: 0, timeoutMs: 5000 });
+      const waitedMs = Date.now() - started;
+      // Only a page that answered, with a pane on screen, can say the tab is missing.
+      const missing = p.answered && p.visiblePane !== null && p.deckyPaneMounted === false;
+      if (!missing) {
+        if (polls === 0) return null;
+        return {
+          stage: {
+            stage: "wait-decky-tab",
+            ok: p.answered && p.deckyPaneMounted !== false,
+            detail: p.answered && p.deckyPaneMounted !== false
+              ? `Decky's tab was missing from the Quick Access rail and came back after ${waitedMs} ms (${polls} reads)`
+              : `Decky's tab was missing from the rail; after ${waitedMs} ms the page ${p.answered ? "had no pane on screen" : "could not be read"}`,
+            presses: 0,
+          },
+          reason: "Decky's tab was missing from the Quick Access rail and the menu changed while waiting for it",
+          summary: `waited ${Math.round(waitedMs / 1000)} s for Decky's tab and the menu changed; nothing was pressed - call again`,
+        };
+      }
+      polls++;
+      if (waitedMs >= budget) {
+        return {
+          stage: {
+            stage: "wait-decky-tab",
+            ok: false,
+            detail: `Decky's tab was still missing from the Quick Access rail after ${waitedMs} ms (${polls} reads); nothing was pressed`,
+            presses: 0,
+          },
+          reason: `Decky's tab did not come back to the Quick Access rail within ${Math.round(budget / 1000)} s`,
+          summary:
+            `waited ${Math.round(waitedMs / 1000)} s for Decky's tab to return to the rail and it did not, so nothing was ` +
+            "pressed; close and reopen the Quick Access menu, or reload the plugin again, then call again",
+        };
+      }
+      await sleep(Math.min(pollMs, budget - waitedMs));
+    }
   };
 
   try {
@@ -699,6 +760,27 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
 
     // Wrong pane on screen: get to the rail, then walk it until Decky's shows.
     if (focus.visibleQuickAccessTab !== DECKY_TAB) {
+      /*
+       * WAIT FOR DECKY'S TAB TO BE ON THE RAIL BEFORE WALKING IT.
+       *
+       * After a plugin reload Decky's tab can be missing from the rail for 100 s
+       * and more (plan 94 block 7, 2026-10-17: two tries failed with "walked 10
+       * rail entries without the Decky pane appearing", the third worked, with
+       * the tab back). A walk along a rail that has no Decky entry can only
+       * fail, and a failure that spends presses and ends the call is not a
+       * reading of the tab, it is a reading of the moment. So while the menu is
+       * open and the Quick Access page has no Decky pane mounted, nothing is
+       * pressed: the page is asked once a second, for up to deckyTabWaitMs
+       * (120 s), and the stage says how long the tab took.
+       */
+      const railWait = await waitForDeckyTab();
+      if (railWait) {
+        stages.push(railWait.stage);
+        if (!railWait.stage.ok) {
+          return fail(railWait.reason, focus, railWait.summary);
+        }
+      }
+
       // Step out to the rail if the ring is inside a pane. One press, verified:
       // on the rail the ring belongs to no pane, so quickAccessTab goes null
       // while a pane stays on screen.

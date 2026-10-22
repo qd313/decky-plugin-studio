@@ -47,6 +47,8 @@ const CHORD_STAGES = new Set(["open-qam", "open-qam-blind"]);
  */
 export function isRetryableOpenFailure(r: OpenPluginResult): boolean {
   if (r.ok || r.stopped) return false;
+  // A tab that never came back in the long wait would not come back in a second one.
+  if (r.stages.some((s) => s.stage === "wait-decky-tab" && !s.ok)) return false;
   const pressing = r.stages.filter((s) => (s.presses ?? 0) > 0);
   if (pressing.length === 0) return true;
   return pressing.length === 1 && CHORD_STAGES.has(pressing[0].stage) && (pressing[0].presses ?? 0) === 1;
