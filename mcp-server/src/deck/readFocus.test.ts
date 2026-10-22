@@ -276,9 +276,18 @@ function runPageExpression(spec: ElSpec, expect?: string): PageShape {
   };
   const CSS = { escape: (s: string) => s };
 
+  // The computed style the page reads: overflow comes from the fixture's `clips`.
+  const getComputedStyle = (el: FakeEl) => ({
+    display: "block",
+    visibility: "visible",
+    opacity: "1",
+    overflowX: el.clips ? "hidden" : "visible",
+    overflowY: el.clips ? "hidden" : el.scrollHeight !== undefined ? "auto" : "visible",
+  });
+
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const fn = new Function("document", "CSS", "window", `return ${pageExpression(expect)};`);
-  return fn(document, CSS, VIEWPORT) as PageShape;
+  const fn = new Function("document", "CSS", "window", "getComputedStyle", `return ${pageExpression(expect)};`);
+  return fn(document, CSS, VIEWPORT, getComputedStyle) as PageShape;
 }
 
 // ---------------------------------------------------------------------------
@@ -768,6 +777,100 @@ test("visibility: words below the viewport read OFFSCREEN", () => {
   );
   assert.equal(page.visibility?.verdict, "offscreen");
   assert.equal(page.visibility?.sample, "text");
+});
+
+/**
+ * A folded section line as bonsAI draws it (plan 97, X2): a Focusable row with the
+ * name, a summary that gives way first (nowrap, overflow hidden, ellipsis) and a
+ * chevron. The summary's text is laid out at full length, so its line box runs far
+ * past its own little span, and past the row's right edge.
+ */
+function foldLine(summaryText: { x: number; y: number; width: number; height: number }): ElSpec {
+  return {
+    tag: "div",
+    id: "quickaccess_content_999",
+    rect: { x: 0, y: 0, width: 400, height: 800 },
+    children: [
+      {
+        tag: "div",
+        className: "Focusable gpfocus bonsai-fold-line",
+        rect: { x: 48, y: 100, width: 300, height: 34 },
+        children: [
+          { tag: "span", text: "STORY SPOILERS (STRATEGY MODE)", rect: { x: 60, y: 108, width: 236, height: 18 }, textRects: [{ x: 60, y: 108, width: 236, height: 18 }] },
+          { tag: "span", text: "Hide spoilers for the game you are playing", clips: true, rect: { x: 302, y: 108, width: 20, height: 18 }, textRects: [summaryText] },
+          { tag: "span", text: ">", rect: { x: 328, y: 108, width: 10, height: 18 }, textRects: [{ x: 328, y: 108, width: 8, height: 18 }] },
+        ],
+      },
+    ],
+  };
+}
+
+test("visibility (plan 97 X2): a folded section line whose summary is squeezed away reads VISIBLE, not 92 percent clipped", () => {
+  /*
+   * The false reading on the Deck (P91-FOLD-SETTINGS, P93-M1-FOLDED-RING-OLLAMA):
+   * every folded section line read "partial, clipped by a container" while its
+   * words were whole. The summary span clips its own text; the unpainted rest of
+   * the text's line box ran out past the row, and the sample there hit the pane.
+   * Only the part the span paints may be sampled.
+   */
+  const page = runPageExpression(foldLine({ x: 302, y: 108, width: 80, height: 18 }));
+  assert.equal(page.visibility?.verdict, "visible");
+  assert.equal(page.visibility?.visiblePercent, 100);
+  assert.equal(page.visibility?.clippedBy, null);
+  assert.equal(page.visibility?.sample, "text");
+  assert.deepEqual(page.visibility?.points, { visible: 9, covered: 0, clipped: 0, offscreen: 0 });
+});
+
+test("visibility (plan 97 X2): words that run past the control's box in plain overflow are not 'clipped by a container'", () => {
+  // No overflow clip anywhere: the name simply runs 32px past the row's right edge
+  // and is painted there. The pane behind it is not hiding anything.
+  const page = runPageExpression({
+    tag: "div",
+    id: "quickaccess_content_999",
+    rect: { x: 0, y: 0, width: 400, height: 800 },
+    children: [
+      {
+        tag: "div",
+        className: "Focusable gpfocus",
+        rect: { x: 48, y: 100, width: 300, height: 34 },
+        text: "A long name that runs past the edge of its row",
+        textRects: [{ x: 60, y: 108, width: 320, height: 18 }],
+      },
+    ],
+  });
+  assert.equal(page.visibility?.verdict, "visible");
+  assert.equal(page.visibility?.clippedBy, null);
+  assert.deepEqual(page.visibility?.points, { visible: 2, covered: 0, clipped: 0, offscreen: 0 });
+});
+
+test("visibility (plan 97 X2): words under a real overflow:hidden ancestor of the control are still clipped", () => {
+  // The 2026-08-30 shape with words: the row sits below the scroll region's edge, its words
+  // inside its box. Narrowing the sample to the control's own clips must not hide this.
+  const page = runPageExpression({
+    tag: "div",
+    id: "quickaccess_content_999",
+    rect: { x: 0, y: 0, width: 400, height: 800 },
+    children: [
+      {
+        tag: "div",
+        className: "bonsai-scroll-region",
+        clips: true,
+        rect: { x: 0, y: 0, width: 400, height: 700 },
+        children: [
+          {
+            tag: "div",
+            className: "Focusable gpfocus bonsai-fold-line",
+            rect: { x: 48, y: 710, width: 300, height: 34 },
+            text: "COPY",
+            textRects: [{ x: 60, y: 718, width: 120, height: 18 }],
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(page.visibility?.verdict, "offscreen");
+  assert.equal(page.visibility?.clippedBy, "div#quickaccess_content_999");
+  assert.deepEqual(page.visibility?.points, { visible: 0, covered: 0, clipped: 3, offscreen: 0 });
 });
 
 test("visibility: a control with no text keeps the box sample, so an icon button covered at its corner is still partial", () => {

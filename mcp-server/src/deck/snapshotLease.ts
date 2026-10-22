@@ -224,12 +224,39 @@ export interface SnapshotController<T> {
   /** Tool name to name in a stale/refusal message, e.g. "deck_restorePowerSettings". */
   restoreToolHint: string;
   ttlMinutes: number;
+  /**
+   * When set, an expired earlier snapshot older than this (by its takenAt) is NOT
+   * put back by the next takeSnapshot: its run file is set aside and the new snapshot
+   * goes ahead. Absent: any expired snapshot is healed, as before.
+   */
+  maxAutoRestoreAgeMs?: number;
   /** Read the CURRENT live value. Called once per takeSnapshot(), before
    * anything changes. */
   readCurrent(): Promise<T> | T;
   /** Push `values` onto the Deck. Used both for a real restore and for the
    * auto-restore of an expired snapshot. */
   apply(values: T): Promise<void> | void;
+}
+
+/**
+ * Thrown by a controller's `apply` when the saved copy itself cannot be put back
+ * (a damaged archive), as opposed to the Deck or the link failing. Nothing was
+ * sent to the Deck. takeSnapshot and restoreSnapshot set such a run file aside
+ * instead of leaving it to fail every later call the same way.
+ */
+export class UnrestorableSnapshotError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnrestorableSnapshotError";
+  }
+}
+
+/** Rename the run file out of the way (kept for a person to look at). Returns its new path. */
+export function setAsideSnapshotFile(kind: string, now: () => number = Date.now, label = "unrestorable"): string {
+  const from = snapshotPath(kind);
+  const to = path.join(snapshotDir(), `${kind}.${label}-${now()}.json`);
+  fs.renameSync(from, to);
+  return to;
 }
 
 export interface TakeReport<T> {
@@ -245,6 +272,22 @@ export interface TakeReport<T> {
   /** Set when an EARLIER snapshot of this kind had already expired and was
    * auto-restored before this new one was taken. */
   autoRestoredExpired: { at: string; values: T } | null;
+  /** Set when an EARLIER, expired snapshot could not be put back because its saved
+   * copy is damaged: its run file was renamed to `file` and this snapshot went ahead. */
+  setAsideUnrestorable?: { at: string; file: string; reason: string };
+  /** Set when an EARLIER snapshot was older than the controller's maximum age for an
+   * automatic restore: its run file was renamed to `file`, nothing was sent to the Deck. */
+  setAsideStale?: { takenAt: string; file: string; ageMs: number };
+}
+
+/** Plain words for an age: "42 minutes", "5 hours", "10 days". */
+export function describeAge(ms: number): string {
+  const min = Math.max(0, Math.round(ms / 60_000));
+  if (min < 90) return `${min} minute${min === 1 ? "" : "s"}`;
+  const hours = Math.round(min / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `${days} days`;
 }
 
 /**
@@ -277,11 +320,24 @@ export async function takeSnapshot<T>(
   const existing = readSnapshotFile<T>(ctrl.kind); // throws CorruptSnapshotError
 
   let autoRestoredExpired: TakeReport<T>["autoRestoredExpired"] = null;
+  let setAside: TakeReport<T>["setAsideUnrestorable"];
+  let setAsideStale: TakeReport<T>["setAsideStale"];
   if (existing) {
-    if (isExpired(existing, now)) {
-      await ctrl.apply(existing.values);
-      clearSnapshotFile(ctrl.kind);
-      autoRestoredExpired = { at: existing.expiresAt, values: existing.values };
+    const ageMs = now() - Date.parse(existing.takenAt);
+    if (isExpired(existing, now) && ctrl.maxAutoRestoreAgeMs !== undefined && ageMs > ctrl.maxAutoRestoreAgeMs) {
+      // Too old to trust over what the Deck holds now: never sent, kept for a person to look at.
+      setAsideStale = { takenAt: existing.takenAt, file: setAsideSnapshotFile(ctrl.kind, now, "stale"), ageMs };
+    } else if (isExpired(existing, now)) {
+      try {
+        await ctrl.apply(existing.values);
+        clearSnapshotFile(ctrl.kind);
+        autoRestoredExpired = { at: existing.expiresAt, values: existing.values };
+      } catch (err) {
+        // A damaged saved copy can never be put back; leaving its run file in place would
+        // make every later snapshot fail the same way (plan 97, 2026-10-22).
+        if (!(err instanceof UnrestorableSnapshotError)) throw err;
+        setAside = { at: existing.expiresAt, file: setAsideSnapshotFile(ctrl.kind, now), reason: err.message };
+      }
     } else {
       throw new StaleSnapshotError(existing, snapshotPath(ctrl.kind), ctrl.restoreToolHint);
     }
@@ -307,6 +363,8 @@ export async function takeSnapshot<T>(
     path: snapshotPath(ctrl.kind),
     expiresAt: envelope.expiresAt,
     autoRestoredExpired,
+    ...(setAside ? { setAsideUnrestorable: setAside } : {}),
+    ...(setAsideStale ? { setAsideStale } : {}),
   };
 }
 
@@ -332,12 +390,23 @@ export async function restoreSnapshot<T>(ctrl: SnapshotController<T>): Promise<R
       note: `no ${ctrl.kind} snapshot present -- nothing to restore`,
     };
   }
-  await ctrl.apply(existing.values);
+  try {
+    await ctrl.apply(existing.values);
+  } catch (err) {
+    if (!(err instanceof UnrestorableSnapshotError)) throw err;
+    const file = setAsideSnapshotFile(ctrl.kind);
+    return {
+      ok: true,
+      restored: false,
+      values: null,
+      note: `${err.message} The run file was moved aside to ${file}; the Deck was not touched.`,
+    };
+  }
   clearSnapshotFile(ctrl.kind);
   return {
     ok: true,
     restored: true,
     values: existing.values,
-    note: `restored the ${ctrl.kind} values captured at ${existing.takenAt}`,
+    note: `restored the ${ctrl.kind} values captured at ${existing.takenAt} (${describeAge(Date.now() - Date.parse(existing.takenAt))} old)`,
   };
 }

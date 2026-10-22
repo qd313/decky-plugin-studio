@@ -550,12 +550,40 @@ export function pageExpression(expect?: string): string {
     return true;
   }
 
+  /*
+   * The part of the page a box with overflow other than visible lets through
+   * (plan 97, 2026-10-22). A text node's line boxes are laid out at the text's
+   * full length, but a nowrap span with overflow:hidden and an ellipsis (a
+   * folded section line's summary, squeezed to nothing beside a long name)
+   * paints only inside its own box. Sampling the unpainted rest of the
+   * rectangle hit whatever lay there -- past the line's edge, the pane -- and
+   * read "clipped by a container" for words a person read whole. So each text
+   * rectangle is cut down to what the clipping boxes from the control itself
+   * down to the text let through. Boxes ABOVE the control are not applied: an
+   * ancestor that hides part of the control is exactly the 2026-08-30 shape.
+   */
+  function narrowClip(n, clip) {
+    var cs = null;
+    try { cs = typeof getComputedStyle === 'function' ? getComputedStyle(n) : null; } catch (e) { cs = null; }
+    if (!cs) return clip;
+    var ox = cs.overflowX || cs.overflow || 'visible', oy = cs.overflowY || cs.overflow || 'visible';
+    if (ox === 'visible' && oy === 'visible') return clip;
+    var nb = null;
+    try { nb = n.getBoundingClientRect(); } catch (e) { nb = null; }
+    if (!nb) return clip;
+    var out = { l: clip.l, t: clip.t, r: clip.r, b: clip.b };
+    if (ox !== 'visible') { out.l = Math.max(out.l, nb.left); out.r = Math.min(out.r, nb.left + nb.width); }
+    if (oy !== 'visible') { out.t = Math.max(out.t, nb.top); out.b = Math.min(out.b, nb.top + nb.height); }
+    return out;
+  }
+
   function textLineRects(el) {
     var rects = [], nodes = 0;
-    function walk(n, depth) {
+    function walk(n, depth, clip) {
       if (depth > 12 || nodes > TEXT_MAX_NODES) return;
       var kids = n.childNodes;
       if (!kids || !textShown(n)) return;
+      clip = narrowClip(n, clip);
       for (var i = 0; i < kids.length; i++) {
         var k = kids[i];
         if (k.nodeType === 3) {
@@ -566,16 +594,18 @@ export function pageExpression(expect?: string): string {
           var rs = range.getClientRects();
           for (var r = 0; rs && r < rs.length; r++) {
             var q = rs[r];
-            if (q.width >= TEXT_MIN && q.height >= TEXT_MIN) {
-              rects.push({ left: q.left, top: q.top, width: q.width, height: q.height });
+            var ql = Math.max(q.left, clip.l), qt = Math.max(q.top, clip.t);
+            var qw = Math.min(q.left + q.width, clip.r) - ql, qh = Math.min(q.top + q.height, clip.b) - qt;
+            if (qw >= TEXT_MIN && qh >= TEXT_MIN) {
+              rects.push({ left: ql, top: qt, width: qw, height: qh });
             }
           }
         } else if (k.nodeType === 1) {
-          walk(k, depth + 1);
+          walk(k, depth + 1, clip);
         }
       }
     }
-    try { walk(el, 0); } catch (e) { return []; }
+    try { walk(el, 0, { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity }); } catch (e) { return []; }
     if (rects.length > TEXT_MAX_LINES) {
       var thin = [];
       for (var t = 0; t < TEXT_MAX_LINES; t++) {
@@ -607,7 +637,11 @@ export function pageExpression(expect?: string): string {
     var vp = viewport();
     var coverers = {}, clippers = {};
 
-    // Put one point through the hit-test and tally what it found.
+    // Put one point through the hit-test and tally what it found. In text mode
+    // (textMode), a point outside the control's own box that found an ANCESTOR
+    // is not counted: the words run past the box in plain overflow:visible
+    // paint, nothing hides them, and the ancestor is only what lies behind.
+    var textMode = false;
     function samplePoint(x, y) {
       if (x < 0 || y < 0 || x >= vp.w || y >= vp.h) { out.points.offscreen++; return; }
       var hit = null;
@@ -616,6 +650,7 @@ export function pageExpression(expect?: string): string {
       if (hit === el || (el.contains && el.contains(hit))) { out.points.visible++; return; }
       var name = describeCoverer(hit, el);
       if (hit.contains && hit.contains(el)) {
+        if (textMode && (x < b.left || x >= b.left + b.width || y < b.top || y >= b.top + b.height)) return;
         out.points.clipped++;
         clippers[name] = (clippers[name] || 0) + 1;
       } else {
@@ -624,21 +659,7 @@ export function pageExpression(expect?: string): string {
       }
     }
 
-    var lines = textLineRects(el);
-    if (lines.length) {
-      // Words decide: three points along the middle of each line box. A point
-      // inside the box but outside every line (padding, line spacing) is not
-      // sampled, so an icon over the padding no longer counts as covering.
-      out.sample = 'text';
-      for (var li = 0; li < lines.length; li++) {
-        var L = lines[li];
-        var tin = Math.min(TEXT_INSET, L.width / 4);
-        var ty = L.top + L.height / 2;
-        samplePoint(L.left + tin, ty);
-        samplePoint(L.left + L.width / 2, ty);
-        samplePoint(L.left + L.width - tin, ty);
-      }
-    } else {
+    function sampleBox() {
       out.sample = 'box';
       var x0 = b.left, x1 = b.left + b.width, y0 = b.top, y1 = b.top + b.height;
       var inset = Math.min(INSET_MAX, Math.max(INSET_MIN, Math.min(b.width, b.height) * INSET_RATIO));
@@ -650,6 +671,28 @@ export function pageExpression(expect?: string): string {
       for (var yi = 0; yi < 3; yi++) {
         for (var xi = 0; xi < 3; xi++) samplePoint(xs[xi], ys[yi]);
       }
+    }
+
+    var lines = textLineRects(el);
+    if (lines.length) {
+      // Words decide: three points along the middle of each line box. A point
+      // inside the box but outside every line (padding, line spacing) is not
+      // sampled, so an icon over the padding no longer counts as covering.
+      out.sample = 'text';
+      textMode = true;
+      for (var li = 0; li < lines.length; li++) {
+        var L = lines[li];
+        var tin = Math.min(TEXT_INSET, L.width / 4);
+        var ty = L.top + L.height / 2;
+        samplePoint(L.left + tin, ty);
+        samplePoint(L.left + L.width / 2, ty);
+        samplePoint(L.left + L.width - tin, ty);
+      }
+      textMode = false;
+      // Every point ran past the box: nothing to judge by words, judge the box.
+      if (out.points.visible + out.points.covered + out.points.clipped + out.points.offscreen === 0) sampleBox();
+    } else {
+      sampleBox();
     }
     var total = out.points.visible + out.points.covered + out.points.clipped + out.points.offscreen;
     out.visiblePercent = total ? Math.round((out.points.visible / total) * 100) : 0;
@@ -1050,6 +1093,13 @@ export interface QuickAccessProbe {
    */
   visibilityState?: string;
   paneCount?: number;
+  /**
+   * Whether Decky's own pane (`quickaccess_content_999`) is mounted in the page,
+   * which is how its tab shows on the rail: after a plugin reload the tab can
+   * be missing for a minute or more. Meaningful only while a pane is on screen
+   * (a shut menu may mount none); absent in payloads from older fakes.
+   */
+  deckyPaneMounted?: boolean;
   waitedMs: number;
   reason?: string;
 }
@@ -1119,9 +1169,10 @@ export async function probeQuickAccess(
     "for (var i = 0; i < panes.length; i++) { var r = panes[i].getBoundingClientRect(); " +
     "if (r.width > 0 && r.height > 0) { visible = panes[i].id.replace('quickaccess_content_', ''); break; } } " +
     "return { visiblePane: visible, ownsFocus: !!document.querySelector('.gpfocus'), " +
-    "visibilityState: String(document.visibilityState), paneCount: panes.length }; })()";
+    "visibilityState: String(document.visibilityState), paneCount: panes.length, " +
+    "deckyPaneMounted: !!document.getElementById('quickaccess_content_999') }; })()";
   try {
-    const page = await evaluate<{ visiblePane?: unknown; ownsFocus?: unknown; visibilityState?: unknown; paneCount?: unknown }>(
+    const page = await evaluate<{ visiblePane?: unknown; ownsFocus?: unknown; visibilityState?: unknown; paneCount?: unknown; deckyPaneMounted?: unknown }>(
       rewriteWsHost(qam.webSocketDebuggerUrl!, base),
       expr,
       timeoutMs,
@@ -1134,6 +1185,7 @@ export async function probeQuickAccess(
       ownsFocus: page?.ownsFocus === true,
       ...(typeof page?.visibilityState === "string" ? { visibilityState: page.visibilityState } : {}),
       ...(typeof page?.paneCount === "number" ? { paneCount: page.paneCount } : {}),
+      ...(typeof page?.deckyPaneMounted === "boolean" ? { deckyPaneMounted: page.deckyPaneMounted } : {}),
       waitedMs: Date.now() - started,
     };
   } catch (err) {

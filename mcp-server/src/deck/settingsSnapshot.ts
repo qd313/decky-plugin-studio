@@ -37,6 +37,7 @@
  * real Deck. See this lane's report for the honest limits.
  */
 import { ChildProcess, spawn } from "child_process";
+import { checkTarFile } from "./tarCheck.js";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -51,6 +52,8 @@ import {
   TakeReport,
   restoreSnapshot,
   takeSnapshot,
+  UnrestorableSnapshotError,
+  describeAge,
 } from "./snapshotLease.js";
 
 export interface SettingsSnapshotValues {
@@ -84,9 +87,25 @@ export const streamProc = {
   },
 };
 
+/** Seam over the check that a saved copy is a whole tar archive before it is sent back. Tests that use
+ * stand-in bytes instead of a real archive swap `verify`; the real one is what runs in production. */
+export const archiveCheck = {
+  verify: checkTarFile,
+};
+
 const SETTINGS_KIND = "settings-hold";
 export const RESTORE_SETTINGS_TOOL_HINT = "deck_restoreSettings";
 const DEFAULT_TTL_MINUTES = 30;
+
+/**
+ * The oldest earlier snapshot a new snapshot will put back on its own. A snapshot's lease is 30
+ * minutes, and putting an expired one back is meant to heal a test round that was abandoned
+ * (a crashed chat, a closed laptop) from the same working session. After a few hours the Deck's
+ * settings have legitimately moved on (a person changed one, an update ran), and putting a copy
+ * back would silently undo that: a whole, valid copy from ten days ago would overwrite ten days of
+ * changes. Older than this it is set aside, never sent, and deck_restoreSettings by hand still works.
+ */
+export const MAX_AUTO_RESTORE_AGE_MS = 6 * 60 * 60_000;
 
 /** Both settings and data live directly under here, so one `-C` root lets a
  * single tar call pack (or unpack) both without their identical basenames
@@ -483,6 +502,17 @@ async function readCurrentSettings(includeData: boolean): Promise<SettingsSnapsh
   };
 }
 
+/** The saved copy must be a whole tar archive before any of it is sent. A damaged one (its checksum can still match
+ * its own damaged bytes) is a reason to stop here, with nothing sent, not a tar error from the Deck. */
+async function assertWholeArchive(archivePath: string): Promise<void> {
+  const check = await archiveCheck.verify(archivePath);
+  if (check.ok) return;
+  throw new UnrestorableSnapshotError(
+    `The saved settings copy at ${archivePath} is damaged and cannot be put back: ${check.reason} ` +
+      `(entry ${check.entry}, byte ${check.offsetBytes}). Nothing was sent to the Deck.`
+  );
+}
+
 /**
  * Push a previously-captured archive back onto the Deck.
  *
@@ -519,6 +549,7 @@ async function applySettings(values: SettingsSnapshotValues): Promise<void> {
       throw missing(err);
     }
     if (sha256 !== values.sha256) throw mismatch(sha256);
+    await assertWholeArchive(values.archivePath);
     await streamFileToSsh(
       streamSshArgs(user, host, pushRemoteScript(remoteDirs, remoteStageDir(), false)),
       values.archivePath
@@ -532,6 +563,7 @@ async function applySettings(values: SettingsSnapshotValues): Promise<void> {
     }
     const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
     if (sha256 !== values.sha256) throw mismatch(sha256);
+    await assertWholeArchive(values.archivePath);
     proc.execSync(pushSettingsCommand(user, host, remoteDirs, remoteStageDir()), {
       input: buf.toString("base64"),
       encoding: "utf8",
@@ -585,6 +617,7 @@ export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Prom
     kind: SETTINGS_KIND,
     restoreToolHint: RESTORE_SETTINGS_TOOL_HINT,
     ttlMinutes,
+    maxAutoRestoreAgeMs: MAX_AUTO_RESTORE_AGE_MS,
     readCurrent: () => readCurrentSettings(includeData),
     apply: applySettings,
   };
@@ -598,12 +631,22 @@ export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Prom
   const summary =
     `copied ${report.previous.remoteSettingsDir}` +
     (report.previous.remoteDataDir ? ` and ${report.previous.remoteDataDir}` : "") +
-    ` (${report.previous.sizeBytes} bytes, ${method}: ${methodNote}) to ${report.path}. Call ${RESTORE_SETTINGS_TOOL_HINT} ` +
+    ` (${report.previous.sizeBytes} bytes, ${method}: ${methodNote}) to ${report.path} (the saved copy is ${report.previous.archivePath}). Call ${RESTORE_SETTINGS_TOOL_HINT} ` +
     `to put it back -- it also restores itself automatically at ${report.expiresAt} if nothing ` +
     "calls it first." +
     (report.autoRestoredExpired
       ? ` Note: an earlier snapshot from ${report.autoRestoredExpired.at} had expired and was ` +
         "restored first."
+      : "") +
+    (report.setAsideStale
+      ? ` Note: an old snapshot from ${report.setAsideStale.takenAt} (${describeAge(report.setAsideStale.ageMs)} old) was set aside, ` +
+        `not restored, because it is older than ${describeAge(MAX_AUTO_RESTORE_AGE_MS)}; it is kept at ${report.setAsideStale.file}. ` +
+        `Call ${RESTORE_SETTINGS_TOOL_HINT} by hand only if you want it back. The Deck was not touched by that.`
+      : "") +
+    (report.setAsideUnrestorable
+      ? ` Note: an earlier snapshot from ${report.setAsideUnrestorable.at} had expired but its saved copy is ` +
+        `damaged, so it could not be put back and was moved aside to ${report.setAsideUnrestorable.file}. ` +
+        "The Deck was not touched by that."
       : "");
 
   return { ...report, summary, method, methodNote };
