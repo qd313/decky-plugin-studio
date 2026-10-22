@@ -41,8 +41,16 @@ const {
   pullSettingsCommand,
   pushSettingsCommand,
   streamProc,
+  archiveCheck,
   RESTORE_SETTINGS_TOOL_HINT,
 } = await import("./settingsSnapshot.js");
+const { makeTar } = await import("./__testutil__/tarBuilder.js");
+
+/* Most cases below hand the tool stand-in bytes, not a real tar archive, and are about something else (how the
+ * copy travels, the lease, the checksum). The check that a saved copy is a whole tar archive is switched off for
+ * them; the cases in the "saved copy is checked" section at the end put the real one back. */
+const realArchiveCheck = archiveCheck.verify;
+archiveCheck.verify = async () => ({ ok: true, entries: 0, bytes: 0 });
 
 function makeFixturePlugin(name: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dps-settingssnap-plugin-"));
@@ -295,7 +303,9 @@ fs.writeFileSync(
   STANDIN_SCRIPT,
   [
     'const fs = require("fs");',
-    "const [mode, arg, exitCode, claimSize, claimSha] = process.argv.slice(2);",
+    "const [mode, arg, exitCode, claimSize, claimSha, pattern] = process.argv.slice(2);",
+    // "hostile": every byte value, with CR LF pairs, NULs and Ctrl-Z (what text mode or a shell would mangle).
+    "const at = (k) => pattern === 'hostile' ? (k % 4096 === 0 ? 13 : k % 4096 === 1 ? 10 : k % 4096 === 2 ? 26 : k % 4096 === 3 ? 0 : (Math.imul(k, 1103515245) + 12345 >>> 16) & 255) : k % 251;",
     'if (mode === "out") {',
     "  const total = Number(arg);",
     "  let sent = 0;",
@@ -303,7 +313,7 @@ fs.writeFileSync(
     "  (function pump() {",
     "    while (sent < total) {",
     "      const n = Math.min(chunk.length, total - sent);",
-    "      for (let i = 0; i < n; i++) chunk[i] = (sent + i) % 251;",
+    "      for (let i = 0; i < n; i++) chunk[i] = at(sent + i);",
     "      sent += n;",
     '      if (!process.stdout.write(Buffer.from(chunk.subarray(0, n)))) return process.stdout.once("drain", pump);',
     "    }",
@@ -320,13 +330,18 @@ fs.writeFileSync(
   ].join("\n")
 );
 
-function expectedStandinSha(total: number): string {
+function hostileByte(k: number): number {
+  const m = k % 4096;
+  return m === 0 ? 13 : m === 1 ? 10 : m === 2 ? 26 : m === 3 ? 0 : ((Math.imul(k, 1103515245) + 12345) >>> 16) & 255;
+}
+
+function expectedStandinSha(total: number, hostile = false): string {
   const h = crypto.createHash("sha256");
   const chunk = Buffer.alloc(64 * 1024);
   let sent = 0;
   while (sent < total) {
     const n = Math.min(chunk.length, total - sent);
-    for (let i = 0; i < n; i++) chunk[i] = (sent + i) % 251;
+    for (let i = 0; i < n; i++) chunk[i] = hostile ? hostileByte(sent + i) : (sent + i) % 251;
     h.update(chunk.subarray(0, n));
     sent += n;
   }
@@ -343,6 +358,8 @@ function withStandinSsh(opts: {
   claimedBytes?: number;
   /** The Deck sends no size-and-checksum line at all. */
   noTrailer?: boolean;
+  /** Bytes that text handling would damage: all 256 values, CR LF pairs, NULs, Ctrl-Z. */
+  hostile?: boolean;
   /** Per launch (0-based), overrides for the bytes that arrive and the bytes the Deck claims. */
   perLaunch?: (n: number) => { tarBytes: number; claimedBytes?: number };
 }): {
@@ -368,7 +385,8 @@ function withStandinSsh(opts: {
       pullingOut
         ? [
             STANDIN_SCRIPT, "out", String(sent), String(opts.exitCode ?? 0),
-            ...(opts.noTrailer ? [] : [String(claimed), expectedStandinSha(claimed)]),
+            ...(opts.noTrailer ? [] : [String(claimed), expectedStandinSha(claimed, opts.hostile)]),
+            ...(opts.hostile ? ["hostile"] : []),
           ]
         : [STANDIN_SCRIPT, "in", String(opts.captureFile), String(opts.exitCode ?? 0)],
       { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
@@ -633,3 +651,131 @@ test("the streamed copy asks the Deck for its own size and checksum in the same 
     proc.execSync = original;
   }
 });
+
+// ---------------------------------------------------------------------------
+// The saved copy is checked, and a damaged one cannot block every later snapshot
+// (plan 97, Deck block A, 2026-10-22). Three snapshots of the 226 MB folder all
+// failed with "The streamed restore to the Deck failed ... tar: Skipping to next
+// header". The failing step was not the new copy: a run file from 2026-10-12 was
+// still on this PC, expired, pointing at an archive that was damaged 148 MB in.
+// Every snapshot first puts an expired one back; the Deck's tar choked on that
+// archive, the call failed, the run file stayed, and the next call did it again.
+// ---------------------------------------------------------------------------
+
+const sampleTar = () =>
+  makeTar([
+    { name: "settings/bonsAI/settings.json", data: Buffer.from('{"a":1}') },
+    { name: "data/bonsAI/blob.bin", data: Buffer.alloc(20_000, 7) },
+  ]);
+
+/** Takes a buffered snapshot of `tarBytes`, then lets its lease run out. */
+async function takeThenExpire(tarBytes: Buffer, clock: { t: number }): Promise<string> {
+  const { result } = await withFakeExec(() => tarBytes.toString("base64"), () =>
+    snapshotSettings({ ttlMinutes: 1, now: () => clock.t })
+  );
+  clock.t += 5 * 60_000;
+  return result.previous.archivePath;
+}
+
+test("an expired snapshot whose saved copy is damaged does not block the next snapshot: it is set aside, nothing goes to the Deck, and the new copy's path comes back", async () => {
+  archiveCheck.verify = realArchiveCheck;
+  const clock = { t: 1_700_000_000_000 };
+  const damaged = sampleTar();
+  damaged[512 + 512 + 5] ^= 0xff; // the second header, as on the Deck night
+  const oldArchive = await takeThenExpire(damaged, clock);
+
+  const TAR_BYTES = 24 * 1024 * 1024;
+  const original = proc.execSync;
+  const pushes: string[] = [];
+  proc.execSync = ((cmd: string, opts: { maxBuffer: number } & Record<string, unknown>) => {
+    if (cmd.includes("tar xf -")) pushes.push(cmd);
+    return realBufferedExecPrinting((maxBuffer) => maxBuffer + 1)(cmd, opts as never);
+  }) as unknown as typeof proc.execSync;
+  const standin = withStandinSsh({ tarBytes: TAR_BYTES });
+  try {
+    const result = await snapshotSettings({ ttlMinutes: 1, now: () => clock.t });
+    assert.equal(result.method, "streamed");
+    assert.equal(result.previous.sizeBytes, TAR_BYTES);
+    assert.ok(result.path.endsWith("settings-hold.json"), "the run file for the new copy is returned");
+    assert.ok(fs.existsSync(result.previous.archivePath), "and the saved copy is on disk");
+    assert.equal(result.autoRestoredExpired, null);
+    assert.ok(result.setAsideUnrestorable, "the report says the old one was set aside");
+    assert.match(result.setAsideUnrestorable!.reason, /damaged/);
+    assert.ok(fs.existsSync(result.setAsideUnrestorable!.file), "kept for a person to look at");
+    assert.match(result.summary, /moved aside/);
+    assert.deepEqual(pushes, [], "nothing was sent to the Deck's live folder");
+    assert.equal(standin.scripts.length, 1, "the only ssh call was the copy off the Deck");
+    assert.ok(fs.existsSync(oldArchive), "the damaged archive itself is not deleted");
+  } finally {
+    standin.restore();
+    proc.execSync = original;
+    archiveCheck.verify = async () => ({ ok: true, entries: 0, bytes: 0 });
+  }
+});
+
+test("restoreSettings on a damaged saved copy sends nothing, says so, and clears the way instead of failing forever", async () => {
+  archiveCheck.verify = realArchiveCheck;
+  try {
+    const clock = { t: 1_700_000_000_000 };
+    const damaged = sampleTar().subarray(0, 9000);
+    await takeThenExpire(damaged, clock);
+    const { result, calls } = await withFakeExec(() => "", () => restoreSettings());
+    assert.equal(result.restored, false);
+    assert.match(result.summary, /damaged/);
+    assert.match(result.summary, /Deck was not touched/);
+    assert.equal(calls.length, 0, "no ssh call at all");
+    assert.equal(fs.existsSync(snapshotPath("settings-hold")), false, "the run file is no longer in the way");
+    const again = await withFakeExec(() => "", () => restoreSettings());
+    assert.equal(again.result.restored, false);
+  } finally {
+    archiveCheck.verify = async () => ({ ok: true, entries: 0, bytes: 0 });
+  }
+});
+
+test("a whole saved copy is still put back, with the real check on", async () => {
+  archiveCheck.verify = realArchiveCheck;
+  try {
+    const clock = { t: 1_700_000_000_000 };
+    const tar = sampleTar();
+    await takeThenExpire(tar, clock);
+    const { result, calls } = await withFakeExec(() => tar.toString("base64"), () =>
+      snapshotSettings({ ttlMinutes: 1, now: () => clock.t })
+    );
+    assert.ok(result.autoRestoredExpired);
+    assert.equal(result.setAsideUnrestorable, undefined);
+    assert.equal(calls.find((c) => c.cmd.includes("tar xf -"))?.input, tar.toString("base64"));
+  } finally {
+    archiveCheck.verify = async () => ({ ok: true, entries: 0, bytes: 0 });
+  }
+});
+
+test("a 226 MB folder of bytes that text handling would mangle (CR LF, NUL, Ctrl-Z, every value) is saved whole through the streamed path, checked against the Deck's checksum", async () => {
+  const TAR_BYTES = 226 * 1024 * 1024;
+  const original = proc.execSync;
+  proc.execSync = realBufferedExecPrinting((maxBuffer) => maxBuffer + 1);
+  const standin = withStandinSsh({ tarBytes: TAR_BYTES, hostile: true });
+  try {
+    const result = await snapshotSettings();
+    assert.equal(result.method, "streamed");
+    assert.equal(result.previous.sizeBytes, TAR_BYTES);
+    const wantSha = expectedStandinSha(TAR_BYTES, true);
+    assert.equal(result.previous.sha256, wantSha);
+    assert.equal(fs.statSync(result.previous.archivePath).size, TAR_BYTES);
+    assert.equal(await hashOnDisk(result.previous.archivePath), wantSha, "byte for byte");
+    assert.ok(result.path, "the tool hands back the run file path");
+    assert.match(result.summary, new RegExp(result.previous.archivePath.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")));
+  } finally {
+    standin.restore();
+    proc.execSync = original;
+  }
+});
+
+function hashOnDisk(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash("sha256");
+    fs.createReadStream(file)
+      .on("data", (c) => h.update(c))
+      .on("error", reject)
+      .on("end", () => resolve(h.digest("hex")));
+  });
+}
