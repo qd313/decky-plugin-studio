@@ -322,8 +322,9 @@ for axes what `mask` does for bits, for mapping a host that disagrees. Every
 reply now carries `ax`, so a reply without it means the board runs a program
 from before 2026-10-08; `deck_pressButton` says so in its refusal.
 
-**Rest is -127, not 0, from `06_trigger_rest` (written 2026-10-11, NOT YET
-FLASHED).** `05_triggers` rested both triggers at 0, the middle of the board's
+**Rest is -127, not 0, from `06_trigger_rest` (written 2026-10-11, flashed
+2026-10-24 with the Deck-side cable unplugged; `status` read back
+`ax:[0,0,-127,-127,0,0]` on the fresh boot).** `05_triggers` rested both triggers at 0, the middle of the board's
 -127..127 axes. A whole-range axis read as a trigger runs from the bottom
 (released) to the top (pulled), so 0 is a trigger **half pulled**. Nobody saw it
 in August because SDL reports nothing for an axis that has never moved, so the

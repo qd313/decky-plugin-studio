@@ -640,11 +640,11 @@ Everything here needs the Deck or the person, so it runs alone, one at a time.
    `deck_openPlugin` a reload just happened (`deck/loaderRestart.ts`) lives in one server process's
    memory, so a reload done from the extension is invisible to an agent's server; make it a file
    beside the lease.
-2. **Flash the bridge board** (`59b74b8`, triggers rest at the bottom of their axes, committed
-   2026-10-11 and NOT flashed) and re-test the lone Steam button that stayed shut on 2026-10-11
-   until a replug. The maintainer's hands; the cause is still not proven. While flashing: the
-   board's `status` reply carries no program version, so the server cannot tell `05_triggers` from
-   `06_trigger_rest` and refuses LT/RT by guesswork; add the version to the reply in the same flash.
+2. **Re-test the lone Steam button.** `06_trigger_rest` (triggers rest at the bottom of their axes)
+   was flashed on 2026-10-24 with the Deck-side cable unplugged; `status` read back `-127` for both
+   triggers. The README's four-step hand test says whether the half-pulled triggers were why the
+   button stayed shut on 2026-10-11. Next time the firmware changes, put the program version in the
+   `status` reply, so the server can tell `05` from `06` instead of reading the resting axes.
 3. **Sleep the Deck and wake it again.** Unchanged from the previous plan; `rtcwake` is proven as
    the way back.
 4. **Type text on the Deck.** bonsAI's device log shows the cost again: "the 'AI is not set up'

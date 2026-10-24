@@ -109,8 +109,8 @@ collide. Nothing here needs the Deck to be built; most can be proven on `this-pc
 
 **Not a lane, on purpose:** the one open consumer-facing bug, `deck_openPlugin` failing in the first
 second after a reload, is an experiment (measure what CEF's debugger does for five seconds after
-`plugin_loader` restarts) and is first in the solo season. Flashing the bridge firmware is the
-maintainer's hands.
+`plugin_loader` restarts) and is first in the solo season. The bridge firmware was flashed on
+2026-10-24; its hand test is the maintainer's.
 
 ### Then: solo season, in this order
 
@@ -119,9 +119,9 @@ maintainer's hands.
    2026-10-22, both failures 1 s after the reload with a debugger connection reset. Measure first,
    then write the wait against the measurement, then teach the fake CEF the measured shape. Done
    when bonsAI's row P89-RIG-OPEN-AFTER-RELOAD reads 3 of 3 on the stricter set.
-2. **Flash the bridge board** (`06_trigger_rest`, committed 2026-10-11, not flashed) and re-test the
-   lone Steam button that stayed shut on 2026-10-11 until a replug. Put the program version in the
-   board's status reply in the same flash, so the server can tell which firmware runs.
+2. **Re-test the lone Steam button** now that `06_trigger_rest` is flashed (2026-10-24): the README's
+   four-step hand test. Next time the firmware changes, put the program version in the board's status
+   reply, so the server can tell which firmware runs instead of guessing from the resting axes.
 3. **Sleep the Deck and wake it again.** `rtcwake` is proven as the way back.
 4. **Type text on the Deck.** Shares the bridge keyboard work with item 3's wake option 1. bonsAI's
    log keeps paying for its absence: a Steam-keyboard check needed the maintainer's own controller,
@@ -423,10 +423,10 @@ Four rules keep that safe:
 - **Fix:** a foreground check in `checkReady` (default on for Windows), a refusal instead of a blind press, the state in `deck_status`, and a local hash for `buildMatches`.
 
 ### A lone Steam-button press reached the Deck and opened no menu, until a replug
-★★ · Open since 2026-10-11 — cause not proven; firmware `06_trigger_rest` written and **NOT FLASHED**
+★★ · Open since 2026-10-11 — cause not proven; firmware `06_trigger_rest` **flashed 2026-10-24**, the hand test is still owed
 - **Seen:** bonsAI's plan 89, Deck blocks 1 and 2. The Deck's input system received one key down and one up (code 316) with nothing extra, and Steam's menu stayed shut; the chord with A still opened the Quick Access menu. After the maintainer unplugged and re-plugged the board's Deck-side cable a lone press opened the menu, and still did after an LT press, so the "triggers rest half pulled" idea (`05_triggers` rests both at 0, the middle of the axis) did not reproduce.
-- **Shipped around it:** `deck_launchGame` falls back to the Home-screen route and `deck_exitGame` to Steam's own close call when the Steam button opens no menu (Fixed 2026-10-11), and firmware `06_trigger_rest` rests the triggers at -127. The board's status reply carries no program version, so the server cannot tell `05` from `06` and refuses LT/RT by guesswork.
-- **Next:** the maintainer flashes `06` (unplug the Deck-side cable first, `bridge/tools/flash.ps1 deck_bridge`), adds the version to the status reply in the same flash, and re-tests the lone press. Item 2 of the solo season.
+- **Shipped around it:** `deck_launchGame` falls back to the Home-screen route and `deck_exitGame` to Steam's own close call when the Steam button opens no menu (Fixed 2026-10-11), and firmware `06_trigger_rest` rests the triggers at -127. The board's status reply carries no program version; today the resting axes are the only tell (`06` rests the triggers at -127, `05` at 0).
+- **2026-10-24:** `06_trigger_rest` flashed with the Deck-side cable unplugged; the board's `status` read back the triggers resting at -127 on the fresh boot. **Next:** plug the cable back and run the README's four-step hand test (lone GUIDE opens the menu; an LT press; lone GUIDE again). If it passes, the half-pulled triggers were the cause and this closes. The program version in the status reply waits for the next firmware change. Item 2 of the solo season.
 
 ### A tool call can hang for half an hour, and the server can drop mid-call
 ★★ · Open — reported 2026-09-19, 2026-09-26 (twice) and 2026-10-22 (twice) — lane D in plan 11
@@ -530,8 +530,8 @@ Kept so a repeat is not a surprise. All from bonsAI's device log unless dated ot
 - **Why:** the lone-Steam-button failure above (2026-10-11). **launchGame:** if the Quick Access menu is open it closes it with the chord and checks; then requires the route `/library/home` and the ring on a tile whose own image names an app (anything else is refused, because reaching Home would need B, which it never presses); walks the shelf RIGHT then LEFT on one budget; reports `via: "home-screen"`. **exitGame:** when GUIDE opens no menu at all, it calls `SteamClient.Apps.TerminateApp` in SharedJSContext, the one scripted path in that file, reported as `via: "steam-close-call"` with fidelity `wire-sent` and a summary starting "closed without the Steam menu".
 - **Device:** unit-tested only; the Deck check is owed. bonsAI closed its own row after the replug restored the button.
 
-**Firmware `06_trigger_rest`: the triggers rest at the bottom of their axes** · ★ (`59b74b8`) — **NOT FLASHED**
-- `05_triggers` rested both triggers at 0, the middle of the axis. Compiled with arduino-cli (373,350 bytes), not flashed, no board touched. The maintainer flashes it: unplug the Deck-side cable, `bridge/tools/flash.ps1 deck_bridge`, plug back in. No unit test exists for the firmware.
+**Firmware `06_trigger_rest`: the triggers rest at the bottom of their axes** · ★ (`59b74b8`) — **flashed 2026-10-24**
+- `05_triggers` rested both triggers at 0, the middle of the axis. Compiled (373,350 bytes) and flashed on 2026-10-24 with the Deck-side cable unplugged, per the README's rule; `status` read back `ax:[0,0,-127,-127,0,0]` on the fresh boot. Whether this was the cause of the shut Steam menu is still the hand test's to say (Open bugs). No unit test exists for the firmware.
 
 ### Fixed 2026-10-08
 
