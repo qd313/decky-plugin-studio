@@ -28,14 +28,16 @@ import path from "node:path";
 import type { ReadFocusResult, LabelSource } from "./readFocus.js";
 import type { PressOptions, PressResult } from "./pressButton.js";
 import type { ReadPageOptions, ReadPageResult } from "./readPage.js";
-import type { RunningApp, LibraryApp, GameSessionOptions } from "./gameSession.js";
+import type { RunningApp, LibraryApp, GameSessionOptions, ExitGameOptions, GameProcess } from "./gameSession.js";
+import type { Machine } from "../machines.js";
 
 const realHome = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "dps-gamesession-"));
 process.env.USERPROFILE = tempHome;
 process.env.HOME = tempHome;
 
-const { launchGame, exitGame, resolveApp, refusalLabel, inMainMenu, ownLabelOf } = await import("./gameSession.js");
+const { launchGame, exitGame, listGames, gridStep, checkGameProcesses, parseGameProcesses, resolveApp, refusalLabel, inMainMenu, ownLabelOf } =
+  await import("./gameSession.js");
 const { getLatchPath } = await import("./killswitch.js");
 
 function assertSandboxed(): void {
@@ -178,7 +180,7 @@ const menuEntry = (label: string): ReadFocusResult =>
     source: "aria-label",
     selector:
       "#MainNavMenuContainer > div.Panel.Focusable:nth-child(1) > div:nth-child(1) > " +
-      `div.Panel.Focusable:nth-child(${label === "Home" ? 2 : 1})`,
+      `div.Panel.Focusable:nth-child(${label === "Home" ? 2 : label === "Library" ? 3 : 1})`,
   });
 
 const panelRow = (i: number): ReadFocusResult =>
@@ -209,7 +211,7 @@ type Event =
   | { type: "read-tile"; appid: number | null }
   | { type: "read-page"; what: string };
 
-type Screen = "qam" | "game" | "main-menu" | "game-panel" | "modal" | "home" | "app-page" | "other";
+type Screen = "qam" | "game" | "main-menu" | "game-panel" | "modal" | "home" | "library" | "app-page" | "other";
 
 interface DeckSpec {
   running?: RunningApp[];
@@ -234,6 +236,23 @@ interface DeckSpec {
   homeShelfIndex?: number;
   /** False: SteamClient.Apps.TerminateApp is missing in SharedJSContext. Default true. */
   closeCall?: boolean;
+  /**
+   * The Library grid, row-major, `gridCols` per row (default 4). NOT a
+   * measurement: the grid's markup was never read on a Deck. Modelled on the
+   * shelf -- each tile's own <img src> carries its app id -- with only the rows
+   * near the ring rendered (`gridRowsRendered`, default 3), so a target far
+   * down the grid is not on the page until the walk gets near it. Default [].
+   */
+  grid?: number[];
+  gridCols?: number;
+  gridRowsRendered?: number;
+  /** The Library opens with the ring on its tab bar, one DOWN above the grid. */
+  libraryStartsOnTab?: boolean;
+  /**
+   * What the machine's process list shows when exitGame asks. Default: asked,
+   * nothing alive. null: the check could not be made.
+   */
+  processes?: GameProcess[] | null;
   onPress?: (button: string, count: number) => void;
 }
 
@@ -242,6 +261,11 @@ function fakeDeck(spec: DeckSpec = {}) {
   const library = spec.library ?? LIBRARY;
   const shelf = spec.shelf ?? [DRG.appid, HL2.appid, BROTATO.appid];
   const nameOf = (id: number): string => library.find((a) => a.appid === id)?.display_name ?? `app ${id}`;
+  const grid = spec.grid ?? [];
+  const cols = spec.gridCols ?? 4;
+  const gridTileAt = (i: number): ReadFocusResult =>
+    ring(nameOf(grid[i]), { selector: `#LibraryGrid > div.Panel.Focusable:nth-child(${i + 1})` });
+  const LIBRARY_TAB = ring("Great on Deck", { selector: "#LibraryTabs > div.Panel.Focusable:nth-child(1)" });
   const tileAt = (i: number): ReadFocusResult =>
     ring(nameOf(shelf[i]), {
       selector: `div.Panel.Focusable:nth-child(1) > div:nth-child(2) > div.Panel.Focusable:nth-child(${i + 1})`,
@@ -255,6 +279,8 @@ function fakeDeck(spec: DeckSpec = {}) {
     panelIndex: number;
     appPage: number;
     spent: boolean;
+    /** Index into the grid under the ring; -1 is the tab bar above it. */
+    gridIndex: number;
   } = {
     screen: spec.screen ?? (running.length ? "game" : "qam"),
     focus: spec.focus ?? (running.length ? NO_RING : QAM_START),
@@ -264,6 +290,7 @@ function fakeDeck(spec: DeckSpec = {}) {
     appPage: 0,
     /** Set if A ever lands on Install/Update/Buy -- the thing that must never happen. */
     spent: false,
+    gridIndex: 0,
   };
   const events: Event[] = [];
   const presses: string[] = [];
@@ -290,9 +317,18 @@ function fakeDeck(spec: DeckSpec = {}) {
           st.screen = running.length ? "game" : "qam";
           st.focus = running.length ? NO_RING : QAM_START;
         } else if (b === "UP") {
-          if (label() === "Home" && running.length) st.focus = menuEntry(running[0].display_name);
+          // The column: [the running game's entry], Home, Library.
+          if (label() === "Library") st.focus = menuEntry("Home");
+          else if (label() === "Home" && running.length) st.focus = menuEntry(running[0].display_name);
         } else if (b === "DOWN") {
-          if (label() !== "Home") st.focus = menuEntry("Home");
+          if (label() === "Home") st.focus = menuEntry("Library");
+          else if (label() !== "Library") st.focus = menuEntry("Home");
+        } else if (b === "A" && label() === "Library") {
+          st.screen = "library";
+          st.route = "/library";
+          const onTab = spec.libraryStartsOnTab || grid.length === 0;
+          st.gridIndex = onTab ? -1 : 0;
+          st.focus = onTab ? LIBRARY_TAB : gridTileAt(0);
         } else if (b === "RIGHT") {
           if (running.length && label() === running[0].display_name) {
             st.screen = "game-panel";
@@ -332,8 +368,34 @@ function fakeDeck(spec: DeckSpec = {}) {
           st.focus = NO_RING;
         }
         break;
+      case "library": {
+        const i = st.gridIndex;
+        let next = i;
+        if (i < 0) {
+          if (b === "DOWN" && grid.length) next = 0;
+        } else if (b === "RIGHT" && i % cols < cols - 1 && i + 1 < grid.length) next = i + 1;
+        else if (b === "LEFT" && i % cols > 0) next = i - 1;
+        else if (b === "DOWN" && i + cols < grid.length) next = i + cols;
+        else if (b === "UP" && i - cols >= 0) next = i - cols;
+        if (next !== i) {
+          st.gridIndex = next;
+          st.focus = gridTileAt(next);
+        }
+        if (b === "A" && i >= 0) {
+          st.screen = "app-page";
+          st.appPage = grid[i];
+          st.route = `/library/app/${st.appPage}`;
+          st.focus = control(spec.appPageLabel ?? "Play");
+        }
+        break;
+      }
       case "home":
-        if (b === "RIGHT") {
+        // With a game running underneath (a plugin reload left Home in
+        // front, bonsAI 2026-09-25), the menu opens on Home, not on the game.
+        if (b === "GUIDE" && spec.guideOpensMenu !== false) {
+          st.screen = "main-menu";
+          st.focus = menuEntry("Home");
+        } else if (b === "RIGHT") {
           // The last tile stays put: the ring stops producing new elements.
           st.shelfIndex = Math.min(st.shelfIndex + 1, shelf.length - 1);
           st.focus = tileAt(st.shelfIndex);
@@ -433,6 +495,50 @@ function fakeDeck(spec: DeckSpec = {}) {
       events.push({ type: "read-page", what: "route" });
       return ok(st.route);
     }
+    // The tiles read (every tile with its box). Checked before the single-tile
+    // read: it asks .gpfocus too.
+    if (o.expression.includes("gridTiles")) {
+      assert.equal(o.target, "Steam Big Picture Mode");
+      const W = 100;
+      const H = 150;
+      const boxAt = (appid: number, row: number, col: number) => ({ appid, x: col * (W + 10), y: row * (H + 10), w: W, h: H });
+      if (st.screen === "home") {
+        const id = shelf[st.shelfIndex];
+        events.push({ type: "read-tile", appid: id });
+        return ok({
+          ok: true,
+          hasRing: true,
+          text: nameOf(id),
+          focused: { ...boxAt(id, 0, st.shelfIndex), depth: 0, src: `/assets/${id}/library_600x900.jpg` },
+          row: [...shelf],
+          tiles: shelf.map((a, i) => boxAt(a, 0, i)),
+        });
+      }
+      if (st.screen === "library") {
+        const at = st.gridIndex;
+        const ringRow = at < 0 ? 0 : Math.floor(at / cols);
+        const rendered = spec.gridRowsRendered ?? 3;
+        const tiles = grid
+          .map((a, i) => ({ a, i, row: Math.floor(i / cols) }))
+          .filter((t) => t.row >= ringRow - 1 && t.row < ringRow + rendered)
+          .map((t) => boxAt(t.a, t.row, t.i % cols));
+        const id = at >= 0 ? grid[at] : null;
+        events.push({ type: "read-tile", appid: id });
+        return ok({
+          ok: true,
+          hasRing: true,
+          text: id !== null ? nameOf(id) : "Great on Deck",
+          focused:
+            id !== null
+              ? { ...boxAt(id, Math.floor(at / cols), at % cols), depth: 0, src: `/assets/${id}/library_600x900.jpg` }
+              : null,
+          row: null,
+          tiles,
+        });
+      }
+      events.push({ type: "read-tile", appid: null });
+      return ok({ ok: true, hasRing: st.focus.ok, text: "", focused: null, row: null, tiles: [] });
+    }
     if (o.expression.includes("gpfocus")) {
       assert.equal(o.target, "Steam Big Picture Mode");
       const appid = st.screen === "home" ? shelf[st.shelfIndex] : null;
@@ -459,12 +565,18 @@ function fakeDeck(spec: DeckSpec = {}) {
     };
   };
 
-  const seams: GameSessionOptions = {
+  const seams: ExitGameOptions = {
     pressFn,
     chordFn,
     readFocusFn,
     readPageFn,
     sleepFn: async () => {},
+    processCheckFn: async () => {
+      events.push({ type: "read-page", what: "process-check" });
+      return spec.processes === null
+        ? { checked: false, skipped: false, reason: "fake: ssh did not answer" }
+        : { checked: true, processes: spec.processes ?? [], how: "fake pgrep" };
+    },
     cdpUrl: "http://127.0.0.1:1",
     writeEvidence: false,
   };
@@ -700,17 +812,18 @@ test("RULE 2: an app page offering Install instead of Play is refused, and A is 
   assert.ok(r.checklist?.length);
 });
 
-test("a game that is not on the shelf is refused with the tiles seen and the v1 wording", async () => {
-  const deck = fakeDeck({ shelf: [DRG.appid, BROTATO.appid] });
+test("Home-screen route: a game not on the shelf is refused, because the Library is out of reach without the menu", async () => {
+  const deck = fakeDeck({ guideOpensMenu: false, shelf: [DRG.appid, BROTATO.appid], grid: [HL2.appid] });
   const r = await launchGame({ ...deck.seams, name: "Half-Life 2" });
 
   assert.equal(r.ok, false);
   assert.match(r.reason ?? "", /is not on the Recent Games shelf/);
-  assert.match(r.reason ?? "", /play it once by hand/);
-  assert.match(r.reason ?? "", /Library grid/);
-  // Two tiles: one RIGHT reaches the second, the next RIGHT moves nothing, so
-  // the walk ends there -- not at the budget of 40.
-  assert.deepEqual(deck.presses, ["GUIDE", "A", "RIGHT", "RIGHT"]);
+  assert.match(r.reason ?? "", /Library grid cannot be reached on this route/);
+  assert.match(r.reason ?? "", /play it once by hand/i);
+  // Two tiles: RIGHT reaches the second, the next RIGHT moves nothing (the
+  // shelf's end), then LEFT back to the first and once more against the start.
+  assert.deepEqual(deck.presses, ["GUIDE", "GUIDE+A", "RIGHT", "RIGHT", "LEFT", "LEFT"]);
+  assert.ok(!deck.presses.includes("A"));
   assert.ok(r.seen.includes("Deep Rock Galactic: Survivor (2321470)"));
   assert.ok(r.seen.includes("Brotato (1942280)"));
   assert.ok(!r.seen.some((s) => s.includes("220")));
@@ -718,6 +831,200 @@ test("a game that is not on the shelf is refused with the tiles seen and the v1 
   assert.equal(stage?.ok, false);
   assert.match(stage?.detail ?? "", /stopped moving/);
   assert.deepEqual(deck.running, []);
+});
+
+// --------------------------------------------------------------------------
+// launchGame from the Library grid (plan 11 lane F). The grid in the fake is
+// MODELLED ON THE SHELF, not measured: see DeckSpec.grid.
+// --------------------------------------------------------------------------
+
+/** Eight installed titles, none of them recently played: the 2026-09-18 shape. */
+const GOW: RunningApp = { appid: 1593500, display_name: "God of War" };
+const HK: RunningApp = { appid: 367520, display_name: "Hollow Knight" };
+const BMS: RunningApp = { appid: 362890, display_name: "Black Mesa" };
+const DOOM64: RunningApp = { appid: 1148590, display_name: "DOOM 64" };
+const BIG_LIBRARY: LibraryApp[] = [
+  ...LIBRARY,
+  { ...GOW, installed: true },
+  { ...HK, installed: true },
+  { ...BMS, installed: true },
+  { ...DOOM64, installed: true },
+];
+/** Row-major, 4 per row: HL2 sits at row 1, column 2. */
+const GRID = [70, BMS.appid, BROTATO.appid, DRG.appid, DOOM64.appid, GOW.appid, HL2.appid, HK.appid];
+
+test("a game off the shelf is reached through the Library grid: every A after a read, presses bounded, route reported", async () => {
+  const deck = fakeDeck({ library: BIG_LIBRARY, shelf: [DRG.appid, BROTATO.appid], grid: GRID });
+  const r = await launchGame({ ...deck.seams, name: "Half-Life 2" });
+
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.launchRoute, "library");
+  assert.equal(r.via, "steam-menu");
+  assert.deepEqual(deck.running, [HL2]);
+  assert.deepEqual(deck.presses, [
+    "GUIDE", "A", // Home
+    "RIGHT", "RIGHT", // the shelf, to its end
+    "GUIDE", "DOWN", "A", // the menu again, Home -> Library, A
+    "DOWN", "RIGHT", "RIGHT", // the grid: a row down, two columns right
+    "A", "A", // the tile, then Play
+  ]);
+  assert.deepEqual(
+    authorisingReads(deck.events),
+    ["focus:Home", "focus:Library", "tile:220", "focus:Play"],
+    "every A is preceded by the read that named its target, with no press in between",
+  );
+  assert.deepEqual(stageNames(r), [
+    "read-running",
+    "resolve-app",
+    "open-main-menu",
+    "go-home",
+    "find-tile",
+    "open-library",
+    "find-grid-tile",
+    "open-app-page",
+    "press-play",
+  ]);
+  assert.equal(r.stages.find((s) => s.stage === "find-tile")?.ok, false, "the shelf miss is reported as the miss it was");
+  const grid = r.stages.find((s) => s.stage === "find-grid-tile");
+  assert.equal(grid?.ok, true);
+  assert.equal(grid?.presses, 3);
+  assert.match(grid?.detail ?? "", /\/assets\/220\//, "the grid tile was identified by its own image");
+  assert.equal(r.fidelity, "steam-routed");
+  assert.match(r.summary, /from the Library grid/);
+  assert.match(r.summary, /device-unverified/);
+  assert.equal(deck.state.spent, false);
+});
+
+test("a focus read follows every press on the grid walk", async () => {
+  const deck = fakeDeck({ library: BIG_LIBRARY, shelf: [DRG.appid], grid: GRID, libraryStartsOnTab: true });
+  const r = await launchGame({ ...deck.seams, appid: HK.appid });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.launchRoute, "library");
+  // From the tab bar: DOWN into the grid at index 0, DOWN to row 1, RIGHT x3 to HK (index 7).
+  const libraryA = deck.events.findIndex((e) => e.type === "read-focus" && e.label === "Library");
+  const gridEvents = deck.events.slice(libraryA);
+  const gridPresses = gridEvents.filter((e) => e.type === "press" && e.button !== "A");
+  assert.deepEqual(
+    gridPresses.map((e) => (e as { button: string }).button),
+    ["DOWN", "DOWN", "RIGHT", "RIGHT", "RIGHT"],
+  );
+  gridEvents.forEach((e, i) => {
+    if (e.type !== "press" || e.button === "A") return;
+    assert.equal(gridEvents[i + 1]?.type, "read-focus", `press ${i} on the grid was not followed by a focus read`);
+  });
+  assert.deepEqual(deck.running, [HK]);
+});
+
+test("the grid walk scrolls DOWN to a tile that is not on the page yet, then steers to it", async () => {
+  // 40 tiles, 4 per row, only three rows rendered near the ring: the target
+  // at index 37 (row 9) is not in the DOM until the ring is close.
+  const filler = Array.from({ length: 37 }, (_, i) => 500000 + i);
+  const lib: LibraryApp[] = [...BIG_LIBRARY, ...filler.map((a) => ({ appid: a, display_name: `Filler ${a}`, installed: true }))];
+  const deck = fakeDeck({ library: lib, shelf: [DRG.appid], grid: [...filler, BMS.appid, 600001, 600002] });
+  const r = await launchGame({ ...deck.seams, appid: BMS.appid });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.launchRoute, "library");
+  const grid = r.stages.find((s) => s.stage === "find-grid-tile");
+  assert.equal(grid?.presses, 10, "nine rows down and one column right");
+  assert.deepEqual(deck.running, [BMS]);
+});
+
+test("the bounded grid walk refuses after the budget and names the last tile seen", async () => {
+  const filler = Array.from({ length: 60 }, (_, i) => 700000 + i);
+  const lib: LibraryApp[] = [...BIG_LIBRARY, ...filler.map((a) => ({ appid: a, display_name: `Filler ${a}`, installed: true }))];
+  // Doom 64 is installed and on neither the shelf nor the grid (another tab).
+  const deck = fakeDeck({ library: lib, shelf: [DRG.appid], grid: filler });
+  const r = await launchGame({ ...deck.seams, appid: DOOM64.appid, budget: 5 });
+
+  assert.equal(r.ok, false);
+  assert.equal(r.launchRoute, undefined);
+  const grid = r.stages.find((s) => s.stage === "find-grid-tile");
+  assert.equal(grid?.ok, false);
+  assert.equal(grid?.presses, 5, "the walk stopped at its budget");
+  assert.match(grid?.detail ?? "", /budget of 5/);
+  // Five DOWN presses from index 0 land on index 20.
+  assert.match(r.reason ?? "", /last tile seen: Filler 700020 \(700020\)/);
+  assert.match(r.summary, /last tile: Filler 700020/);
+  assert.equal(deck.presses.filter((b) => b === "A").length, 2, "A on Home and A on Library -- never on a tile");
+  assert.deepEqual(deck.running, []);
+  assert.equal(deck.state.spent, false);
+});
+
+test("the grid walk ends when the ring stops moving, naming the last tile", async () => {
+  const deck = fakeDeck({ library: BIG_LIBRARY, shelf: [DRG.appid], grid: [70, BMS.appid] });
+  const r = await launchGame({ ...deck.seams, appid: DOOM64.appid });
+  assert.equal(r.ok, false);
+  const grid = r.stages.find((s) => s.stage === "find-grid-tile");
+  assert.match(grid?.detail ?? "", /did not move DOWN/);
+  assert.match(r.reason ?? "", /last tile seen: Half-Life \(70\)/);
+  assert.equal(deck.presses.filter((b) => b === "A").length, 2);
+});
+
+test("gridStep: off a tile goes DOWN; rows before columns; an unseen target goes DOWN", () => {
+  const at = (appid: number, row: number, col: number) => ({ appid, x: col * 110, y: row * 160, w: 100, h: 150 });
+  const tiles = [at(1, 0, 0), at(2, 0, 1), at(3, 1, 0), at(4, 1, 3)];
+  assert.equal(gridStep(null, tiles, 2).dir, "DOWN");
+  assert.equal(gridStep(at(1, 0, 0), tiles, 2).dir, "RIGHT");
+  assert.equal(gridStep(at(2, 0, 1), tiles, 1).dir, "LEFT");
+  assert.equal(gridStep(at(1, 0, 0), tiles, 4).dir, "DOWN", "a row below wins over the column");
+  assert.equal(gridStep(at(4, 1, 3), tiles, 2).dir, "UP");
+  assert.equal(gridStep(at(1, 0, 0), tiles, 99).dir, "DOWN");
+});
+
+// --------------------------------------------------------------------------
+// deck_listGames
+// --------------------------------------------------------------------------
+
+test("listGames returns installed titles, the shelf and RunningApps with zero presses", async () => {
+  const deck = fakeDeck({
+    library: BIG_LIBRARY,
+    shelf: [DRG.appid, BROTATO.appid],
+    screen: "home",
+  });
+  deck.state.focus = ring("Deep Rock Galactic: Survivor");
+  const r = await listGames({ cdpUrl: deck.seams.cdpUrl, readPageFn: deck.seams.readPageFn });
+
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.presses, 0);
+  assert.deepEqual(deck.presses, [], "nothing was pressed");
+  assert.ok(!deck.events.some((e) => e.type === "press"));
+  assert.equal(r.installed.length, BIG_LIBRARY.filter((a) => a.installed).length);
+  assert.equal(r.notInstalledCount, 1, "Half-Life: Alyx is in the library, not installed, and not listed");
+  assert.ok(!r.installed.some((a) => a.appid === 546560));
+  assert.deepEqual(r.installed.find((a) => a.appid === 220), { appid: 220, name: "Half-Life 2", nonSteam: false });
+  assert.deepEqual(
+    r.installed.filter((a) => a.nonSteam).map((a) => a.appid),
+    [4000000001, 4000000002],
+    "the two GoldenEye shortcuts are non-Steam",
+  );
+  assert.deepEqual(r.recentShelf, [DRG.appid, BROTATO.appid]);
+  assert.deepEqual(r.running, []);
+  assert.equal(r.route, "/library/home");
+  assert.match(r.summary, /nothing was pressed/);
+});
+
+test("listGames off the Home screen says why there is no shelf, and lists what is running", async () => {
+  const deck = fakeDeck({ running: [HL2] });
+  const r = await listGames({ cdpUrl: deck.seams.cdpUrl, readPageFn: deck.seams.readPageFn });
+  assert.equal(r.ok, true);
+  assert.equal(r.recentShelf, null);
+  assert.match(r.recentShelfReason ?? "", /\/apprunning, not the Home screen/);
+  assert.deepEqual(r.running, [{ appid: 220, name: "Half-Life 2" }]);
+  assert.deepEqual(deck.presses, []);
+});
+
+test("listGames reads app_type when allApps carries it", async () => {
+  const deck = fakeDeck();
+  const r = await listGames({
+    cdpUrl: deck.seams.cdpUrl,
+    readPageFn: async (o) => {
+      const base = await deck.seams.readPageFn!(o);
+      if (!o.expression.includes("allApps")) return base;
+      return { ...base, value: [{ appid: 12345, display_name: "Shortcut, low id", installed: true, app_type: 0x40000000 },
+        { appid: 3000000000, display_name: "Steam game, odd id", installed: true, app_type: 1 }] };
+    },
+  });
+  assert.deepEqual(r.installed.map((a) => [a.appid, a.nonSteam]), [[12345, true], [3000000000, false]]);
 });
 
 test("the shelf budget bounds the walk", async () => {
@@ -875,10 +1182,11 @@ test("with the menu already open on Home and a game up, exitGame walks UP to the
   assert.ok(!deck.presses.includes("GUIDE"));
 });
 
-test("GUIDE that does not land on the running game's entry is a refusal", async () => {
-  // Model a Steam build whose menu opens on Home even with a game up.
+test("GUIDE that opens the menu but never reaches the running game's entry is a refusal", async () => {
+  // Model a Steam build whose menu opens on Home even with a game up, and
+  // whose game entry the ring can never be read on.
   const deck = fakeDeck({ running: [HL2] });
-  const seams: GameSessionOptions = {
+  const seams: ExitGameOptions = {
     ...deck.seams,
     readFocusFn: async (base, timeoutMs) => {
       const r = await deck.seams.readFocusFn!(base, timeoutMs);
@@ -887,12 +1195,116 @@ test("GUIDE that does not land on the running game's entry is a refusal", async 
   };
   const r = await exitGame(seams);
   assert.equal(r.ok, false);
-  assert.match(r.reason ?? "", /did not put the ring on a main-menu entry named "Half-Life 2"/);
-  assert.deepEqual(deck.presses, ["GUIDE"]);
+  assert.match(r.reason ?? "", /never reached an entry named "Half-Life 2"/);
+  assert.deepEqual(deck.presses, ["GUIDE", "UP"], "one UP, and the ring read as unmoved, ends the walk");
+  assert.ok(!deck.presses.includes("A"));
   assert.ok(
     !deck.events.some((e) => e.type === "read-page" && e.what === "TerminateApp"),
     "a menu that DID open is a refusal, never a reason to close the game some other way",
   );
+});
+
+test("Home in front of a game still running underneath: the menu opens on Home, and exitGame walks UP and exits", async () => {
+  // bonsAI 2026-09-25 / -26: a plugin reload left Steam's Home screen in
+  // front of the running game, and the exit tool stopped there.
+  const deck = fakeDeck({ running: [HL2], screen: "home" });
+  deck.state.focus = ring("Brotato");
+  deck.state.route = "/library/home";
+  const r = await exitGame(deck.seams);
+
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(deck.presses, ["GUIDE", "UP", "RIGHT", ...Array(7).fill("DOWN"), "A", "A"]);
+  assert.deepEqual(authorisingReads(deck.events), ["focus:Exit game", "focus:Confirm"]);
+  const menu = r.stages.find((s) => s.stage === "open-main-menu");
+  assert.equal(menu?.ok, true);
+  assert.equal(menu?.presses, 2);
+  assert.match(menu?.detail ?? "", /running underneath/);
+  assert.deepEqual(deck.running, []);
+  assert.equal(r.via, "steam-menu");
+});
+
+// --------------------------------------------------------------------------
+// exitGame does not believe an empty RunningApps alone (bonsAI 2026-09-19)
+// --------------------------------------------------------------------------
+
+test("RunningApps empty but a game process alive: processAlive with the pid, no exit claimed, nothing pressed", async () => {
+  const deck = fakeDeck({
+    processes: [
+      {
+        pid: 4242,
+        appid: BMS.appid,
+        command: "/home/deck/.local/share/Steam/ubuntu12_32/reaper SteamLaunch AppId=362890 -- steam-launch-wrapper -- bms.exe",
+      },
+    ],
+  });
+  const r = await exitGame(deck.seams);
+
+  assert.equal(r.ok, false, "an exit must not be claimed while the process is alive");
+  assert.notEqual(r.nothingRunning, true);
+  assert.equal(r.processAlive, true);
+  assert.equal(r.pid, 4242);
+  assert.equal(r.appid, BMS.appid);
+  assert.match(r.reason ?? "", /RunningApps is empty/);
+  assert.match(r.reason ?? "", /pid 4242/);
+  assert.match(r.reason ?? "", /NOT called exited/);
+  assert.match(r.reason ?? "", /nothing was killed/);
+  assert.match(r.processCheck ?? "", /pid 4242/);
+  assert.equal(r.presses, 0);
+  assert.deepEqual(deck.presses, []);
+  assert.ok(!deck.events.some((e) => e.type === "read-page" && e.what === "TerminateApp"), "nothing closed the game");
+  assert.deepEqual(stageNames(r), ["read-running", "process-check"]);
+  assert.equal(r.stages[1].ok, false);
+});
+
+test("RunningApps empty and the process list agrees: nothingRunning, processAlive false", async () => {
+  const deck = fakeDeck();
+  const r = await exitGame(deck.seams);
+  assert.equal(r.ok, true);
+  assert.equal(r.nothingRunning, true);
+  assert.equal(r.processAlive, false);
+  assert.match(r.summary, /process list agrees/);
+  assert.ok(deck.events.some((e) => e.type === "read-page" && e.what === "process-check"));
+});
+
+test("RunningApps empty and the process list could not be asked: processAlive null, and the summary says it rests on RunningApps", async () => {
+  const deck = fakeDeck({ processes: null });
+  const r = await exitGame(deck.seams);
+  assert.equal(r.ok, true);
+  assert.equal(r.nothingRunning, true);
+  assert.equal(r.processAlive, null);
+  assert.match(r.summary, /rests on RunningApps alone/);
+  assert.match(r.processCheck ?? "", /not made/);
+});
+
+test("checkGameProcesses: skipped on Windows, parsed on SteamOS, and a failed SSH is never 'nothing running'", () => {
+  const steamos = { name: "deck", kind: "deck", os: "steamos", local: false, host: "10.0.0.2", user: "deck" } as Machine;
+  const windows = { name: "this-pc", kind: "standin", os: "windows", local: true } as Machine;
+  let asked: string | null = null;
+
+  const win = checkGameProcesses(windows, () => {
+    throw new Error("must not be called on windows");
+  });
+  assert.equal(win.checked, false);
+  assert.ok(!win.checked && win.skipped && /Windows/.test(win.reason));
+
+  const alive = checkGameProcesses(steamos, (_m, cmd) => {
+    asked = cmd;
+    return { status: 0, stdout: "4242 /home/deck/.local/share/Steam/ubuntu12_32/reaper SteamLaunch AppId=362890 -- x\n", stderr: "" };
+  });
+  assert.ok(alive.checked);
+  assert.deepEqual(alive.checked && alive.processes.map((p) => [p.pid, p.appid]), [[4242, 362890]]);
+  assert.match(asked ?? "", /pgrep -af 'SteamLaunch AppId=\[0-9\]'/);
+
+  const none = checkGameProcesses(steamos, () => ({ status: 1, stdout: "", stderr: "" }));
+  assert.ok(none.checked && none.processes.length === 0);
+
+  const down = checkGameProcesses(steamos, () => ({ status: 255, stdout: "", stderr: "ssh: connect to host 10.0.0.2 port 22: Connection timed out" }));
+  assert.equal(down.checked, false, "ssh's 255 is a check not made, not an empty process list");
+  assert.ok(!down.checked && !down.skipped && /255/.test(down.reason) && /timed out/.test(down.reason));
+
+  assert.deepEqual(parseGameProcesses("  17 reaper SteamLaunch AppId=220 -- hl2\n\n"), [
+    { pid: 17, appid: 220, command: "reaper SteamLaunch AppId=220 -- hl2" },
+  ]);
 });
 
 // --------------------------------------------------------------------------

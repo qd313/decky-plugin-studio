@@ -39,7 +39,7 @@ import { diffRpc } from "./rpc/rpcDiff.js";
 import { lintFocus } from "./lint/index.js";
 import { readFocus } from "./deck/readFocus.js";
 import { pressButton, pressChord } from "./deck/pressButton.js";
-import { launchGame, exitGame } from "./deck/gameSession.js";
+import { launchGame, exitGame, listGames } from "./deck/gameSession.js";
 import { assertFocusMove } from "./deck/assertFocusMove.js";
 import { runSequence, SequenceStep } from "./deck/runSequence.js";
 import { openPluginWithRetry } from "./deck/openPluginRetry.js";
@@ -515,6 +515,9 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
       });
+
+    case "tools/deck_listGames":
+      return listGames({ cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined });
 
     case "tools/deck_assertFocusMove":
       return assertFocusMove({
