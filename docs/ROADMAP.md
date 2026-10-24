@@ -3,7 +3,7 @@
 Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) legend (effort/risk, 1 = lowest).
 
 Last full check against the code and against bonsAI's device log: **2026-10-22** (`main` at `43afc0b`,
-version 0.3.11, 493 + 2 tests green). **Decided 2026-10-24: the in-IDE preview is retired** (plan 11, lane G). bonsAI's own record of what each DPS tool did on the real Deck is
+version 0.3.11, 493 + 2 tests green). **2026-10-24: parallel feature session 2 ran and all eight lanes landed on `main`** (`a348319` to `0526765`, 578 tests, 42 tools, VSIX packaged). Everything it built is desk-verified only; the device pass is owed. **The in-IDE preview is retired** (lane G, `9d30a33`). `main` is not pushed: the release workflow would publish `v0.3.11` on the next push because `extension/package.json` changed and that tag does not exist. bonsAI's own record of what each DPS tool did on the real Deck is
 `Documents/bonsAI/docs/mcp-setup.md` § "DPS findings log"; device verdicts below come from there, not
 from commit messages.
 
@@ -20,7 +20,7 @@ from commit messages.
 ## Deferred / shelved
 
 ### The in-IDE preview, and everything that was deferred inside it
-**Retired 2026-10-24** (the maintainer's call). Lane G in [plan 11](planning/11-parallel-feature-session-2.md) removes the 16 `preview_*` tools, the `preview-server` package, the extension's preview panel and the preview test kit, and leaves a short note at `docs/PREVIEW_LIMITATIONS.md`. Reading `.decky/preview.json` stays, because `deck_openPlugin` takes `panelRootSelector` from it.
+**Retired 2026-10-24** (the maintainer's call; removed the same day, `9d30a33`). Lane G in [plan 11](planning/11-parallel-feature-session-2.md) removed the 16 `preview_*` tools, the `preview-server` package, the extension's preview panel and the preview test kit, and leaves a short note at `docs/PREVIEW_LIMITATIONS.md`. Reading `.decky/preview.json` stays, because `deck_openPlugin` takes `panelRootSelector` from it.
 - **Why:** the only consumer stopped using it on 2026-10-17 ([issue #6](https://github.com/qd313/decky-plugin-studio/issues/6)) because it never mounted their panel, and five findings from 2026-08-08 about it reporting fiction were never fixed. On-device QA through the `deck_*` tools is the way.
 - **Retired with it:** *Native Steam Input / HID bridge in preview* (★★★★★★), *Gamescope / QAM compositing in preview* (★★★★★★), *Pixel-perfect `@decky/ui` mocks* (★★★★), the separate-frame half of *Make the preview behave more like Steam*, and *One D-pad test, two runners* (★★★★). The lint rules R13 and R14 stay; they are source-only.
 
@@ -61,7 +61,7 @@ from commit messages.
 - **Verification:** matched a manual `elementFromPoint` probe exactly on bonsAI's Main tab. Two corrections made along the way: the visibility sample inset needed to be a quarter of the short side (2–12px), not a flat 2px, or visible rounded-corner buttons misread as `partial`; and the sweep needed the COM7 press-retry fix below, or it died around press 10–22.
 - **First real finding:** the sweep's first run found 4 chips that are focused but not visible (expected was 0), reproduced byte-for-byte across two runs. Reported to bonsAI as a consumer bug.
 - **Since then, the sampler learned to read where the words are.** The 3×3 box grid read two bonsAI controls as 78–89 % "partial" because a corner icon overlapped their box while their words were clear. Since 2026-10-03 a control with text is sampled along its text lines (`visibility.sample: "text"`), the box grid stays for icons and toggles. On 2026-10-22 the line boxes were further cut down to what the clipping boxes between the control and the text actually show, after every folded section line on bonsAI's Settings tab read 92 % "clipped" under a plain ellipsis. **Proven on the Deck 2026-10-22** (bonsAI row P97-X2-SAMPLER: folded sections 100 %, "text", no clip).
-- **Still pending: the flip.** `requireVisible` was to become fail-by-default "next release" on 2026-08-31. Two releases later it is still off (`runSequence.ts:120`, registry `default: false`). It is fix 3 of lane E in [plan 11](planning/11-parallel-feature-session-2.md).
+- **The flip landed 2026-10-24** (plan 11 lane E, `3d90fc3`): `requireVisible` defaults to ON; `requireVisible: false` opts out per run or per step. A saved check that recorded the old default replays with it. Device-unverified: no sequence with a covered landing has run against the Deck since.
 - **Honest limit:** this is a DOM hit-test, not real eyes — wrong colors or compositing artifacts still need screenshots or a human. It only guarantees that focused-but-occluded and focused-but-offscreen can't pass silently anymore.
 - **Full design:** [06-visibility-oracle-and-free-play-sweep.md](planning/06-visibility-oracle-and-free-play-sweep.md)
 
@@ -83,14 +83,17 @@ hardware actually do" runs alone, as an experiment before it is a feature. One t
 Windows stand-in `this-pc` is the maintainer's own PC, so a lane can now be proven on a real Steam
 client without the Deck, as long as Big Picture is in front and nobody touches the keyboard.
 
-### Next: parallel feature session 2 — eight lanes
+### Done 2026-10-24: parallel feature session 2 — eight lanes landed, device pass owed
 
-Each lane is one subagent in its own worktree, grouped by the files it owns so lanes do not
-collide. Nothing here needs the Deck to be built; most can be proven on `this-pc`.
+Ran in one afternoon from this session. Each lane was one subagent in its own worktree; all eight
+landed on `main` as one squashed commit each (A `a348319`, C `80727db`, B `5877733`, E `3d90fc3`,
+H `a022acb`, G `9d30a33`, F `abb8a86`, D `36600d3`), 493 tests became 578, the VSIX packaged with
+the bundled smoke test green. **Nothing has run on the Deck or the stand-in yet**; phase 2 of the
+plan is the next device session. Outcomes per lane are at the end of the plan.
 
 **Full plan, with the verbatim lane prompts:** [11-parallel-feature-session-2.md](planning/11-parallel-feature-session-2.md)
 
-| Lane | What it covers | Where it is proven |
+| Lane | What it covers | Where it is proven (owed) |
 |------|----------------|--------------------|
 | **A — Stop waiting for frozen pages** | [Issue #4](https://github.com/qd313/decky-plugin-studio/issues/4), part 1. A focus read returns as soon as the first page with the ring has answered, remembers pages that froze, and reports `timedOutPages`. On the stand-in a verified press costs 20–30 s today. | `this-pc`, ~10 min |
 | **B — Do not press blind on a stand-in** | [Issue #5](https://github.com/qd313/decky-plugin-studio/issues/5). `deck_checkReady` and the focus-acquire press refuse when Big Picture is not the front window; `deck_status` says so; `buildMatches` works on a local machine. | `this-pc`, ~10 min |
@@ -101,9 +104,9 @@ collide. Nothing here needs the Deck to be built; most can be proven on `this-pc
 | **G — Retire the preview** | Decided 2026-10-24. Remove the 16 `preview_*` tools, the `preview-server` package, the extension's preview panel and the test kit; keep reading `.decky/preview.json` for `deck_openPlugin`; leave a note where the docs were. | none |
 | **H — A self-check for DPS itself** | `studio_doctor`: config path, version pins, shared ports, scripts, `machines.json`, latch state. Cut from plan 09 for capacity. Plus two one-liners: the extension's "hint" command stops driving, and one-shot extension commands release their lease. | PC, ~5 min |
 
-**Decided 2026-10-24: retire the preview** (lane G). **One call still open for the maintainer:**
+**Decided 2026-10-24: retire the preview** (lane G, done). **One call still open for the maintainer:**
 
-- **Lane F ships device-unverified.** The Library grid has never been read by a tool; the lane
+- **Lane F shipped device-unverified.** The Library grid has never been read by a tool; the lane
   specifies every read the Deck pass must confirm. If that is too much risk for one lane, drop the
   grid route and keep `deck_listGames` and the exit-tool process check.
 
@@ -411,13 +414,13 @@ Four rules keep that safe:
 - The older entry *"intermittently fails to open the QAM"* (2026-08-28, chord delivered before the client could act on it) is this bug's first sighting and is folded in here.
 
 ### Windows stand-in: every focus read waits out the frozen desktop pages, and there is no screenshot
-★★ · Open — [issue #4](https://github.com/qd313/decky-plugin-studio/issues/4), 2026-10-11 — lanes A and C in plan 11
+★★ · Open — [issue #4](https://github.com/qd313/decky-plugin-studio/issues/4), 2026-10-11 — fixes landed 2026-10-24 (plan 11 lanes A and C), stays open until its device pass
 - **Slow:** Steam on Windows lists 24 pages on its debug port; 18 belong to the hidden desktop window and never answer `Runtime.evaluate`. Since 2026-10-08 the read asks all pages at once, but `Promise.all` waits for the slowest, so every read lasts the full 10 s timeout even when the Quick Access page answered in 5 ms. A verified press is three reads: 20–30 s. A 30-press sweep took ten minutes. The 10 s cost is invisible when a page owns the ring (`ok: true`, no timing field).
 - **Blind:** `deck_captureScreenshot` and `deck_record` refuse on `os: "windows"` because the capture scripts need gamescope. Honest, but every stand-in evidence file says "no screenshot was taken". CDP `Page.captureScreenshot` on the Big Picture page needs no compositor.
 - **Fix:** return on the first page with the ring (listing order kept), give a page that froze a short budget next time, report `timedOutPages`; capture through CDP with a window grab as fallback, stamped with the machine.
 
 ### Windows stand-in: nothing checks that Big Picture is the front window
-★★ · Open — [issue #5](https://github.com/qd313/decky-plugin-studio/issues/5), 2026-10-11 — lane B in plan 11
+★★ · Open — [issue #5](https://github.com/qd313/decky-plugin-studio/issues/5), 2026-10-11 — fix landed 2026-10-24 (plan 11 lane B), stays open until its device pass
 - **Problem:** with the Claude window in front of Big Picture, `deck_checkReady { machine: "this-pc" }` passed every check it was given, `deck_readFocus` read "nothing currently owns gamepad focus", and that is the reading every driving tool answers with a blind DOWN press into whatever window is in front. Big Picture's own page reported `visibilityState: "hidden"`, `hasFocus: false`; nothing reads it.
 - **Also:** `buildMatches` on a `local: true` machine returns `unknown: missing host`, so the stand-in sat a day behind the Deck (00:50 vs 17:19 builds) with nothing to say so.
 - **Fix:** a foreground check in `checkReady` (default on for Windows), a refusal instead of a blind press, the state in `deck_status`, and a local hash for `buildMatches`.
@@ -429,37 +432,37 @@ Four rules keep that safe:
 - **2026-10-24:** `06_trigger_rest` flashed with the Deck-side cable unplugged; the board's `status` read back the triggers resting at -127 on the fresh boot. **Next:** plug the cable back and run the README's four-step hand test (lone GUIDE opens the menu; an LT press; lone GUIDE again). If it passes, the half-pulled triggers were the cause and this closes. The program version in the status reply waits for the next firmware change. Item 2 of the solo season.
 
 ### A tool call can hang for half an hour, and the server can drop mid-call
-★★ · Open — reported 2026-09-19, 2026-09-26 (twice) and 2026-10-22 (twice) — lane D in plan 11
+★★ · Open — reported 2026-09-19, 2026-09-26 (twice) and 2026-10-22 (twice) — fix landed 2026-10-24 (plan 11 lane D), stays open until its device pass
 - **Seen:** one `deck_walkTo` hung for 35 minutes and returned nothing. A tool stalled about 29 minutes with no press sent and no error until the next call; by then the screensaver had changed the screen and the session ended early. On 2026-10-22 the tool connection closed mid-call twice, and the chat lost every DPS tool until a new chat was started (the Claude desktop app cannot restart a project's tool server mid-session). On 2026-09-19 the screen connection stopped answering for several minutes while SSH still worked.
 - **Why it can happen:** `index.ts` has no wall-clock deadline per call and no `unhandledRejection` / `uncaughtException` handler, so a stuck read waits forever and one stray rejection ends the process.
 - **Fix:** a deadline per call at the dispatch seam that ends the call with the stage named and the pad released; process-level handlers that log and keep the server up.
 
 ### Two presses sent at once clash on the bridge's own port
-★ · Open — 2026-09-26 — lane D in plan 11
+★ · Open — 2026-09-26 — fix landed 2026-10-24 (plan 11 lane D), stays open until its device pass
 - The lease is per session, so two calls in flight from one session can both reach the board. bonsAI's driver rule since then: one press at a time. The fix is a queue per machine in the server, so the second driving call waits instead of racing.
 
 ### A lease refusal named a holder that was the caller itself
-★ · Open — 2026-10-07 — lane E in plan 11
+★ · Open — 2026-10-07 — fix landed 2026-10-24 (plan 11 lane E), stays open until its device pass
 - One press was refused as "being driven by another session (a process on this desktop)"; `deck_status` a moment later showed the lease as the caller's own; a retry worked. Only one session drove the Deck that night. "Mine" is decided by pid and host (`lease.ts:140`), and Windows recycles pids quickly. Fix: an owner token per server process in the lease record.
 
 ### `deck_exitGame` trusts an empty `RunningApps`, and stops on Home with a game underneath
-★★ · Open — 2026-09-19, 2026-09-25 (twice), 2026-09-26 (twice) — lane F in plan 11
+★★ · Open — 2026-09-19, 2026-09-25 (twice), 2026-09-26 (twice) — fix landed 2026-10-24 (plan 11 lane F), stays open until its device pass
 - Mid-Black Mesa the screen connection dropped; when it came back `RunningApps` read empty while the Black Mesa process ran at full CPU on its own menu, 32 minutes after the last press. The tool believed the list; the session killed the process over SSH by hand. Separately, after a plugin reload left Steam's Home in front of a running game, the exit tool stopped on Home four times and the driver exited by hand. Fix: check the process list over SSH before declaring nothing running; continue the exit route when `RunningApps` says a game is underneath.
 
 ### `deck_getEnv` reports `pluginLoaderActive: "inactive inactive"` while the loader runs
-★ · Open since 2026-08-28 (bonsAI finding P2-5) — lane E in plan 11
+★ · Open since 2026-08-28 (bonsAI finding P2-5) — fix landed 2026-10-24 (plan 11 lane E), stays open until its device pass
 - `tools/deckAutonomy.ts:270` runs `systemctl --user is-active plugin_loader.service || echo inactive`. The unit is system scope, so the `--user` half prints `inactive`, exits non-zero, and the `|| echo` prints a second one. It is the first field anyone reads when a deploy or an open fails, and it points away from the cause.
 
 ### A second settings snapshot taken for proof is refused until the first is restored
-★ · Open — 2026-10-22 — lane E in plan 11
+★ · Open — 2026-10-22 — fix landed 2026-10-24 (plan 11 lane E), stays open until its device pass
 - The refuse-while-unrestored rule is right for a run and wrong for a proof: to take three snapshots in a row the driver moved the hold file aside by hand. Fix: `replace: true` sets the earlier copy aside under a dated name and says so; the default stays refuse.
 
 ### The extension's "Show open plugin hint" command presses buttons and keeps the lease
-★ · Found 2026-10-22 in this audit — lane H in plan 11
+★ · Found 2026-10-22 in this audit — fix landed 2026-10-24 (plan 11 lane H), stays open until its device pass
 - `decky.showOpenPluginHint` (`extension/src/extension.ts:53`) calls `deck_openPlugin {}`, which has driven the Deck by default since v0.3.9, and reads a `checklist` field that only exists on failure. It also takes the machine's lease in the extension's own process, as do the Deploy and Capture commands, and keeps it for up to 10 minutes, during which an agent session's presses are refused naming "another session". The extension's request timeout is 120 s; a worst-case open (45 s restart wait plus a 120 s tab wait plus a retry) runs longer. Fix: `drive: false` in the hint command; release the lease at the end of each one-shot command.
 
 ### The preview reports fiction: five findings from 2026-08-08, never fixed
-★★ · **Closes by retirement** — the preview is removed by lane G in plan 11 (decided 2026-10-24); the only consumer had stopped using it on 2026-10-17 ([issue #6](https://github.com/qd313/decky-plugin-studio/issues/6)). Kept here as the record of why.
+★★ · **Closed 2026-10-24 by retirement** — the preview was removed (`9d30a33`); the only consumer had stopped using it on 2026-10-17 ([issue #6](https://github.com/qd313/decky-plugin-studio/issues/6)). Kept here as the record of why.
 - **P0-1, blocking:** the `@decky/api` shim lacks `useQuickAccessVisible`. A plugin that imports it throws before `mount()` registers its listener, so every IPC command times out at 120 s with the real error only in the iframe console. This is why bonsAI's panel never mounted. One line of shim. Still missing on 2026-10-22 (`preview-server/src/shim/api.ts`).
 - **D1:** `snapshotDom` cuts at 8,000 bytes with no marker (`sandbox-host.tsx:54`), and a plugin's injected `<style>` can be the whole snapshot.
 - **D4:** `preview_captureScreenshot` can return a flat placeholder PNG reading "Decky preview snapshot (placeholder)" (`sandbox-host.tsx:91`) under the name of a screenshot; consumers archived it as evidence.
@@ -485,6 +488,22 @@ Kept so a repeat is not a surprise. All from bonsAI's device log unless dated ot
 ---
 
 ## Fixed bugs
+
+### Landed 2026-10-24 (plan 11, eight parallel lanes) — desk-verified only, no device pass yet
+
+> Per this file's rule, these are "landed", not "fixed": every one passed its unit tests and none has
+> run on the Deck or on `this-pc`. Each stays in Open bugs until bonsAI's log or a run file says what
+> the device did. The honesty paragraphs from the lane reports are in
+> [plan 11 § Outcome](planning/11-parallel-feature-session-2.md#outcome-2026-10-24).
+
+- **A** `a348319` — `deck_readFocus` returns on the first page with the ring, gives a page that froze a 500 ms budget next time, reports `timedOutPages` / `slowestPageMs`, and on Windows asks only Big Picture's pages. Fake-CDP timings: a third-page read 2000 ms → 150 ms.
+- **B** `5877733` — `deck_checkReady` gains `foreground` (default on for Windows), the focus-acquire press refuses when Big Picture is hidden, `deck_status` reports `bigPicture`, and `buildMatches` hashes a local `pluginsDir`.
+- **C** `80727db` — `deck_captureScreenshot` on Windows captures the Big Picture page over CDP (`method: "cdp"`) with a PowerShell window grab as fallback; `verifyPackagedScripts` checks the new script ships.
+- **D** `36600d3` — a wall-clock deadline on every call (`deadlineMs`; 10 min driving, 60 s reads, 30 s status), children killed and the pad released on timeout, process-level crash guards that keep the server up, and one driving call at a time per machine (`waitedForPreviousCallMs`). Known gap: an abandoned call's promise is not stopped, so it could still press after its deadline.
+- **E** `3d90fc3` — `deck_getEnv` reads the loader at system scope (`inactive inactive` gone); `deck_snapshotSettings { replace: true }` sets an unrestored earlier copy aside instead of refusing; `requireVisible` defaults to ON; the lease carries an `ownerToken` so a reused pid cannot look like another session, and a failed lease write no longer leaves a `.tmp` file (five were found on the PC).
+- **F** `abb8a86` — `deck_listGames` (zero presses), a Library-grid launch route (`launchRoute: "shelf" | "library" | "home"`), `deck_exitGame` checks `pgrep` for the game's process when `RunningApps` reads empty (`processAlive`), and continues the exit route when the menu opens on Home over a running game. The grid's DOM shape is a model from the shelf, never measured; ten reads to confirm are listed in the plan.
+- **G** `9d30a33` — the in-IDE preview retired: 16 tools, the `preview-server` package, the extension panel, the test kit and two skills removed; `.decky/preview.json` still read for `panelRootSelector` and `preDeployCommand`. VSIX 32 MB → 8 MB.
+- **H** `a022acb` — `studio_doctor` and the "Decky: Doctor" command (seven checks; six passed on the maintainer's PC the same day, one `unknown`); the extension's hint command passes `drive: false`; its one-shot commands release the lease.
 
 ### Fixed 2026-10-22 (bonsAI's plan 97 night; branch `bonsai-p97`, merge `43afc0b`)
 

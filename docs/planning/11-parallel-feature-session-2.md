@@ -713,3 +713,44 @@ reads them now, so they are worth fixing before the session, in one docs commit:
   entry; `settingsSnapshot.ts:34-37` still says "UNVERIFIED ON HARDWARE"; and
   `openPluginRailWait.test.ts:9` says the tool "presses nothing while the menu is open", which
   stopped being true with the reopen step.
+
+---
+
+## Outcome (2026-10-24)
+
+Run the same day it was approved, from the planning session itself, with `main` at `a1a1af3`. All
+eight lanes were spawned at once (Opus for D and F, Sonnet for the rest) and all eight finished
+inside two hours. Merge order as planned: A, C, B, E, H, G, F, then D last. Conflicts were the
+`test` script line in `mcp-server/package.json` (every lane), the `fakeCdp.ts` test helper (A and
+C, auto-merged), and three files where lane G's removals met other lanes' additions
+(`copy-scripts.mjs`, `index.ts`, `toolRegistry.ts`), all resolved by hand. Tests: 493 → 578 in
+`mcp-server`; the `preview-server` package and its 2 tests are gone. `pnpm build`, the extension
+typecheck and `pnpm run package:vsix` with the bundled smoke test are green. The VSIX is 8.04 MB
+(was 32 MB). Tool count 42.
+
+| Lane | Commit | Tests added | What its honesty paragraph said to check on a device |
+|------|--------|-------------|------------------------------------------------------|
+| A | `a348319` | 6 | Real CEF may reset instead of hang (not marked frozen); target ids may change between listings; the Windows title filter was never run against a real Steam. One verified press sweep on `this-pc` settles it. |
+| B | `5877733` | 19 | Whether `visibilityState` and `hasFocus` really flip when Big Picture is backgrounded (one observation so far); an overlay page in front could still read as foreground. |
+| C | `80727db` | 5 | Whether real Steam answers `Page.captureScreenshot` (a black frame would pass the tests); the window grab has never been executed. |
+| D | `36600d3` | 19 | A timed-out call's promise is abandoned, not stopped, so a late `walkTo` could still press beside the next call; `execSync` paths cannot be interrupted; killing local `ssh` may not stop the remote command. |
+| E | `3d90fc3` | 7 | `systemctl is-active plugin_loader.service` over ssh on the real unit; `replace: true` never ran `tar`; a server restart now reads its own old lease as foreign until the TTL or a forced release. |
+| F | `abb8a86` | 14 | The Library grid is a model built from the shelf. Ten reads listed in the lane report must be confirmed before this is called working, starting with which Library tab opens by default. |
+| G | `9d30a33` | +5, −3 | `deck_openPlugin` still picks up `panelRootSelector` end to end (only an import and a name changed). Consumers' own old pack copies still mention the preview. |
+| H | `a022acb` | 13 | The real Python probe and the real port conflict never ran in tests; `studio_doctor` on the maintainer's PC read 6 ok, 0 failing, 1 unknown the same day. The extension command is compile-checked only. |
+
+**Not pushed, on purpose.** Lanes G and H changed `extension/package.json` (a description and a
+command). `build-vsix.yml` runs on any push to `main` that touches that file and publishes a GitHub
+Release whenever the tag for the current version is missing, and `v0.3.11` was never tagged. A
+push now would release device-unverified code as 0.3.11. The push and the bump are one deliberate
+act after phase 2.
+
+**Also that day:** firmware `06_trigger_rest` was flashed (Deck-side cable unplugged, `status`
+read back the triggers at -127); the Steam-button hand test could not run because a bonsAI session
+held the Deck's lease with Deep Rock Galactic: Survivor running. Six stale branches and their
+worktrees were deleted; issue #2 was closed; `main`'s own `node_modules` had to be reinstalled
+after it emptied while the lanes ran `pnpm install` in worktrees nested under `.claude/worktrees/`
+(cause not found; worth watching next session).
+
+**Phase 2 is unchanged and owed.** First act on the Deck: the four-step hand test for the Steam
+button; then items 5 to 7 above. On `this-pc`: items 1 to 4.
