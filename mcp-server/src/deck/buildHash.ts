@@ -17,6 +17,7 @@
  */
 import crypto from "crypto";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { listDeploySources } from "../deploy/copyManifest.js";
 import { proc, quoteRemotePath } from "../deploy/deployHelpers.js";
@@ -188,6 +189,97 @@ export interface BuildHashResult {
 }
 
 const MISSING_DIR = /no such file or directory/i;
+
+/** Leading `~` in a configured pluginsDir means the home directory, as it does for the remote path. */
+function expandHome(p: string): string {
+  return p === "~" || p.startsWith("~/") || p.startsWith("~\\") ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+/**
+ * The same comparison as verifyDeployedBuild, for a machine that IS this
+ * computer (`local: true`): no ssh, no host. The installed plugin directory is
+ * `<pluginsDir>/<pluginName>`, walked with the same manifest walk (same entries
+ * a deploy copies, same __pycache__ / .pyc exclusions) and hashed the same way.
+ * Never throws; unreadable trees come back as `matches: null`.
+ */
+export function verifyLocalInstalledBuild(
+  pluginRoot: string,
+  pluginName: string,
+  pluginsDir: string,
+): BuildHashResult {
+  let localManifest: ManifestEntry[];
+  try {
+    localManifest = localBuildManifest(pluginRoot);
+  } catch (err) {
+    return {
+      matches: null,
+      localHash: null,
+      remoteHash: null,
+      localCount: 0,
+      remoteCount: 0,
+      reason: `could not read the local build under ${pluginRoot}: ${(err as Error).message}`,
+    };
+  }
+  if (localManifest.length === 0) {
+    return {
+      matches: null,
+      localHash: null,
+      remoteHash: null,
+      localCount: 0,
+      remoteCount: 0,
+      reason: `no deploy sources found under ${pluginRoot} -- run plugin_build first`,
+    };
+  }
+  const localHash = combineManifest(localManifest);
+  const installedDir = path.join(expandHome(pluginsDir), pluginName);
+  if (!fs.existsSync(installedDir)) {
+    return {
+      matches: false,
+      localHash,
+      remoteHash: null,
+      localCount: localManifest.length,
+      remoteCount: 0,
+      reason: `${installedDir} does not exist -- the plugin has not been deployed to this machine`,
+    };
+  }
+  let installedManifest: ManifestEntry[];
+  try {
+    // Only the entries a deploy copies, as on the remote side: a data/ folder
+    // the plugin seeds on its own is invisible here, exactly as it is for ssh.
+    const files = listDeploySources(pluginRoot).flatMap((rel) => listFiles(installedDir, rel));
+    installedManifest = sortEntries(
+      files.map((rel) => ({
+        path: rel,
+        sha256: crypto
+          .createHash("sha256")
+          .update(fs.readFileSync(path.join(installedDir, ...rel.split("/"))))
+          .digest("hex"),
+      })),
+    );
+  } catch (err) {
+    return {
+      matches: null,
+      localHash,
+      remoteHash: null,
+      localCount: localManifest.length,
+      remoteCount: 0,
+      reason: `could not read the installed build under ${installedDir}: ${(err as Error).message}`,
+    };
+  }
+  const installedHash = combineManifest(installedManifest);
+  const matches = localHash === installedHash;
+  return {
+    matches,
+    localHash,
+    remoteHash: installedHash,
+    localCount: localManifest.length,
+    remoteCount: installedManifest.length,
+    reason: matches
+      ? undefined
+      : `local build has ${localManifest.length} file(s) (hash ${localHash.slice(0, 12)}...), the installed ` +
+        `${installedDir} hashes ${installedManifest.length} file(s) to ${installedHash.slice(0, 12)}... -- redeploy`,
+  };
+}
 
 /**
  * Compares the local build's hash to what is actually deployed on the Deck.

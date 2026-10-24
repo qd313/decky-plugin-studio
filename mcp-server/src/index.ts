@@ -49,6 +49,7 @@ import { readPage, waitFor } from "./deck/readPage.js";
 import { closeSharedCdpTunnel, padEndpointIfOpen } from "./deck/cdpTunnel.js";
 import { saveCheck, replayChecks } from "./checks/checkRunner.js";
 import { checkDeckReady, DeclaredState } from "./deck/checkReady.js";
+import { bigPictureStatus } from "./deck/foreground.js";
 import { holdAwake, restorePowerSettings } from "./deck/holdAwake.js";
 import { snapshotSettings, restoreSettings } from "./deck/settingsSnapshot.js";
 import { loadPreviewConfig } from "./preview/previewConfig.js";
@@ -261,6 +262,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         bridgeReason: bridge.reason,
         bridgeProbed: bridge.probed,
         virtualPad,
+        // Windows stand-ins only: is Big Picture the window in front? Absent elsewhere.
+        ...(m.os === "windows" ? { bigPicture: await bigPictureStatus() } : {}),
         lease: lease
           ? {
               owner: lease.owner,
@@ -556,6 +559,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         modalOnScreen: params.modalOnScreen != null ? Boolean(params.modalOnScreen) : undefined,
         focusRingOwned: params.focusRingOwned != null ? Boolean(params.focusRingOwned) : undefined,
         machineKind: params.machineKind != null ? (String(params.machineKind) as MachineKind) : undefined,
+        foreground: params.foreground != null ? Boolean(params.foreground) : undefined,
       };
 
       return checkDeckReady(declared, {

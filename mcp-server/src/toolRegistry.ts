@@ -125,7 +125,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_status",
     description:
-      "Snapshot of the whole dev environment: tunnel running, debug-ingest count and port, whether the Deck answers, whether Ollama is reachable, and whether the ESP32 controller bridge's COM port opens on THIS PC and its firmware answers (bridgePortOpen/bridgePort/bridgeReason). bridgePortOpen says nothing about whether the board's other USB lead reaches the Deck — a board plugged into the PC but unplugged from the Deck still reports it true. `bridgeReady` is the same value under its old, misleading name — deprecated, kept only for an existing consumer (bonsAI); use bridgePortOpen. Cheap — call this first when diagnosing why something is not working.",
+      "Snapshot of the whole dev environment: tunnel running, debug-ingest count and port, whether the Deck answers, whether Ollama is reachable, and whether the ESP32 controller bridge's COM port opens on THIS PC and its firmware answers (bridgePortOpen/bridgePort/bridgeReason). bridgePortOpen says nothing about whether the board's other USB lead reaches the Deck — a board plugged into the PC but unplugged from the Deck still reports it true. `bridgeReady` is the same value under its old, misleading name — deprecated, kept only for an existing consumer (bonsAI); use bridgePortOpen. On a Windows machine it also reports bigPicture: { foreground, visibilityState, hasFocus } -- whether Big Picture is the window in front (foreground is true, false, or 'unknown' when its page cannot be read). Cheap — call this first when diagnosing why something is not working.",
     inputSchema: noArgs,
   },
   {
@@ -807,6 +807,11 @@ export const TOOLS: ToolDef[] = [
           enum: ["deck", "standin"],
           description:
             "The machine this call drives must be the real Deck ('deck') or a stand-in ('standin'). A run whose verdicts must only ever come from the real Deck declares 'deck' and fails at step zero on a stand-in.",
+        },
+        foreground: {
+          type: "boolean",
+          description:
+            "Steam Big Picture must (true) or must not (false) be the foreground window, read from the 'Steam Big Picture Mode' page's visibilityState and hasFocus. Checked by default (as true) on a Windows machine, where Steam only takes pad input while Big Picture is in front; elsewhere only when declared. 'unknown' when that page cannot be read.",
         },
         pluginRoot: {
           type: "string",

@@ -40,6 +40,8 @@ import { earnedFidelity, weakestFidelity, type Fidelity } from "./fidelity.js";
 import { readFocusAt, ReadFocusResult, Visibility } from "./readFocus.js";
 import { focusKey, describe, describeVisibility, labelOfElement } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
+import { readBigPictureForeground, notForegroundSentence } from "./foreground.js";
+import { currentMachineIfAny, resolveMachine } from "../machines.js";
 
 export type WalkDirection = "UP" | "DOWN" | "LEFT" | "RIGHT";
 
@@ -180,6 +182,36 @@ export async function acquireFocusIfUnowned(
 ): Promise<AcquireFocusOutcome> {
   const unowned = !focus.ok && (focus.reason ?? "").includes("gpfocus marker not found");
   if (!unowned) return { focus, acquired: false, presses: 0, fidelity: null };
+
+  // A Windows stand-in only takes pad input while Big Picture is the foreground
+  // window, so a placing press with something else in front goes into THAT
+  // window (issue #5). Check before the first press; refuse on false or unknown.
+  // The reason is appended to focus.reason (keeping the original text) because
+  // the callers surface focus.reason and are not edited for this.
+  let onWindows = false;
+  try {
+    onWindows = (currentMachineIfAny() ?? resolveMachine()).os === "windows";
+  } catch {
+    onWindows = false;
+  }
+  if (onWindows) {
+    const fg = await readBigPictureForeground(opts.cdpBase);
+    if (fg.foreground !== true) {
+      const why =
+        fg.foreground === false
+          ? notForegroundSentence(fg)
+          : `could not tell whether Big Picture is the foreground window (${fg.reason})`;
+      return {
+        focus: {
+          ...focus,
+          reason: `${focus.reason ?? ""}; refused to press: ${why}, so nothing was pressed. Bring Big Picture to the front and try again.`,
+        },
+        acquired: false,
+        presses: 0,
+        fidelity: null,
+      };
+    }
+  }
 
   const press = opts.pressFn ?? pressButton;
   const p = await press({ buttons: [opts.direction], port: opts.port });

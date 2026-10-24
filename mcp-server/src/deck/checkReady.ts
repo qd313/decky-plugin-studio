@@ -44,8 +44,9 @@ import { readFocusAt, DEFAULT_TARGETS_SETTLE_MS, ReadFocusResult } from "./readF
 import { readRunningApps } from "./gameSession.js";
 import { looksLikeOpenPanelFor, panelRootMounted } from "./openPlugin.js";
 import { automationStatus } from "./killswitch.js";
-import { verifyDeployedBuild } from "./buildHash.js";
-import { currentMachine, MachineKind } from "../machines.js";
+import { verifyDeployedBuild, verifyLocalInstalledBuild } from "./buildHash.js";
+import { readBigPictureForeground } from "./foreground.js";
+import { currentMachine, currentMachineIfAny, resolveMachine, Machine, MachineKind } from "../machines.js";
 
 export type Verdict = "pass" | "fail" | "unknown";
 
@@ -87,6 +88,13 @@ export interface DeclaredState {
    * file Deck verdicts declares "deck" and fails at step zero on a stand-in.
    */
   machineKind?: MachineKind;
+  /**
+   * Steam Big Picture must (true) or must not (false) be the foreground window.
+   * Checked by default (as true) when the machine's os is "windows", because a
+   * Windows stand-in only takes pad input while Big Picture is in front; on any
+   * other machine it is checked only when declared.
+   */
+  foreground?: boolean;
 }
 
 export interface CheckReadyOptions {
@@ -152,8 +160,37 @@ async function checkAwake(declared: boolean, pingFn?: () => Promise<boolean>): P
     : fail(declared, actual, `declared the Deck would be ${describe(declared)}, but it is ${describe(actual)}`);
 }
 
+function resolveMachineSafely(): Machine | null {
+  try {
+    return currentMachineIfAny() ?? resolveMachine();
+  } catch {
+    return null;
+  }
+}
+
 function checkBuildMatches(declared: boolean, opts: CheckReadyOptions): FieldCheck {
   const { pluginRoot, pluginName, user, host } = opts;
+  const machine = resolveMachineSafely();
+  if (machine?.local && machine.pluginsDir) {
+    // This process runs on the machine: hash the installed directory directly.
+    // Asking for a host here only ever answered "unknown: missing host".
+    const missingLocal = [!pluginRoot && "pluginRoot", !pluginName && "pluginName"].filter(Boolean);
+    if (missingLocal.length > 0) {
+      return unknown(declared, `cannot verify the installed build: missing ${missingLocal.join(", ")}`);
+    }
+    const local = verifyLocalInstalledBuild(pluginRoot!, pluginName!, machine.pluginsDir);
+    if (local.matches === null) {
+      return unknown(declared, local.reason ?? "could not verify the installed build");
+    }
+    const word = (b: boolean) => (b ? "matches the local build" : "does not match the local build");
+    return local.matches === declared
+      ? pass(
+          declared,
+          local.matches,
+          local.reason ?? `the installed build ${word(local.matches)} (${local.localCount} file(s))`,
+        )
+      : fail(declared, local.matches, local.reason ?? `the installed build ${word(local.matches)}`);
+  }
   const missing = [
     !pluginRoot && "pluginRoot",
     !pluginName && "pluginName",
@@ -315,11 +352,24 @@ function checkMachineKind(declared: MachineKind): FieldCheck {
     : fail(declared, m.kind, `declared a ${declared}, but machine "${m.name}" is a ${m.kind} (${m.os})`);
 }
 
+async function checkForeground(declared: boolean, cdpBase: string, timeoutMs: number): Promise<FieldCheck> {
+  const r = await readBigPictureForeground(cdpBase, { timeoutMs });
+  if (r.foreground === "unknown") return unknown(declared, r.reason);
+  if (r.foreground === declared) {
+    return pass(declared, r.foreground, `${r.reason}${declared ? "" : ", as declared"}`);
+  }
+  return fail(
+    declared,
+    r.foreground,
+    declared ? r.reason : `declared Big Picture would be behind another window, but it is the foreground window`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // The aggregator
 // ---------------------------------------------------------------------------
 
-const CDP_FIELDS = ["runningAppId", "pluginOpen", "modalOnScreen", "focusRingOwned"] as const;
+const CDP_FIELDS = ["runningAppId", "pluginOpen", "modalOnScreen", "focusRingOwned", "foreground"] as const;
 
 function declaredCdpField(declared: DeclaredState, field: (typeof CDP_FIELDS)[number]): boolean {
   return declared[field] !== undefined;
@@ -330,6 +380,12 @@ export async function checkDeckReady(
   opts: CheckReadyOptions = {},
 ): Promise<CheckReadyResult> {
   const checks: Record<string, FieldCheck> = {};
+
+  // A Windows stand-in only takes pad input while Big Picture is in front, so
+  // that is checked unless the caller said otherwise; elsewhere only if asked.
+  if (declared.foreground === undefined && resolveMachineSafely()?.os === "windows") {
+    declared = { ...declared, foreground: true };
+  }
 
   // Cheapest of all: is this even the kind of machine the run is for?
   if (declared.machineKind !== undefined) {
@@ -379,6 +435,9 @@ export async function checkDeckReady(
             })
           : null;
 
+        if (declared.foreground !== undefined) {
+          checks.foreground = await checkForeground(declared.foreground, cdpBase, Math.min(timeoutMs, 4000));
+        }
         if (declared.focusRingOwned !== undefined) {
           checks.focusRingOwned = checkFocusRingOwned(declared.focusRingOwned, focus!);
         }
