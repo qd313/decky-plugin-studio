@@ -57,13 +57,30 @@ import {
   stopAutomation,
   armAutomation,
   automationStatus,
+  releaseAllButtons,
+  releaseVirtualPad,
   StopSource,
 } from "./deck/killswitch.js";
+import {
+  CallClass,
+  guardCall,
+  installChildTracking,
+  installCrashGuards,
+  PadRelease,
+  takeDeadlineArg,
+} from "./callDeadline.js";
+import { MachineCallQueue } from "./callQueue.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 import { buildToolCallContent, buildToolErrorContent } from "./toolContent.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.11" };
+
+// Before anything else can fail: a stray rejection or exception is logged
+// with the tool in flight and the server stays up (callDeadline.ts). Only a
+// failure of the stdio transport itself still exits.
+installCrashGuards();
+installChildTracking();
 
 startIngestServer(Number(process.env.DEBUG_INGEST_PORT ?? 7682));
 
@@ -126,18 +143,68 @@ const REGISTRY_TOOLS: ReadonlySet<string> = new Set([
  * verdict can never be filed as the Deck's.
  */
 async function handle(method: string, params: Record<string, unknown>): Promise<unknown> {
-  if (!method.startsWith("tools/deck_")) return dispatch(method, params);
+  if (!method.startsWith("tools/")) return dispatch(method, params);
   const tool = method.slice("tools/".length);
-  if (REGISTRY_TOOLS.has(tool)) return dispatch(method, params);
 
-  const { machine: machineArg, ...rest } = params;
+  // Plan 11 lane D: every tool call runs under a wall-clock deadline, and a
+  // driving call waits its turn on its machine (callDeadline.ts, callQueue.ts).
+  // The switch in dispatch() is untouched; this only wraps it.
+  const cls = callClassOf(tool);
+  const { deadlineMs, source, rest: args } = takeDeadlineArg(params, cls);
+  if (!tool.startsWith("deck_") || REGISTRY_TOOLS.has(tool)) {
+    return guardCall({ tool, machine: null, cls, deadlineMs, deadlineSource: source, run: () => dispatch(method, args) });
+  }
+
+  const { machine: machineArg, ...rest } = args;
   const machine = resolveMachine(machineArg != null ? String(machineArg) : undefined);
+  const driving = DRIVING_TOOLS.has(tool);
   const result = await runWithMachine(machine, () =>
-    DRIVING_TOOLS.has(tool)
-      ? withLease(machine.name, tool, () => dispatch(method, rest))
-      : dispatch(method, rest),
+    guardCall({
+      tool,
+      machine: machine.name,
+      cls,
+      deadlineMs,
+      deadlineSource: source,
+      queue: driving ? callQueue : undefined,
+      around: driving ? (fn) => withLease(machine.name, tool, fn) : undefined,
+      release: driving ? () => releasePadOf(machine) : undefined,
+      run: () => dispatch(method, rest),
+    }),
   );
   return labelResult(result, machine);
+}
+
+/** One driving call at a time per machine, in this process. */
+const callQueue = new MachineCallQueue();
+
+/**
+ * Not driving, but a restore cut off half way is worse than a slow one, so
+ * these get the driving deadline (without the queue, the lease or a release).
+ */
+const LONG_NON_DRIVING_TOOLS: ReadonlySet<string> = new Set(["deck_restoreSettings", "deck_restorePowerSettings"]);
+
+function callClassOf(tool: string): CallClass {
+  if (DRIVING_TOOLS.has(tool) || LONG_NON_DRIVING_TOOLS.has(tool)) return "driving";
+  if (REGISTRY_TOOLS.has(tool) || tool === "deck_status") return "status";
+  return "read";
+}
+
+/**
+ * After a driving call times out: release whatever the machine presses
+ * through, the same per-transport release deck_stopAutomation runs
+ * (killswitch.ts releaseMachine), but WITHOUT setting the stop latch -- a
+ * timeout is not a stop, and only a human re-arms.
+ */
+function releasePadOf(m: Machine): Promise<PadRelease> {
+  switch (m.press) {
+    case "bridge":
+      return releaseAllButtons(m.bridgePort);
+    case "uinput":
+    case "vigem":
+      return releaseVirtualPad(m, padEndpointIfOpen);
+    default:
+      return Promise.resolve({ attempted: false, ok: true, detail: `"${m.name}" has no press transport; nothing to release` });
+  }
 }
 
 function labelResult(result: unknown, machine: Machine): unknown {

@@ -1046,6 +1046,23 @@ for (const t of TOOLS) {
   };
 }
 
+/**
+ * Every tool takes `deadlineMs` (plan 11, lane D). Described here, once; the
+ * dispatch seam in index.ts reads it and strips it before the tool sees it.
+ */
+const DEADLINE_PARAM = {
+  type: "number",
+  description:
+    "Wall-clock limit for this one call, in milliseconds. Defaults: 10 minutes for driving tools (press, walk, sweep, sequence, open, launch, exit, deploy, snapshot, record...), 30 s for deck_status and the registry/killswitch tools, 60 s for everything else. When it passes the call returns an error naming the tool, the deadline and the last stage it reported; child processes it started are killed and, for a driving tool, the pad is released (the stop latch is NOT set). A driving call that had to wait for an earlier one on the same machine counts the wait against this deadline, and its result says `waitedForPreviousCallMs`: how long it waited, in milliseconds, for the earlier driving call on that machine to finish.",
+};
+for (const t of TOOLS) {
+  if (Object.prototype.hasOwnProperty.call(t.inputSchema.properties, "deadlineMs")) continue;
+  t.inputSchema = {
+    ...t.inputSchema,
+    properties: { ...t.inputSchema.properties, deadlineMs: DEADLINE_PARAM },
+  };
+}
+
 export const TOOL_NAMES: ReadonlySet<string> = new Set(TOOLS.map((t) => t.name));
 
 export function findTool(name: string): ToolDef | undefined {
