@@ -34,6 +34,7 @@ import {
   timestamp,
 } from "./captureOrchestrator.js";
 import { withImage } from "../toolContent.js";
+import { captureStandinWindows } from "../deck/cdpScreenshot.js";
 
 let tunnelProcess: ReturnType<typeof spawn> | null = null;
 /** Registry id of the live ingest tunnel, so the killswitch can reach it. */
@@ -180,9 +181,27 @@ function refuseCaptureOnWindows(m: Machine, tool: string): void {
 export async function captureScreenshot(
   mode: string,
   allowNonPluginUi = false
-): Promise<{ path: string; bytes: number; mode: string; method: string }> {
+): Promise<{ path: string; bytes: number; mode: string; method: string; quickAccessPagePresent?: boolean }> {
   const m = currentMachine();
-  refuseCaptureOnWindows(m, "deck_captureScreenshot");
+  if (m.os === "windows") {
+    // A Windows stand-in has no gamescope or Wayland compositor: take the picture over
+    // Steam's CEF debugger instead, falling back to a PowerShell window grab.
+    const outPath = path.join(getWorkspaceArtifactsDir("screenshots"), `DeckCapture_${timestamp()}_bigpicture.png`);
+    const shot = await captureStandinWindows(
+      { outPath },
+      () => path.join(getScriptsDir(), "standin", "windows", "grab-window.ps1"),
+    );
+    return withImage(
+      {
+        path: shot.path,
+        bytes: shot.bytes,
+        mode: "bigpicture",
+        method: shot.method,
+        quickAccessPagePresent: shot.quickAccessPagePresent,
+      },
+      { path: shot.path },
+    );
+  }
   const host = m.host;
   const user = m.user ?? DEFAULT_SSH_USER;
   const ts = timestamp();

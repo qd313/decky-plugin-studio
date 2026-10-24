@@ -34,6 +34,11 @@ export interface Fake {
 export async function startFakeCdp(
   targetTitles: string[] | (() => string[]),
   pageValue: (title: string, readIndex: number) => unknown,
+  /**
+   * `screenshot`: base64 PNG answered to Page.captureScreenshot, or
+   * `{ __error }` to refuse it the way a page that cannot paint would.
+   */
+  opts: { screenshot?: string | { __error: string } } = {},
 ): Promise<Fake> {
   const sockets = new Set<Socket>();
   let reads = 0;
@@ -120,10 +125,28 @@ export async function startFakeCdp(
       for (let i = 0; i < len; i++) payload[i] = chunk[offset + i] ^ mask[i % 4];
 
       let id = 1;
+      let method = "";
       try {
-        id = JSON.parse(payload.toString("utf8")).id ?? 1;
+        const cmd = JSON.parse(payload.toString("utf8"));
+        id = cmd.id ?? 1;
+        method = cmd.method ?? "";
       } catch {
         /* keep the default */
+      }
+
+      if (method === "Page.captureScreenshot") {
+        const shot = opts.screenshot;
+        const reply =
+          shot === undefined || typeof shot === "object"
+            ? { id, error: { message: typeof shot === "object" ? shot.__error : "'Page.captureScreenshot' wasn't found" } }
+            : { id, result: { data: shot } };
+        const out = Buffer.from(JSON.stringify(reply), "utf8");
+        const hdr = Buffer.alloc(10);
+        hdr[0] = 0x81;
+        hdr[1] = 127;
+        hdr.writeBigUInt64BE(BigInt(out.length), 2);
+        socket.write(Buffer.concat([hdr, out]));
+        return;
       }
 
       // A pageValue of { __throw: "..." } comes back as a real CDP

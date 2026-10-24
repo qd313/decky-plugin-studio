@@ -30,3 +30,6 @@ if (fs.existsSync(syncScript)) {
   fs.mkdirSync(path.join(root, "dist", "scripts"), { recursive: true });
   fs.copyFileSync(syncScript, path.join(root, "dist", "scripts", "sync-rpc-allowlist.mjs"));
 }
+
+// Windows stand-in window grab (deck_captureScreenshot fallback).
+copyRecursive(path.join(root, "scripts", "standin"), path.join(root, "dist", "scripts", "standin"));

@@ -69,6 +69,7 @@ test("fails, naming what's missing, when the scripts directory exists but a requ
       assert.ok(check.missing, "expected the missing list to be populated");
       assert.ok(check.missing!.some((m) => m.includes("studio-capture.sh")));
       assert.ok(check.missing!.some((m) => m.includes("studio-record.sh")));
+      assert.ok(check.missing!.some((m) => m.includes("grab-window.ps1")));
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -84,6 +85,12 @@ test("passes when every required script is present in the packaged bundle", () =
     for (const name of ["studio-capture-common.sh", "studio-capture.sh", "studio-record.sh"]) {
       fs.copyFileSync(path.join(realDeckScripts, name), path.join(deckDir, name));
     }
+    const grabDir = path.join(root, "dist", "scripts", "standin", "windows");
+    fs.mkdirSync(grabDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(mcpServerRoot, "scripts", "standin", "windows", "grab-window.ps1"),
+      path.join(grabDir, "grab-window.ps1"),
+    );
 
     const check = verifyPackagedScripts(root);
     assert.equal(check.ok, true, JSON.stringify(check));

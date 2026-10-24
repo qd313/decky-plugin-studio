@@ -206,7 +206,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_captureScreenshot",
     description:
-      "Take a composited screenshot on the real Deck (QAM and Decky overlays included in game mode) and save it to the workspace screenshots directory. This is on-device capture — for the in-IDE preview use preview_captureScreenshot instead.",
+      "Take a composited screenshot on the real Deck (QAM and Decky overlays included in game mode) and save it to the workspace screenshots directory. This is on-device capture — for the in-IDE preview use preview_captureScreenshot instead. On a Windows stand-in it captures the Big Picture page over Steam's CEF debugger (Page.captureScreenshot, method \"cdp\"), falling back to a PowerShell window grab (method \"window-grab\"); the Quick Access menu is not composited in.",
     inputSchema: {
       type: "object",
       properties: { mode: CAPTURE_MODE, allowNonPluginUi: ALLOW_NON_PLUGIN_UI },
