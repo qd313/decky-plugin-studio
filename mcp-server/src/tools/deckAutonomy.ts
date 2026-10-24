@@ -236,6 +236,15 @@ export function execWithTimeout(cmd: string, timeoutMs: number): { text: string;
 }
 
 /**
+ * One word from `systemctl is-active`: the first line, trimmed. Anything that is not a single
+ * state word (empty because ssh failed, or noise) is "unknown" -- never a guessed "inactive".
+ */
+export function parseIsActive(text: string): string {
+  const first = (text ?? "").split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+  return /^[a-z-]+$/.test(first) ? first : "unknown";
+}
+
+/**
  * Probe a remote Deck over ssh, bounded by an overall deadline. Each of the
  * three ssh calls is given whatever's left of the budget; if any of them times
  * out (or the budget is already spent), the probe stops immediately and reports
@@ -265,12 +274,12 @@ export async function probeRemoteDeck(
   if (deckyResult.timedOut || Date.now() >= deadline) return timedOutResult();
   remote.homebrewPresent = deckyResult.text || "unknown";
 
-  const loaderResult = exec(
-    `ssh ${user}@${host} "systemctl --user is-active plugin_loader.service 2>/dev/null || echo inactive"`,
-    remaining()
-  );
+  // plugin_loader is a SYSTEM unit, so no `--user`. `is-active` prints one word and exits
+  // non-zero for anything but "active", so no `|| echo` (that doubled the word). No output at
+  // all means ssh itself failed: report "unknown", never a made-up "inactive".
+  const loaderResult = exec(`ssh ${user}@${host} "systemctl is-active plugin_loader.service 2>/dev/null; true"`, remaining());
   if (loaderResult.timedOut) return timedOutResult();
-  remote.pluginLoaderActive = loaderResult.text || "unknown";
+  remote.pluginLoaderActive = parseIsActive(loaderResult.text);
 
   return remote;
 }

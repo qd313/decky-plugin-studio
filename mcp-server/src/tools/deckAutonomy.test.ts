@@ -202,3 +202,32 @@ test("bridgePortOpen and the deprecated bridgeReady agree when pad.py is entirel
     assert.equal(result.bridgeReady, false);
     assert.equal(result.bridgePortOpen, result.bridgeReady);
   }));
+
+// ---- Plan 11 lane E: the loader state is one honest word ----
+
+test("probeRemoteDeck reads a running system-scope loader as one word, and queries system scope", async () => {
+  const cmds: string[] = [];
+  const fakeExec = (cmd: string) => {
+    cmds.push(cmd);
+    if (cmd.includes("is-active")) return { text: "active", timedOut: false };
+    return { text: "ok", timedOut: false };
+  };
+  const result = await probeRemoteDeck("deck", "10.0.0.99", { timeoutMs: 1000, exec: fakeExec });
+  assert.equal(result.pluginLoaderActive, "active");
+  assert.ok(!cmds.some((c) => c.includes("is-active") && c.includes("--user")), "plugin_loader is a system unit");
+  assert.ok(!cmds.some((c) => c.includes("is-active") && c.includes("|| echo")), "no second word is echoed");
+});
+
+test("parseIsActive keeps the first word of a doubled answer and says unknown, never inactive, when ssh said nothing", async () => {
+  const { parseIsActive } = await import("./deckAutonomy.js");
+  assert.equal(parseIsActive("inactive\ninactive"), "inactive");
+  assert.equal(parseIsActive("active\n"), "active");
+  assert.equal(parseIsActive(""), "unknown");
+  assert.equal(parseIsActive("ssh: connect to host failed"), "unknown");
+
+  const result = await probeRemoteDeck("deck", "10.0.0.99", {
+    timeoutMs: 1000,
+    exec: (cmd: string) => ({ text: cmd.includes("is-active") ? "" : "ok", timedOut: false }),
+  });
+  assert.equal(result.pluginLoaderActive, "unknown");
+});

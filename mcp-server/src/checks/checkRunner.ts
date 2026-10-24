@@ -174,7 +174,7 @@ export async function saveCheck(opts: SaveCheckOptions): Promise<SaveCheckResult
     steps: sequenceOptions.steps,
     stopOnFailure: sequenceOptions.stopOnFailure !== false,
     mustReachText: sequenceOptions.mustReachText ?? [],
-    requireVisible: sequenceOptions.requireVisible ?? false,
+    requireVisible: sequenceOptions.requireVisible ?? true,
     acquireFocus: sequenceOptions.acquireFocus !== false,
   };
   const check: CheckFile = {

@@ -72,6 +72,12 @@ export interface SnapshotEnvelope<T> {
 
 export interface SnapshotOptions {
   note?: string;
+  /**
+   * An earlier snapshot that is still live and unrestored is normally a refusal.
+   * With `replace`, its run file is set aside under a dated name (kept, not
+   * restored, nothing sent to the Deck) and this snapshot goes ahead.
+   */
+  replace?: boolean;
   /** Injectable clock so expiry is testable without a real wait. */
   now?: () => number;
 }
@@ -278,6 +284,8 @@ export interface TakeReport<T> {
   /** Set when an EARLIER snapshot was older than the controller's maximum age for an
    * automatic restore: its run file was renamed to `file`, nothing was sent to the Deck. */
   setAsideStale?: { takenAt: string; file: string; ageMs: number };
+  /** Set when `replace` was asked for and a live unrestored snapshot was set aside to make way. */
+  setAsideReplaced?: { takenAt: string; file: string };
 }
 
 /** Plain words for an age: "42 minutes", "5 hours", "10 days". */
@@ -322,6 +330,7 @@ export async function takeSnapshot<T>(
   let autoRestoredExpired: TakeReport<T>["autoRestoredExpired"] = null;
   let setAside: TakeReport<T>["setAsideUnrestorable"];
   let setAsideStale: TakeReport<T>["setAsideStale"];
+  let setAsideReplaced: TakeReport<T>["setAsideReplaced"];
   if (existing) {
     const ageMs = now() - Date.parse(existing.takenAt);
     if (isExpired(existing, now) && ctrl.maxAutoRestoreAgeMs !== undefined && ageMs > ctrl.maxAutoRestoreAgeMs) {
@@ -338,6 +347,9 @@ export async function takeSnapshot<T>(
         if (!(err instanceof UnrestorableSnapshotError)) throw err;
         setAside = { at: existing.expiresAt, file: setAsideSnapshotFile(ctrl.kind, now), reason: err.message };
       }
+    } else if (opts.replace) {
+      // Asked for: keep the earlier copy for a person, take a fresh one. The Deck is not touched.
+      setAsideReplaced = { takenAt: existing.takenAt, file: setAsideSnapshotFile(ctrl.kind, now, "replaced") };
     } else {
       throw new StaleSnapshotError(existing, snapshotPath(ctrl.kind), ctrl.restoreToolHint);
     }
@@ -365,6 +377,7 @@ export async function takeSnapshot<T>(
     autoRestoredExpired,
     ...(setAside ? { setAsideUnrestorable: setAside } : {}),
     ...(setAsideStale ? { setAsideStale } : {}),
+    ...(setAsideReplaced ? { setAsideReplaced } : {}),
   };
 }
 

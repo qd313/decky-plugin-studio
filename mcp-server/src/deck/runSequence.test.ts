@@ -25,7 +25,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
-import { runSequence, findCycle, judgeVisibility, Visit } from "./runSequence.js";
+import { runSequence, findCycle, judgeVisibility, resolveRequireVisible, Visit } from "./runSequence.js";
 import type { Visibility } from "./readFocus.js";
 import type { PressOptions, PressResult } from "./pressButton.js";
 
@@ -252,6 +252,22 @@ test("a covered stop is shouted but does not fail the step unless requireVisible
   assert.match(required.note, /failing the step because requireVisible is set/);
 });
 
+test("requireVisible defaults to ON: a covered landing fails a step unless the run or the step opts out", () => {
+  // Plan 11 lane E: the promised flip. Unset means required.
+  assert.equal(resolveRequireVisible(undefined, undefined), true);
+  assert.equal(resolveRequireVisible(undefined, false), false, "the run opts out");
+  assert.equal(resolveRequireVisible(false, true), false, "a step opts out of a required run");
+  assert.equal(resolveRequireVisible(true, false), true, "a step can still insist");
+
+  const byDefault = judgeVisibility(COVERED, resolveRequireVisible(undefined, undefined));
+  assert.equal(byDefault.visibleOk, false, "a covered landing now fails by default");
+  assert.match(byDefault.note, /COVERED by div\.bonsai-main-tab-dock/, "and the note names the covering selector");
+  assert.match(byDefault.note, /failing the step/);
+
+  const optedOut = judgeVisibility(COVERED, resolveRequireVisible(undefined, false));
+  assert.equal(optedOut.visibleOk, true, "requireVisible: false still only reports");
+});
+
 test("a visible stop passes quietly either way", () => {
   assert.deepEqual(judgeVisibility(VISIBLE, false), { visible: true, visibleOk: true, note: "" });
   assert.deepEqual(judgeVisibility(VISIBLE, true), { visible: true, visibleOk: true, note: "" });
@@ -285,7 +301,7 @@ test("a run that starts on a covered control counts it and says so in the summar
     assert.equal(r.stopsFocusedButNotVisible, 1);
     assert.match(r.notVisibleStops[0], /^step 0: <BUTTON> "bonsAI" COVERED by div\.bonsai-main-tab-dock/);
     assert.match(r.summary, /1 stop\(s\) FOCUSED BUT NOT VISIBLE/);
-    assert.match(r.summary, /report-only -- pass requireVisible/);
+    assert.match(r.summary, /failing the run \(pass requireVisible: false to only report\)/);
     // A step that never executed has no verdict -- not a "visible" one.
     assert.equal(r.steps[0].visibility, null);
     assert.equal(r.steps[0].visible, null);

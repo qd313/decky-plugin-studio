@@ -208,3 +208,54 @@ test("an unreadable lease file counts as held until its (unknown) expiry, which 
   const r = acquireLease("deck", { purpose: "x" });
   assert.ok(r.ok);
 });
+
+// ---------------------------------------------------------------------------
+// Plan 11 lane E: identity is pid AND per-process token
+// ---------------------------------------------------------------------------
+
+test("a record with our pid but a foreign token is another process: live, refused, and not 'mine'", async () => {
+  const { OWNER_TOKEN } = await import("./lease.js");
+  const now = Date.now();
+  const rec = {
+    machine: "deck",
+    ownerPid: process.pid, // a recycled pid: same number, different process
+    ownerToken: `not-${OWNER_TOKEN}`,
+    ownerHost: os.hostname(),
+    owner: "pid recycled",
+    purpose: "deck_sweep",
+    since: new Date(now - 60_000).toISOString(),
+    heartbeatAt: new Date(now - 7_000).toISOString(),
+    expiresAt: new Date(now + 60_000).toISOString(),
+  };
+  fs.mkdirSync(path.dirname(leasePath("deck")), { recursive: true });
+  fs.writeFileSync(leasePath("deck"), JSON.stringify(rec));
+
+  assert.equal(leaseHeldByMe("deck", { pidAlive: alive }), false);
+  assert.equal(leaseHeldByOther("deck", { pidAlive: alive })?.owner, "pid recycled");
+  const r = acquireLease("deck", { pidAlive: alive, now: () => now });
+  assert.ok(!r.ok, "a foreign token must be refused, not renewed");
+  assert.match(r.reason, /last heartbeat .*\(7 s ago\)/, "the refusal carries the heartbeat age in seconds");
+});
+
+test("our own record carries our token and is mine; a record with no token is judged on pid alone", () => {
+  const got = acquireLease("deck", { purpose: "x" });
+  assert.ok(got.ok);
+  assert.equal(readLease("deck")?.ownerToken, got.lease.ownerToken);
+  assert.equal(leaseHeldByMe("deck", { pidAlive: alive }), true);
+
+  // An upgrade must not evict a live session: no token => pid + host decide, as before.
+  const rec = JSON.parse(fs.readFileSync(leasePath("deck"), "utf8"));
+  delete rec.ownerToken;
+  fs.writeFileSync(leasePath("deck"), JSON.stringify(rec));
+  assert.equal(readLease("deck")?.ownerToken, undefined);
+  assert.equal(leaseHeldByMe("deck", { pidAlive: alive }), true);
+});
+
+test("a failed rename leaves no .tmp file behind", () => {
+  // Make the destination a directory so renameSync throws, as a locked file does on Windows.
+  fs.mkdirSync(leasePath("deck"), { recursive: true });
+  const r = acquireLease("deck", { purpose: "x" });
+  assert.ok(!r.ok, "an unwritable lease is a refusal");
+  const leftovers = fs.readdirSync(path.dirname(leasePath("deck"))).filter((n) => n.endsWith(".tmp"));
+  assert.deepEqual(leftovers, []);
+});

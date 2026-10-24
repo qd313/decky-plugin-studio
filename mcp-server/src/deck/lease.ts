@@ -32,6 +32,7 @@
  * mystery, and so the extension's 30 s status poll can stay off a serial port
  * that a leased run is using (ROADMAP: "status poll opens COM7").
  */
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -41,9 +42,18 @@ import { ensureConfigDir, getConfigDir } from "../config.js";
 export const DEFAULT_LEASE_TTL_MS = 10 * 60_000;
 export const LEASE_HEARTBEAT_MS = 30_000;
 
+/**
+ * Random per server process, made once at module load. A pid alone is not an
+ * identity: Windows recycles them quickly, so "ownerPid === process.pid" can be
+ * true of a record some earlier, dead process wrote under the same number.
+ */
+export const OWNER_TOKEN = crypto.randomBytes(8).toString("hex");
+
 export interface LeaseRecord {
   machine: string;
   ownerPid: number;
+  /** OWNER_TOKEN of the writing process. Absent on records from before tokens existed. */
+  ownerToken?: string;
   ownerHost: string;
   /** Human-readable owner, from DPS_SESSION_LABEL when set, else "pid N on host". */
   owner: string;
@@ -86,6 +96,9 @@ function defaultPidAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
+    // EPERM means the pid EXISTS but this process may not signal/open it (common
+    // on Windows for another user's or an elevated process). That is a live
+    // process, not a dead one; only ESRCH (no such pid) and the like mean gone.
     return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
@@ -105,6 +118,7 @@ export function readLease(machine: string): LeaseRecord | null {
     return {
       machine: p.machine ?? machine,
       ownerPid: Number(p.ownerPid ?? 0),
+      ...(typeof p.ownerToken === "string" ? { ownerToken: p.ownerToken } : {}),
       ownerHost: p.ownerHost ?? "unknown host",
       owner: p.owner ?? "unknown",
       purpose: p.purpose ?? "unknown",
@@ -133,12 +147,30 @@ function writeLease(rec: LeaseRecord): void {
   fs.mkdirSync(leaseDir(), { recursive: true });
   const file = leasePath(rec.machine);
   const tmp = path.join(leaseDir(), `.${rec.machine}.${process.pid}.${Date.now()}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(rec, null, 2), "utf8");
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(rec, null, 2), "utf8");
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    // Without this the temp file was left behind whenever the rename failed
+    // (on Windows a rename over a file another process has open throws
+    // EPERM/EBUSY): five such `.deck.<pid>.<ts>.tmp` files were found orphaned.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* nothing more to do */
+    }
+    throw err;
+  }
 }
 
+/**
+ * Mine = same pid, same host AND same per-process token. A record from before
+ * tokens existed has no token, so it is judged on pid and host alone, as it
+ * always was -- an upgrade must not evict a live session.
+ */
 function isMine(rec: LeaseRecord): boolean {
-  return rec.ownerPid === process.pid && rec.ownerHost === os.hostname();
+  if (rec.ownerPid !== process.pid || rec.ownerHost !== os.hostname()) return false;
+  return rec.ownerToken === undefined || rec.ownerToken === OWNER_TOKEN;
 }
 
 /**
@@ -171,10 +203,15 @@ export function leaseHeldByMe(machine: string, opts: LeaseOptions = {}): boolean
   return Boolean(rec && isMine(rec) && leaseIsLive(rec, opts));
 }
 
-export function refusalMessage(holder: LeaseRecord): string {
+function heartbeatAge(holder: LeaseRecord, now: number): string {
+  const t = Date.parse(holder.heartbeatAt);
+  return Number.isFinite(t) ? ` (${Math.max(0, Math.round((now - t) / 1000))} s ago)` : "";
+}
+
+export function refusalMessage(holder: LeaseRecord, now: number = Date.now()): string {
   return (
     `Machine "${holder.machine}" is being driven by another session: ${holder.owner}, since ${holder.since}, ` +
-    `purpose "${holder.purpose}", last heartbeat ${holder.heartbeatAt}. Only one driver at a time. ` +
+    `purpose "${holder.purpose}", last heartbeat ${holder.heartbeatAt}${heartbeatAge(holder, now)}. Only one driver at a time. ` +
     `Do not look for another way to press -- stop and tell the user. If that session is known to be gone, ` +
     `the lease frees itself at ${holder.expiresAt}, or deck_releaseMachine({ machine: "${holder.machine}", force: true }) evicts it now.`
   );
@@ -209,7 +246,7 @@ export function acquireLease(machine: string, opts: LeaseOptions = {}): AcquireR
       since = existing.since;
       renewed = true;
     } else if (leaseIsLive(existing, { ...opts, now })) {
-      return { ok: false, holder: existing, reason: refusalMessage(existing) };
+      return { ok: false, holder: existing, reason: refusalMessage(existing, t) };
     } else {
       tookOverFrom = existing;
     }
@@ -218,6 +255,7 @@ export function acquireLease(machine: string, opts: LeaseOptions = {}): AcquireR
   const rec: LeaseRecord = {
     machine,
     ownerPid: process.pid,
+    ownerToken: OWNER_TOKEN,
     ownerHost: os.hostname(),
     owner: ownerLabel(),
     purpose: opts.purpose?.trim() || (renewed ? existing!.purpose : "unspecified"),

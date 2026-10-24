@@ -448,9 +448,9 @@ export const TOOLS: ToolDef[] = [
         },
         requireVisible: {
           type: "boolean",
-          default: false,
+          default: true,
           description:
-            "Fail any step whose landing spot a person could not see — covered by another element, clipped by an overflow, or off screen. Default false FOR THIS RELEASE: the verdict is still measured on every step, reported as step.visibility, counted in stopsFocusedButNotVisible and shouted in the summary, but does not fail the run. It flips to fail-by-default next release; set it true now to get that behaviour early.",
+            "Fail any step whose landing spot a person could not see — covered by another element, clipped by an overflow, or off screen (the summary names the covering selector). Default TRUE: a covered stop is a failure. Pass false to opt out for the run (a step's own requireVisible still overrides): the verdict is then still measured on every step, reported as step.visibility, counted in stopsFocusedButNotVisible and shouted in the summary, but does not fail the run.",
         },
         stopOnFailure: {
           type: "boolean",
@@ -589,7 +589,7 @@ export const TOOLS: ToolDef[] = [
             },
             stopOnFailure: { type: "boolean", default: true },
             mustReachText: { type: "array", items: { type: "string" } },
-            requireVisible: { type: "boolean", default: false },
+            requireVisible: { type: "boolean", default: true },
             acquireFocus: { type: "boolean", default: true },
             port: { type: "string" },
             cdpUrl: { type: "string" },
@@ -932,6 +932,12 @@ export const TOOLS: ToolDef[] = [
           description: "Auto-restore after this many minutes if deck_restoreSettings is never called.",
         },
         note: { type: "string", description: "Freeform note recorded in the run file." },
+        replace: {
+          type: "boolean",
+          default: false,
+          description:
+            "Instead of refusing over an unrestored earlier snapshot, set its run file aside under a dated name (kept, not restored) and take this one; the result names that file.",
+        },
       },
       additionalProperties: false,
     },

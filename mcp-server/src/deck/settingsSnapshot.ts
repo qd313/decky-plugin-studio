@@ -597,6 +597,8 @@ export interface SnapshotSettingsOptions {
   includeData?: boolean;
   ttlMinutes?: number;
   note?: string;
+  /** Set aside a live unrestored earlier snapshot (kept under a dated name) instead of refusing. */
+  replace?: boolean;
   /** Test-only clock override; production always uses Date.now. */
   now?: () => number;
 }
@@ -624,7 +626,7 @@ export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Prom
 
   // No `applyNew`: taking a settings snapshot never changes the Deck by
   // itself, unlike deck_holdAwake -- it only captures. See the module header.
-  const report = await takeSnapshot(ctrl, undefined, { note: opts.note, now: opts.now });
+  const report = await takeSnapshot(ctrl, undefined, { note: opts.note, now: opts.now, replace: opts.replace });
 
   const method: SnapshotMethod = report.previous.method ?? "buffered";
   const methodNote = report.previous.methodNote ?? "copied in one piece over ssh";
@@ -637,6 +639,10 @@ export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Prom
     (report.autoRestoredExpired
       ? ` Note: an earlier snapshot from ${report.autoRestoredExpired.at} had expired and was ` +
         "restored first."
+      : "") +
+    (report.setAsideReplaced
+      ? ` Note: replace was set, so the earlier unrestored snapshot from ${report.setAsideReplaced.takenAt} was set aside, ` +
+        `not restored, and is kept at ${report.setAsideReplaced.file}. The Deck was not touched by that.`
       : "") +
     (report.setAsideStale
       ? ` Note: an old snapshot from ${report.setAsideStale.takenAt} (${describeAge(report.setAsideStale.ageMs)} old) was set aside, ` +

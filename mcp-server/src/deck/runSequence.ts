@@ -122,13 +122,10 @@ export interface RunSequenceOptions {
    * clipped or off screen -- exactly the way `expect` fails a step that lands
    * on the wrong element. A step's own `requireVisible` overrides this.
    *
-   * DEFAULT OFF for this release: the verdict is still measured, reported per
-   * step, counted in `stopsFocusedButNotVisible` and shouted in the summary,
-   * but does not fail anything, so existing suites keep their results while
-   * consumers see what they would fail on. Plan 06 flips this to fail-by-
-   * default one release later -- a covered stop should never again read as a
-   * pass, and the only reason it does today is to give suites one release to
-   * look.
+   * DEFAULT ON (flipped in plan 11, after a grace period that began 2026-08-31):
+   * a covered stop never reads as a pass. Pass `requireVisible: false` to opt
+   * out, per run or per step; the verdict is then still measured, reported per
+   * step, counted in `stopsFocusedButNotVisible` and shouted in the summary.
    */
   requireVisible?: boolean;
   /** Serial port of the bridge's COM side. */
@@ -273,6 +270,11 @@ function findCycle(visits: Visit[]): CycleReport | null {
  * fail the step, and what the diagnosis should add. A null verdict under
  * requireVisible fails -- "could not measure" must never round up to "seen".
  */
+export function resolveRequireVisible(step: boolean | undefined, run: boolean | undefined): boolean {
+  // A step's own setting wins, then the run's, then the default: ON.
+  return step ?? run ?? true;
+}
+
 export function judgeVisibility(
   visibility: Visibility | null,
   requireVisible: boolean,
@@ -509,11 +511,11 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
       const after: ReadFocusResult | null = r.after;
 
       // Visibility is the second fact about a stop, measured beside the first.
-      // A step can only fail on it when asked to (requireVisible); otherwise it
-      // is reported, counted and shouted, but the pass stands -- for one
-      // release. See RunSequenceOptions.requireVisible.
+      // A covered, clipped or off-screen stop fails the step unless the run or
+      // the step opts out with requireVisible: false; opted out, it is still
+      // reported, counted and shouted. See RunSequenceOptions.requireVisible.
       const visibility = r.ok ? (after?.visibility ?? null) : null;
-      const requireVisible = step.requireVisible ?? opts.requireVisible ?? false;
+      const requireVisible = resolveRequireVisible(step.requireVisible, opts.requireVisible);
       const judged = judgeVisibility(visibility, requireVisible);
       const visible = judged.visible;
       const pass = r.ok && (step.expect ? r.matched === true : true) && judged.visibleOk;
@@ -567,6 +569,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
   // Counted over every stop the ring was read at, the starting one included: a
   // run that BEGINS on a covered control is as much a finding as one that
   // walks onto one.
+  const visibleOptedOut = opts.requireVisible === false || steps.some((s) => s.requireVisible === false);
   const notVisibleStops = visits
     .filter((v) => v.visibility && v.visibility.verdict !== "visible")
     .map((v) => `step ${v.step}: ${v.label} ${describeVisibility(v.visibility)}`);
@@ -595,9 +598,9 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     neverReached.length ? `never reached: ${neverReached.join(", ")}` : null,
     notVisibleStops.length
       ? `${notVisibleStops.length} stop(s) FOCUSED BUT NOT VISIBLE: ${notVisibleStops.join("; ")}` +
-        (opts.requireVisible || steps.some((s) => s.requireVisible)
-          ? ""
-          : " (report-only -- pass requireVisible to fail on this)")
+        (visibleOptedOut
+          ? " (requireVisible is off for this run -- reported only, not failed)"
+          : " -- failing the run (pass requireVisible: false to only report)")
       : null,
   ].filter(Boolean);
 

@@ -323,3 +323,29 @@ test("isExpired is a pure function of the envelope and the clock", () => {
   assert.equal(isExpired(env, () => 1_000_000 + 5 * 60_000), false);
   assert.equal(isExpired(env, () => 1_000_000 + 11 * 60_000), true);
 });
+
+// ---------------------------------------------------------------------------
+// Plan 11 lane E: replace:true sets the earlier copy aside instead of refusing
+// ---------------------------------------------------------------------------
+
+test("replace:true sets a live unrestored snapshot aside under a dated name and names it; the default still refuses", async () => {
+  const kind = freshKind();
+  const ctrl = makeController(kind, { n: 1 });
+  await takeSnapshot(ctrl);
+
+  // Default: still refused.
+  await assert.rejects(() => takeSnapshot(ctrl), StaleSnapshotError);
+
+  let applied = 0;
+  const ctrl2 = makeController(kind, { n: 2 }, () => {
+    applied++;
+  });
+  const report = await takeSnapshot(ctrl2, undefined, { replace: true, now: () => 1_700_000_000_000 });
+
+  assert.ok(report.setAsideReplaced, "the result names what was set aside");
+  assert.match(report.setAsideReplaced!.file, /\.replaced-1700000000000\.json$/);
+  assert.equal(fs.existsSync(report.setAsideReplaced!.file), true, "the earlier copy is kept");
+  assert.deepEqual(JSON.parse(fs.readFileSync(report.setAsideReplaced!.file, "utf8")).values, { n: 1 });
+  assert.deepEqual(readSnapshotFile<Fixture>(kind)?.values, { n: 2 }, "the new snapshot is the live one");
+  assert.equal(applied, 0, "nothing was sent to the Deck to make room");
+});

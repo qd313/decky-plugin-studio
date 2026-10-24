@@ -598,6 +598,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         includeData: params.includeData != null ? Boolean(params.includeData) : undefined,
         ttlMinutes: params.ttlMinutes != null ? Number(params.ttlMinutes) : undefined,
         note: params.note != null ? String(params.note) : undefined,
+        replace: params.replace === true ? true : undefined,
       });
 
     case "tools/deck_restoreSettings":
