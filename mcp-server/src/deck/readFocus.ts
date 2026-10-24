@@ -25,6 +25,7 @@
  */
 import { CdpTarget, evaluate, getVersion, hasSteamUiTargets, listTargets, rewriteWsHost } from "./cdp.js";
 import { withCdpTunnel } from "./cdpTunnel.js";
+import { currentMachine } from "../machines.js";
 
 /**
  * Where a control's computed `label` came from. The `ancestor-*` sources are
@@ -215,6 +216,10 @@ export interface ReadFocusResult {
    */
   visibleQuickAccessTab: string | null;
   targetsScanned: string[];
+  /** Titles of pages that did not answer within their time budget during this read. Empty when every page asked answered. */
+  timedOutPages?: string[];
+  /** Longest any page asked took to answer or give up, in ms. Pages the read did not wait for are not counted. */
+  slowestPageMs?: number;
   /** Did the focused element match the caller's `expect` selector? null = not asked, or the selector was invalid. */
   matchesExpect?: boolean | null;
   /**
@@ -890,7 +895,48 @@ function emptyResult(method: string): ReadFocusResult {
     quickAccessTab: null,
     visibleQuickAccessTab: null,
     targetsScanned: [],
+    timedOutPages: [],
+    slowestPageMs: 0,
   };
+}
+
+/**
+ * How long a page that timed out on an earlier read is given on the next one.
+ * Pages that froze once (the hidden desktop window's views on the Windows
+ * stand-in) almost always freeze again; a page that has woken answers in
+ * milliseconds, so this costs a real answer nothing.
+ */
+export const FROZEN_PAGE_BUDGET_MS = 500;
+
+/** Pages that timed out, per machine and CDP endpoint, then per CDP target id. In-memory only. */
+const frozenPages = new Map<string, Set<string>>();
+
+function frozenKey(base: string): string {
+  let machine = "";
+  try {
+    machine = currentMachine().name;
+  } catch {
+    /* no registry resolvable: the base URL alone keys it */
+  }
+  return `${machine}|${base}`;
+}
+
+/** Test hook: forget which pages froze. */
+export function resetFrozenPages(): void {
+  frozenPages.clear();
+}
+
+/** On Windows, Steam's hidden desktop window lists pages that never answer; these are the ones worth asking. */
+function isWindowsUiPage(t: CdpTarget): boolean {
+  const title = t.title ?? "";
+  return (
+    (t.url ?? "").includes("useragent=Valve%20Steam%20Gamepad") ||
+    title === "Steam Big Picture Mode" ||
+    title === "SharedJSContext" ||
+    title.startsWith("QuickAccess_") ||
+    title.startsWith("MainMenu_") ||
+    title.startsWith("notificationtoasts_")
+  );
 }
 
 /**
@@ -983,24 +1029,69 @@ export async function readFocusAt(
   // at 10 s each made every read on the stand-in take two and a half minutes,
   // and deck_openPlugin, which reads focus between presses, never finished
   // (plan 10 § 13).
-  const answers = await Promise.all(
-    pages.map(async (t): Promise<{ page?: PageResult; error?: string }> => {
-      try {
-        const page = await evaluate<PageResult>(
-          rewriteWsHost(t.webSocketDebuggerUrl!, base),
-          pageExpression(expect),
-          timeoutMs,
-        );
-        return { page };
-      } catch (err) {
-        return { error: (err as Error).message };
-      }
-    }),
-  );
-  for (let i = 0; i < pages.length; i++) {
-    const t = pages[i];
+  const key = frozenKey(base);
+  let frozen = frozenPages.get(key);
+  if (!frozen) frozenPages.set(key, (frozen = new Set()));
+  const frozenSet = frozen;
+  let toAsk = pages;
+  let onWindows = false;
+  try {
+    onWindows = currentMachine().os === "windows";
+  } catch {
+    /* unresolvable machine: never filter */
+  }
+  if (onWindows) {
+    const ui = pages.filter(isWindowsUiPage);
+    if (ui.length > 0) toAsk = ui;
+  }
+
+  type Answer = { page?: PageResult; error?: string; ms: number; timedOut: boolean };
+  const answers: Array<Answer | undefined> = new Array(toAsk.length).fill(undefined);
+  let wake: () => void = () => {};
+  toAsk.forEach((t, i) => {
+    const asked = Date.now();
+    const budget = frozenSet.has(t.id) ? Math.min(FROZEN_PAGE_BUDGET_MS, timeoutMs) : timeoutMs;
+    evaluate<PageResult>(rewriteWsHost(t.webSocketDebuggerUrl!, base), pageExpression(expect), budget).then(
+      (page) => {
+        frozenSet.delete(t.id);
+        answers[i] = { page, ms: Date.now() - asked, timedOut: false };
+        wake();
+      },
+      (err) => {
+        const message = (err as Error).message;
+        const timedOut = /timed out/i.test(message);
+        if (timedOut) frozenSet.add(t.id);
+        else frozenSet.delete(t.id);
+        answers[i] = { error: message, ms: Date.now() - asked, timedOut };
+        wake();
+      },
+    );
+  });
+
+  // Walk the answers in listing order as they arrive. The first page that
+  // carries the marker wins as soon as every page BEFORE it has answered; pages
+  // after it are not waited for. Only "nobody owns the ring" needs them all.
+  let winner = -1;
+  let upTo = 0;
+  for (;;) {
+    while (upTo < toAsk.length && answers[upTo] !== undefined && !answers[upTo]!.page?.hasGpfocus) upTo++;
+    if (upTo === toAsk.length) break;
+    if (answers[upTo] !== undefined) {
+      winner = upTo;
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+  }
+  const settled = answers.filter((a): a is Answer => a !== undefined);
+  const slowestPageMs = settled.reduce((m, a) => Math.max(m, a.ms), 0);
+  const timedOutPages = toAsk.filter((_, i) => answers[i]?.timedOut).map((t) => t.title);
+  const upper = winner >= 0 ? winner + 1 : toAsk.length;
+  for (let i = 0; i < upper; i++) {
+    const t = toAsk[i];
     scanned.push(t.title);
-    const { page, error } = answers[i];
+    const { page, error } = answers[i]!;
     if (error != null) {
       failures.push(`${t.title}: ${error}`);
       continue;
@@ -1024,6 +1115,8 @@ export async function readFocusAt(
       quickAccessTab: page.quickAccessTab,
       visibleQuickAccessTab: page.visibleQuickAccessTab ?? null,
       targetsScanned: scanned,
+      timedOutPages,
+      slowestPageMs,
       matchesExpect: page.matchesExpect ?? null,
       ...waited,
     };
@@ -1037,6 +1130,8 @@ export async function readFocusAt(
     ...waited,
     steamBuild,
     targetsScanned: scanned,
+    timedOutPages,
+    slowestPageMs,
     reason:
       "gpfocus marker not found in any target - Steam client may have changed, " +
       `or nothing currently owns gamepad focus. Scanned: ${scanned.join(", ")}.${detail}`,

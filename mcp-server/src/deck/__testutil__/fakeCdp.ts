@@ -129,7 +129,18 @@ export async function startFakeCdp(
       // A pageValue of { __throw: "..." } comes back as a real CDP
       // exceptionDetails, so the "expression threw in the page" path can be
       // tested without asking this fake to actually evaluate JavaScript.
-      const produced = pageValue(title, reads++) as { __throw?: string } | unknown;
+      let produced = pageValue(title, reads++) as { __throw?: string } | unknown;
+      // { __hang: true } never replies (a frozen CEF page); { __delayMs, __value }
+      // replies with __value after that many ms.
+      let delayMs = 0;
+      if (produced && typeof produced === "object") {
+        const p = produced as { __hang?: boolean; __delayMs?: number; __value?: unknown };
+        if (p.__hang) return;
+        if (typeof p.__delayMs === "number") {
+          delayMs = p.__delayMs;
+          produced = p.__value;
+        }
+      }
       const thrown =
         produced && typeof produced === "object" && "__throw" in (produced as object)
           ? (produced as { __throw?: string }).__throw
@@ -155,7 +166,9 @@ export async function startFakeCdp(
         header[1] = 127;
         header.writeBigUInt64BE(BigInt(body.length), 2);
       }
-      socket.write(Buffer.concat([header, body]));
+      const frame = Buffer.concat([header, body]);
+      if (delayMs > 0) setTimeout(() => !socket.destroyed && socket.write(frame), delayMs);
+      else socket.write(frame);
     });
 
     socket.on("error", () => sockets.delete(socket));

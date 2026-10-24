@@ -745,7 +745,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_readFocus",
     description:
-      "Report what Steam's gamepad nav graph actually owns on the connected Deck, read over CDP. Returns the gpfocus element and its gpfocuswithin ancestors, plus document.activeElement as a contrast field and an 'agree' flag - the two disagree often on Deck, and believing activeElement is what makes a focus fix look successful when nothing moved. Needs a Deck reachable over SSH with CEF debugging enabled; it opens and closes its own forward tunnel. This reads focus, it does not move it - to check that a press actually lands, press with the bridge and read focus before and after.",
+      "Report what Steam's gamepad nav graph actually owns on the connected Deck, read over CDP. Returns the gpfocus element and its gpfocuswithin ancestors, plus document.activeElement as a contrast field and an 'agree' flag - the two disagree often on Deck, and believing activeElement is what makes a focus fix look successful when nothing moved. Needs a Deck reachable over SSH with CEF debugging enabled; it opens and closes its own forward tunnel. This reads focus, it does not move it - to check that a press actually lands, press with the bridge and read focus before and after. timedOutPages: titles of pages that did not answer in time during this read (frozen pages, e.g. a hidden desktop window on a Windows stand-in); such a page gets only a short wait on the next read. slowestPageMs: the longest any page that was waited for took, in ms; a read returns as soon as the ring's page is known and does not wait for pages after it.",
     inputSchema: {
       type: "object" as const,
       properties: {

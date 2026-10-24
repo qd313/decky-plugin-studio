@@ -895,3 +895,116 @@ test("visibility: words the browser reports no line boxes for fall back to the b
   assert.equal(page.visibility?.verdict, "covered");
   assert.equal(page.visibility?.sample, "box");
 });
+
+// ---------------------------------------------------------------------------
+// Pages that never answer (issue #4). The Windows stand-in lists 18 pages of a
+// hidden desktop window that never reply to Runtime.evaluate; a read used to
+// last the whole timeout even when the Quick Access page answered at once.
+// ---------------------------------------------------------------------------
+
+import { readFocusAt, resetFrozenPages, FROZEN_PAGE_BUDGET_MS } from "./readFocus.js";
+import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
+
+const HANG = { __hang: true };
+const timed = async <T>(f: () => Promise<T>): Promise<{ value: T; ms: number }> => {
+  const t0 = Date.now();
+  const value = await f();
+  return { value, ms: Date.now() - t0 };
+};
+
+test("frozen pages: the ring on the third page returns after that page's latency, not the timeout", async () => {
+  resetFrozenPages();
+  const fake = await startFakeCdp(["A", "B", "C", "Frozen1", "Frozen2"], (title) => {
+    if (title.startsWith("Frozen")) return HANG;
+    if (title === "C") return { __delayMs: 100, __value: focusedPage };
+    return unfocusedPage;
+  });
+  try {
+    const { value: r, ms } = await timed(() => readFocusAt(fake.base, 2000));
+    assert.equal(r.ok, true);
+    assert.equal(r.target?.title, "C");
+    assert.ok(ms < 900, `read took ${ms}ms; it waited for the frozen pages (timeout 2000ms)`);
+    assert.deepEqual(r.timedOutPages, []);
+    assert.ok((r.slowestPageMs ?? 0) >= 90, `slowestPageMs ${r.slowestPageMs}`);
+    assert.deepEqual(r.targetsScanned, ["A", "B", "C"]);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("frozen pages: a ring AFTER a frozen page still returns the right page (listing order breaks ties)", async () => {
+  resetFrozenPages();
+  const fake = await startFakeCdp(["A", "Frozen", "C"], (title) => {
+    if (title === "Frozen") return HANG;
+    if (title === "C") return focusedPage;
+    return unfocusedPage;
+  });
+  try {
+    const { value: r, ms } = await timed(() => readFocusAt(fake.base, 700));
+    assert.equal(r.target?.title, "C");
+    assert.ok(ms >= 600, `returned in ${ms}ms, before the earlier frozen page had been given its time`);
+    assert.deepEqual(r.timedOutPages, ["Frozen"]);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("frozen pages: when two pages carry the ring, the earlier one wins even if it answers later", async () => {
+  resetFrozenPages();
+  const fake = await startFakeCdp(["Slow", "Fast"], (title) =>
+    title === "Slow" ? { __delayMs: 200, __value: focusedPage } : focusedPage,
+  );
+  try {
+    const r = await readFocusAt(fake.base, 2000);
+    assert.equal(r.target?.title, "Slow");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("frozen pages: the second read gives a page that froze a short budget", async () => {
+  resetFrozenPages();
+  const fake = await startFakeCdp(["Frozen", "C"], (title) => (title === "Frozen" ? HANG : focusedPage));
+  try {
+    const first = await timed(() => readFocusAt(fake.base, 1500));
+    assert.equal(first.value.target?.title, "C");
+    assert.ok(first.ms >= 1400, `first read ${first.ms}ms`);
+    const second = await timed(() => readFocusAt(fake.base, 1500));
+    assert.equal(second.value.target?.title, "C");
+    assert.ok(
+      second.ms >= FROZEN_PAGE_BUDGET_MS - 100 && second.ms < FROZEN_PAGE_BUDGET_MS + 600,
+      `second read ${second.ms}ms; expected about ${FROZEN_PAGE_BUDGET_MS}ms`,
+    );
+    assert.deepEqual(second.value.timedOutPages, ["Frozen"]);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("frozen pages: a clean read reports no timed-out pages and a slowest time", async () => {
+  resetFrozenPages();
+  const fake = await startFakeCdp(["A", "B"], (title) => (title === "B" ? focusedPage : unfocusedPage));
+  try {
+    const r = await readFocusAt(fake.base, 2000);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.timedOutPages, []);
+    assert.equal(typeof r.slowestPageMs, "number");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("frozen pages: with no ring anywhere the read still reports every page", async () => {
+  resetFrozenPages();
+  const fake = await startFakeCdp(["A", "Frozen", "B"], (title) => (title === "Frozen" ? HANG : unfocusedPage));
+  try {
+    const r = await readFocusAt(fake.base, 600);
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.targetsScanned, ["A", "Frozen", "B"]);
+    assert.deepEqual(r.timedOutPages, ["Frozen"]);
+    assert.ok((r.slowestPageMs ?? 0) >= 550);
+    assert.match(r.reason ?? "", /Frozen: .*timed out/);
+  } finally {
+    await fake.close();
+  }
+});
