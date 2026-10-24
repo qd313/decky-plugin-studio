@@ -1,16 +1,11 @@
 import { definePlugin } from "@decky/api";
 import { PanelSection, PanelSectionRow, Button, Focusable, TextField } from "@decky/ui";
 import { call } from "@decky/api";
-import { useState, useEffect } from "react";
-import { registerExamplePreviewTestHooks } from "./preview/previewTestHooks";
+import { useState } from "react";
 
 function MainContent() {
   const [name, setName] = useState("Decky dev");
   const [reply, setReply] = useState("");
-
-  useEffect(() => {
-    registerExamplePreviewTestHooks();
-  }, []);
 
   return (
     <PanelSection title="Example Plugin">

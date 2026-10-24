@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import { getMcpState } from "../mcp/client";
-import { getPreviewManager } from "../commands/openPreview";
 
 export class DeckyTreeProvider implements vscode.TreeDataProvider<DeckyTreeItem> {
   private _onDidChangeTreeData = new vscode.EventEmitter<DeckyTreeItem | undefined>();
@@ -19,14 +18,8 @@ export class DeckyTreeProvider implements vscode.TreeDataProvider<DeckyTreeItem>
       return element.children ?? [];
     }
     const state = getMcpState();
-    const preview = getPreviewManager();
-    const pluginName = vscode.workspace.workspaceFolders?.[0]?.name ?? "plugin";
 
     return [
-      section("Preview", state.previewRunning, [
-        leaf(state.previewRunning ? `${pluginName} (running)` : "not running"),
-        leaf(state.previewUrl ?? "—"),
-      ]),
       section("Tunnel", state.tunnelRunning, [
         leaf(state.tunnelRunning ? `pid ${state.tunnelPid ?? "?"}` : "not started"),
       ]),
@@ -37,10 +30,6 @@ export class DeckyTreeProvider implements vscode.TreeDataProvider<DeckyTreeItem>
       section("Ollama", state.ollamaReachable, [
         leaf(state.ollamaReachable ? "reachable" : "not detected"),
         leaf("127.0.0.1:11434"),
-      ]),
-      section("Hardware sim", false, [
-        leaf(`preset: ${state.hwPreset}`),
-        leaf("profile: Steam Deck LCD"),
       ]),
       new DeckyTreeItem("── MCP tools ──", vscode.TreeItemCollapsibleState.Expanded, [
         tool("deck.startTunnel"),
@@ -63,17 +52,6 @@ export class DeckyTreeProvider implements vscode.TreeDataProvider<DeckyTreeItem>
         tool("plugin.verifyZip"),
         tool("plugin.diffRpc"),
         tool("plugin.lintFocus"),
-        tool("preview.start"),
-        tool("preview.health"),
-        tool("preview.runSequence"),
-        tool("preview.callRpc"),
-        tool("preview.callTestHook"),
-        tool("preview.snapshotDom"),
-        tool("preview.captureScreenshot"),
-        tool("preview.compareScreenshot"),
-        tool("preview.tailEmit"),
-        tool("preview.setHardware"),
-        tool("preview.setPermissions"),
       ]),
     ];
   }

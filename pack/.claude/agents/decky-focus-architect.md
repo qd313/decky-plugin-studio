@@ -20,20 +20,20 @@ Your job: **design navigation that survives CEF/Decky focus semantics** before c
 1. **Map the graph** — list screens, modals, and default focus per screen.
 2. **Define edges** — for each control, document `onMove*` targets (including cross-column jumps).
 3. **Lifecycle** — tab restore tokens, modal stack push/pop, `inert` when sub-panels lock input.
-4. **Preview plan** — which `preview.runSequence` steps prove the graph; tag deck-only chords separately.
+4. **Verification plan** — which `deck.assertFocusMove` steps prove the graph; tag chords that need the real Deck separately.
 5. **Handoff** — smallest implementation sequence for the developer agent.
 
 ## MCP tools for validation (after implementation)
 
-- `preview.runSequence`, `preview.snapshotDom`, `preview.compareScreenshot`
-- `decky-focus-audit` skill for static + preview pass
+- `plugin.lintFocus`, `deck.readFocus`, `deck.assertFocusMove`
+- `decky-focus-audit` skill for static pass
 - `deck.deploy` + `deck.openPlugin` for deck-only scenarios
 
 ## Output format
 
 1. **Focus graph** (text or mermaid): nodes = focusable regions; edges = move directions.
-2. **Risk list** — deck-only vs preview-testable behaviors.
+2. **Risk list** — lint-checkable vs Deck-only behaviors.
 3. **Implementation checklist** — ordered file-level tasks.
-4. **Test plan** — preview suite IDs + device QA tags.
+4. **Test plan** — device QA tags.
 
 Archive substantive design reviews in `.cursor/agents/SUBAGENT_REPORTS.md` using the decky-focus-architect template.

@@ -81,26 +81,6 @@ if (mcpInstall.status !== 0) {
   process.exit(1);
 }
 
-const previewDest = path.join(resources, "preview-server");
-cpFiltered(path.join(repoRoot, "preview-server"), previewDest);
-fs.cpSync(path.join(repoRoot, "preview-server", "dist"), path.join(previewDest, "dist"), { recursive: true });
-
-console.log("Installing preview-server dependencies for VSIX bundle...");
-const npmInstall = spawnSync("npm", ["install", "--include=dev", "--no-audit", "--no-fund"], {
-  cwd: previewDest,
-  stdio: "inherit",
-  shell: true,
-});
-if (npmInstall.status !== 0) {
-  console.error("Failed to install preview-server dependencies into extension/resources/preview-server");
-  process.exit(1);
-}
-const reactDomClient = path.join(previewDest, "node_modules", "react-dom", "client.js");
-if (!fs.existsSync(reactDomClient)) {
-  console.error(`Missing bundled preview dependency: ${reactDomClient}`);
-  process.exit(1);
-}
-
 cpFiltered(path.join(repoRoot, "pack"), path.join(resources, "pack"));
 
 /*
@@ -153,4 +133,4 @@ if (smoke.status !== 0) {
   process.exit(1);
 }
 
-console.log("Bundled MCP server, preview-server, pack, and bridge tools into extension/resources/");
+console.log("Bundled MCP server, pack, and bridge tools into extension/resources/");

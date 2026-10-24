@@ -33,10 +33,9 @@ import {
 } from "./deck/lease.js";
 import * as deck from "./tools/deck.js";
 import * as plugin from "./tools/plugin.js";
-import * as preview from "./tools/preview.js";
 import * as deckAutonomy from "./tools/deckAutonomy.js";
 import { studioDoctor } from "./tools/doctor.js";
-import { diffRpc } from "./preview/rpcDiff.js";
+import { diffRpc } from "./rpc/rpcDiff.js";
 import { lintFocus } from "./lint/index.js";
 import { readFocus } from "./deck/readFocus.js";
 import { pressButton, pressChord } from "./deck/pressButton.js";
@@ -53,7 +52,7 @@ import { checkDeckReady, DeclaredState } from "./deck/checkReady.js";
 import { bigPictureStatus } from "./deck/foreground.js";
 import { holdAwake, restorePowerSettings } from "./deck/holdAwake.js";
 import { snapshotSettings, restoreSettings } from "./deck/settingsSnapshot.js";
-import { loadPreviewConfig } from "./preview/previewConfig.js";
+import { loadPluginConfig } from "./pluginConfig.js";
 import {
   stopAutomation,
   armAutomation,
@@ -351,7 +350,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       // The workspace's own selector is the default; an explicit argument wins.
       // Without either, already-open falls back to inferring from Decky's pane
       // labels, which is what reported an unmounted panel as open (P1-9).
-      const configured = loadPreviewConfig().panelRootSelector;
+      const configured = loadPluginConfig().panelRootSelector;
       return openPluginWithRetry({
         pluginName: params.pluginName != null ? String(params.pluginName) : info.pluginName,
         port: params.port != null ? String(params.port) : undefined,
@@ -537,7 +536,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
     case "tools/deck_checkReady": {
       const info = plugin.detectPlugin();
       const m = currentMachine();
-      const configuredRootSelector = loadPreviewConfig().panelRootSelector;
+      const configuredRootSelector = loadPluginConfig().panelRootSelector;
       let defaultPluginName: string | undefined;
       try {
         defaultPluginName = info.valid ? plugin.remotePluginDirName(info.name) : undefined;
@@ -626,81 +625,6 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
     case "tools/plugin_verifyZip":
       return plugin.verifyZip();
 
-    case "tools/preview_start":
-      return preview.previewStart();
-
-    case "tools/preview_stop":
-      return preview.previewStop();
-
-    case "tools/preview_status":
-      return preview.previewStatus();
-
-    case "tools/preview_injectFocusEvent":
-      return preview.previewInjectFocusEvent(String(params.direction));
-
-    case "tools/preview_callRpc":
-      return preview.previewCallRpc(
-        String(params.method),
-        (params.args as unknown[]) ?? [],
-        Number(params.collectEmitsMs ?? 0)
-      );
-
-    case "tools/preview_tailEmit":
-      return preview.previewTailEmit({
-        since: params.since != null ? Number(params.since) : undefined,
-        lines: params.lines != null ? Number(params.lines) : undefined,
-        event: params.event != null ? String(params.event) : undefined,
-      });
-
-    case "tools/preview_compareScreenshot":
-      return preview.previewCompareScreenshot({
-        name: String(params.name),
-        selector: params.selector != null ? String(params.selector) : undefined,
-        threshold: params.threshold != null ? Number(params.threshold) : undefined,
-        updateBaseline: Boolean(params.updateBaseline),
-      });
-
-    case "tools/preview_readLog":
-      return preview.previewReadLog(Number(params.lines ?? 50));
-
-    case "tools/preview_setHardware":
-      return preview.previewSetHardware(params as Record<string, unknown>);
-
-    case "tools/preview_runSequence":
-      return preview.previewRunSequence(
-        params as {
-          inputs: string[];
-          delayMs?: number;
-          hwOverrides?: Record<string, unknown>;
-          snapshot?: "dom" | "screenshot" | "both";
-        }
-      );
-
-    case "tools/preview_snapshotDom":
-      return preview.previewSnapshotDom(
-        params as { selector?: string; attrs?: string[]; text?: string }
-      );
-
-    case "tools/preview_captureScreenshot":
-      return preview.previewCaptureScreenshot(params as { selector?: string });
-
-    case "tools/preview_setHttpAllow":
-      return preview.previewSetHttpAllow(String(params.allowlist ?? ""));
-
-    case "tools/preview_health":
-      return preview.previewHealth();
-
-    case "tools/preview_callTestHook":
-      return preview.previewCallTestHook(
-        String(params.method),
-        (params.args as unknown[]) ?? []
-      );
-
-    case "tools/preview_setPermissions":
-      return preview.previewSetPermissions(
-        (params.permissions as Record<string, boolean>) ?? {}
-      );
-
     case "tools/deck_record":
       return deck.recordDeck(
         String(params.seconds ?? "10"),
@@ -758,8 +682,8 @@ async function handleMcp(method: string, params: Record<string, unknown>): Promi
       }
       try {
         const result = await handle(`tools/${name}`, args);
-        // A tool that has a picture (deck_captureScreenshot,
-        // preview_captureScreenshot) called withImage() on its return value;
+        // A tool that has a picture (deck_captureScreenshot)
+        // called withImage() on its return value;
         // buildToolCallContent() is the one place that knows to look for it,
         // so a picture-returning tool never needs a case of its own here.
         return { content: buildToolCallContent(result) };

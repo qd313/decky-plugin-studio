@@ -20,7 +20,7 @@ Your job: **gate every UI change** before the developer agent marks work done. Y
 4. **Every interactive Button:** `focusable` prop; A-button via `onButtonDown` / `onActivate`.
 5. **Column/sibling hops:** mount-time refs / registered focus owners only — **fail the gate** if D-pad targets come from `querySelector` / `aria-label` / `data-*` / class probes or `onMove*` is gated on `document.activeElement`.
 6. **Update** `docs/testing.md` (or the project's prompt-testing doc) with a D-pad scenario row.
-7. **Deploy + on-Deck pass** via `deck.deploy` + `deck.openPlugin` — preview is insufficient.
+7. **Deploy + on-Deck pass** via `deck.deploy` + `deck.openPlugin` — lint alone is insufficient.
 
 ## Interactive chain — do not skip stops before footer/save
 
@@ -34,7 +34,7 @@ If touching scrollable panels, lists, or content regions: verify D-pad scroll ad
 
 - **Design gaps before code** → **decky-focus-architect**
 - **On-Deck focus traces, wrong targets, modal traps** → **decky-debugger** (with ingest/log evidence)
-- **Static + preview sweep** → **decky-focus-audit** skill
+- **Static sweep** → **decky-focus-audit** skill
 
 ## Output format
 

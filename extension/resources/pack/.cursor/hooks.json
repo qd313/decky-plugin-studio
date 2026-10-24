@@ -4,7 +4,7 @@
     "afterFileEdit": [
       {
         "matcher": "src/**/*.{ts,tsx}|main.py|plugin.json",
-        "command": "echo Decky: run plugin.build (MCP) after Deck-facing edits; preview: node scripts/run-preview-suite.mjs --tier=smoke",
+        "command": "echo Decky: run plugin.build (MCP) after Deck-facing edits",
         "enabled": true
       },
       {

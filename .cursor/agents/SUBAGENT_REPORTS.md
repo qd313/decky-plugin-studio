@@ -57,9 +57,9 @@ Use when archiving a design review from `.cursor/agents/decky-focus-architect.md
 Review: <short title>
 Scope: <modals|tabs|settings|full plugin>
 Focus graph: <summary or link to mermaid>
-Risks: <deck-only vs preview-testable>
+Risks: <lint-checkable vs Deck-only>
 Recommendations: <ordered implementation checklist>
-Test plan: <preview suite IDs + device QA tags>
+Test plan: <device QA tags>
 ```
 
 If there is nothing to archive from a run, record:

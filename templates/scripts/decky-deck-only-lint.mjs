@@ -10,7 +10,7 @@ const deckOnly = path.join(root, "tests", "preview-suite", "deck-only.json");
 const runbook = path.join(root, "docs", "device-qa-runbook.md");
 
 if (!fs.existsSync(deckOnly)) {
-  console.log("decky-deck-only-lint: no deck-only.json (OK for preview-only plugins)");
+  console.log("decky-deck-only-lint: no deck-only.json");
   process.exit(0);
 }
 

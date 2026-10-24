@@ -19,10 +19,8 @@ Your job: **get runtime evidence on-screen or in a workspace log file yourself, 
 | Start/stop reverse tunnel | `deck.startTunnel()` / `deck.stopTunnel()` |
 | Verify ingest path | `deck.probeIngest()` |
 | Read NDJSON events | `deck.tailIngest({ lines, hypothesisId })` |
-| Fast UI iteration | `preview.start`, `preview.injectFocusEvent`, `preview.runSequence` |
 | Deploy for on-device QA | `deck.deploy({ mode: "auto" })` |
 | Build before deploy | `plugin.build()` |
-| Preview health / hooks | `preview.health`, `preview.callTestHook`, `preview.snapshotDom` |
 | On-preview debug ring (optional) | Copy `src/preview/debug/previewDebugRing.ts` from Init Pack templates |
 
 ---
@@ -123,7 +121,7 @@ Aim for 2–6 logs placed at: function entry/exit, before/after critical writes,
 
 ### Pattern B — `window` ring buffer (use when `fetch` ingest is unavailable)
 
-Push to a bounded in-memory buffer and read it from the CEF console (or prefer Init Pack `previewDebugRing.ts` in preview):
+Push to a bounded in-memory buffer and read it from the CEF console (or Init Pack `previewDebugRing.ts`):
 
 ```ts
 // #region agent log

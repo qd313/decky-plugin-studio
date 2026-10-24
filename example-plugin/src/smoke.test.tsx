@@ -6,7 +6,7 @@ import { renderWithHarness } from "./test-harness/renderWithHarness";
 
 /** Mirrors `main.py` `get_greeting`. */
 function greet(name: string = "Decky dev"): string {
-  return `Hello, ${name}! CPU temp check uses hwmon intercept in preview.`;
+  return `Hello, ${name}! Greeting from the example plugin.`;
 }
 
 describe("example plugin greeting", () => {

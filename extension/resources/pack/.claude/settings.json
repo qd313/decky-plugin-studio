@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/decky-claude-hook.mjs --match \"src/**/*.{ts,tsx},main.py,plugin.json\" --message \"Decky: run plugin_build (MCP) after Deck-facing edits; preview: node scripts/run-preview-suite.mjs --tier=smoke\""
+            "command": "node scripts/decky-claude-hook.mjs --match \"src/**/*.{ts,tsx},main.py,plugin.json\" --message \"Decky: run plugin_build (MCP) after Deck-facing edits\""
           },
           {
             "type": "command",

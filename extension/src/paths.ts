@@ -61,11 +61,6 @@ export function getMcpServerEntry(): string {
   return path.join(getRepoRoot(), "mcp-server", "dist", "index.js");
 }
 
-export function getPreviewServerRoot(): string {
-  const bundled = path.join(getExtensionRoot(), "resources", "preview-server");
-  if (fs.existsSync(bundled)) return bundled;
-  return path.join(getRepoRoot(), "preview-server");
-}
 
 export function getConfigDir(): string {
   const home = process.env.HOME || process.env.USERPROFILE || "";

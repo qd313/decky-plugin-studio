@@ -32,18 +32,6 @@ export function copyStudioTemplates(workspaceRoot: string): number {
 
   const mappings: Array<{ src: string; dest: string }> = [
     {
-      src: path.join(repoRoot, "templates", "preview-suite", "scripts", "run-preview-suite.mjs"),
-      dest: path.join(workspaceRoot, "scripts", "run-preview-suite.mjs"),
-    },
-    {
-      src: path.join(repoRoot, "templates", "preview-suite", "tests", "preview-suite"),
-      dest: path.join(workspaceRoot, "tests", "preview-suite"),
-    },
-    {
-      src: path.join(repoRoot, "templates", "preview-suite", "docs", "device-qa-runbook.md"),
-      dest: path.join(workspaceRoot, "docs", "device-qa-runbook.md"),
-    },
-    {
       src: path.join(repoRoot, "templates", ".env.example"),
       dest: path.join(workspaceRoot, ".env.example"),
     },

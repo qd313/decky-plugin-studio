@@ -14,7 +14,7 @@
 
 - Flag critical correctness issues (RPC contracts, settings persistence, focus-graph regressions) with file/line references.
 - Suggest running project test scripts (`pnpm test`, Python tests, etc.) when `src/` or `py_modules/` change.
-- Defer Deck-only layout/focus QA to on-device runbook when preview cannot reproduce.
+- Defer Deck-only layout/focus QA to on-device runbook when static checks cannot show it.
 
 ## Dashboard settings (required for enforcement)
 

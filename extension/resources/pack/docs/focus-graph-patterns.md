@@ -62,7 +62,7 @@ NEVER implement Decky D-pad sibling or column hops by discovering targets with `
 ### Related
 
 - Skill: `.cursor/skills/decky-ui-change-focus-gate/SKILL.md` — mandatory gate before shipping UI changes
-- Skill: `.cursor/skills/decky-focus-audit/SKILL.md` — static + preview audit pass
+- Skill: `.cursor/skills/decky-focus-audit/SKILL.md` — static audit pass
 
 ## Nothing owns focus when your plugin opens
 

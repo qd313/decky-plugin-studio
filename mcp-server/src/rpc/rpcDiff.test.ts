@@ -27,8 +27,6 @@ describe("rpcDiff", () => {
 }
 `
     );
-    fs.mkdirSync(path.join(tmp, ".decky"), { recursive: true });
-    fs.writeFileSync(path.join(tmp, ".decky", "preview.json"), JSON.stringify({ rpcMode: "discover" }));
 
     process.env.DECKY_STUDIO_WORKSPACE = tmp;
     const frontend = discoverFrontendRpcMethods(tmp);

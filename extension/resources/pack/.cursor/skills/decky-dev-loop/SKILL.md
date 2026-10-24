@@ -103,7 +103,5 @@ Do not commit private IPs or ingest secrets — use `.env` / MCP config only.
 
 ## Related skills & docs
 
-- `.cursor/skills/decky-preview/SKILL.md` — in-IDE QAM preview
 - `.cursor/skills/decky-screenshot-ingest/SKILL.md` — ingest `screenshots/`
-- `.cursor/skills/decky-tier-qa/SKILL.md` — tiered preview + on-device QA
 - `AGENTS.md` — MCP tool reference

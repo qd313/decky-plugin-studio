@@ -11,7 +11,7 @@ import { probeLocalPads, PadState } from "../automation/virtualPad";
  * to `$(play) Decky ●●●` with everything else moved into the tooltip -- and a
  * killswitch you have to hover to find is not a killswitch. It needs its own
  * text, its own colour, and its own click. The second is that its click has to
- * mean "stop", and the existing item's click means "open the preview"; one
+ * mean "stop", and the existing item's click opens the server log; one
  * item cannot have two.
  *
  * It sits at priority 1000, well left of the Studio item's 100, so it is the

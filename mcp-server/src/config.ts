@@ -63,34 +63,3 @@ export function getRepoRoot(): string {
   return process.env.DECKY_STUDIO_REPO ?? path.join(process.cwd(), "..");
 }
 
-export function getPreviewServerRoot(): string {
-  const bundled = path.join(getRepoRoot(), "resources", "preview-server");
-  if (fs.existsSync(bundled)) return bundled;
-  return path.join(getRepoRoot(), "preview-server");
-}
-
-export function getPreviewStatePath(): string {
-  return path.join(os.homedir(), ".decky-plugin-studio", "preview-state.json");
-}
-
-export type PreviewState = {
-  url?: string;
-  httpPort?: number;
-  wsPort?: number;
-  workspaceRoot?: string;
-};
-
-export function readPreviewState(): PreviewState {
-  const statePath = getPreviewStatePath();
-  if (!fs.existsSync(statePath)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(statePath, "utf8")) as PreviewState;
-  } catch {
-    return {};
-  }
-}
-
-export function writePreviewState(state: PreviewState): void {
-  fs.mkdirSync(path.dirname(getPreviewStatePath()), { recursive: true });
-  fs.writeFileSync(getPreviewStatePath(), JSON.stringify(state, null, 2), "utf8");
-}

@@ -2,7 +2,6 @@ import fs from "fs";
 import path from "path";
 import { getWorkspaceRoot } from "../config.js";
 import { discoverWorkspaceRpcMethods } from "./rpcDiscover.js";
-import { resolveRpcAllowlist } from "./rpcAllowlist.js";
 import { walkSourceFiles } from "../lint/files.js";
 
 const CALL_RE = /\bcall\s*\(\s*["']([a-zA-Z_][\w]*)["']/g;
@@ -30,7 +29,6 @@ export function diffRpc(workspaceRoot?: string): {
   backendOnly: string[];
   frontendOnly: string[];
   matched: string[];
-  previewDenied?: string[];
 } {
   const root = workspaceRoot ?? getWorkspaceRoot();
   const backend = new Set(discoverWorkspaceRpcMethods(root));
@@ -52,19 +50,9 @@ export function diffRpc(workspaceRoot?: string): {
   backendOnly.sort();
   frontendOnly.sort();
 
-  const snap = resolveRpcAllowlist(root);
-  const deniedFromFrontend = [...frontend].filter(
-    (m) =>
-      backend.has(m) &&
-      !snap.allowed.includes(m) &&
-      !snap.allowed.includes("*") &&
-      snap.rpcMode !== "dev"
-  );
-
   return {
     backendOnly,
     frontendOnly,
     matched,
-    previewDenied: deniedFromFrontend.length ? deniedFromFrontend.sort() : undefined,
   };
 }

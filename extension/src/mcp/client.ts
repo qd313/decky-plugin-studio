@@ -15,25 +15,20 @@ export interface McpState {
    */
   mcpHealth: "starting" | "running" | "failed";
   mcpError?: string;
-  previewRunning: boolean;
-  previewUrl?: string;
   tunnelRunning: boolean;
   tunnelPid?: number;
   ingestCount: number;
   deckReachable: boolean;
   ollamaReachable: boolean;
-  hwPreset: string;
 }
 
 let mcpProcess: cp.ChildProcess | null = null;
 let state: McpState = {
   mcpHealth: "starting",
-  previewRunning: false,
   tunnelRunning: false,
   ingestCount: 0,
   deckReachable: false,
   ollamaReachable: false,
-  hwPreset: "Idle",
 };
 
 const pendingRequests = new Map<

@@ -44,7 +44,7 @@ Source triage id: `bonsai/triage/ui-change-focus-gate`
 | Need | Skill |
 |------|-------|
 | Pre-ship gate pass/fail (triage-only) | **decky-ui-focus-gate** (subagent) |
-| Static anti-patterns + preview evidence | **decky-focus-audit** |
+| Static anti-patterns + lint evidence | **decky-focus-audit** |
 | Design-time graph before implementation | **decky-focus-architect** (subagent) |
 | Runtime focus bug with logs | **decky-debugger** (subagent) |
 | Deploy + open plugin on Deck | **decky-dev-loop** |

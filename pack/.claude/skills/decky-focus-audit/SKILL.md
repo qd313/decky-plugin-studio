@@ -1,8 +1,8 @@
 ---
 name: decky-focus-audit
 description: >-
-  Static and preview focus audit for Decky plugins: Focusable callbacks vs DOM keydown,
-  modal cancel/OK, preview.runSequence evidence. Escalate on-device issues to decky-debugger.
+  Static focus audit for Decky plugins: Focusable callbacks vs DOM keydown,
+  modal cancel/OK, plugin.lintFocus evidence. Escalate on-device issues to decky-debugger.
   Use before merging navigation-heavy UI or when reviewing D-pad routing.
 ---
 
@@ -12,7 +12,7 @@ description: >-
 
 - New modals, tabs, nested focus, or settings panels
 - PR touches `Focusable`, `onMoveLeft`/`onMoveRight`, or footer buttons
-- Preview smoke passes but navigation feels wrong
+- Static checks pass but navigation feels wrong
 
 ## Static pass (repo)
 
@@ -26,25 +26,18 @@ Search `src/` for anti-patterns:
 
 Confirm every interactive control is reachable via focus-graph callbacks.
 
-## Preview evidence
+## Lint evidence
 
-With **Decky: Open Preview** open:
-
-1. **`preview.runSequence`** — record `focusPath` after Down/Right sequences.
-2. **`preview.snapshotDom`** — confirm `activeElement` matches expected control.
-3. **`preview.compareScreenshot`** — coarse layout regression vs `tests/preview-baselines/` when baselines exist.
-
-```bash
-node scripts/run-preview-suite.mjs --filter=focus
-```
+Run **`plugin.lintFocus`** and record every finding (one-way moves, unreachable controls, DOM keydown routing).
 
 ## On-device
 
-Preview cannot reproduce Steam Input chords or real CEF focus. After static + preview passes:
+Only the Deck shows real Steam Input chords and CEF focus. After the static pass:
 
 1. **`deck.deploy`**
 2. **`deck.openPlugin`** checklist
-3. **`deck.captureScreenshot`** or **decky-screenshot-ingest** for evidence
+3. **`deck.readFocus`** / **`deck.assertFocusMove`** for where the ring really goes
+4. **`deck.captureScreenshot`** or **decky-screenshot-ingest** for evidence
 
 ## Escalation
 

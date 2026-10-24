@@ -11,15 +11,13 @@
     "build": "pnpm -r run build",
     "build:extension": "pnpm --filter decky-plugin-studio-extension run build",
     "build:mcp": "pnpm --filter @decky-plugin-studio/mcp run build",
-    "build:preview": "pnpm --filter @decky-plugin-studio/preview-server run build",
     "package:vsix": "pnpm --filter decky-plugin-studio-extension run package",
     "package:mcp": "pnpm --filter @decky-plugin-studio/mcp run pack",
     "deploy:vscode": "node scripts/deploy-to-vscode.mjs",
     "deploy:vscode:build-only": "node scripts/deploy-to-vscode.mjs --skip-install",
     "deploy:cursor": "node scripts/deploy-to-cursor.mjs",
     "deploy:cursor:build-only": "node scripts/deploy-to-cursor.mjs --skip-install",
-    "sync:example-plugin": "node scripts/sync-plugin-templates.mjs",
-    "dev:preview": "pnpm --filter @decky-plugin-studio/preview-server run dev"
+    "sync:example-plugin": "node scripts/sync-plugin-templates.mjs"
   },
   "engines": {
     "node": ">=18"

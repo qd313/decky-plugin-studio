@@ -1,7 +1,7 @@
 /**
  * Shared source-file walker.
  *
- * Moved here from preview/rpcDiff.ts so the focus linter and the RPC differ walk
+ * Moved here from rpc/rpcDiff.ts so the focus linter and the RPC differ walk
  * a plugin the same way. The behaviour is deliberately identical to what
  * rpcDiff.ts did before the move: skip node_modules and dist, match
  * .ts/.tsx/.js/.jsx, recurse everything else.

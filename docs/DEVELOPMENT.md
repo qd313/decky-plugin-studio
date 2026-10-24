@@ -19,13 +19,7 @@ See [CHANGELOG.md](../CHANGELOG.md) for release notes.
 
 - **Node.js** 18+
 - **pnpm** 8+
-- **Python** 3.10+ (preview sidecar only)
 
-Install Python sidecar dependencies once:
-
-```powershell
-pip install -r preview-server/python/requirements.txt
-```
 
 ## Deploy to VS Code (recommended)
 
@@ -39,7 +33,7 @@ This runs [scripts/deploy-to-vscode.mjs](../scripts/deploy-to-vscode.mjs), which
 
 1. `pnpm install`
 2. `pnpm run build`
-3. `pnpm run package:vsix` (bundles MCP server, preview-server, and pack into the VSIX)
+3. `pnpm run package:vsix` (bundles the MCP server and the pack into the VSIX)
 4. `code --install-extension extension/*.vsix --force` (falls back to `cursor` or common Windows editor paths)
 
 ### Script flags
@@ -90,7 +84,6 @@ Individual packages:
 ```powershell
 pnpm run build:extension
 pnpm run build:mcp
-pnpm run build:preview
 ```
 
 ## Package artifacts
@@ -104,11 +97,10 @@ pnpm run package:mcp    # mcp-server/decky-plugin-studio-mcp-*.tgz
 
 | Path | Purpose |
 |------|---------|
-| `extension/` | VSIX extension (commands, preview webview, tree, status bar) |
-| `mcp-server/` | MCP tools (deck, plugin, preview, ingest) |
-| `preview-server/` | Vite Decky shims + Python sidecar |
+| `extension/` | VSIX extension (commands, tree, status bar) |
+| `mcp-server/` | MCP tools (deck, plugin, ingest) |
 | `pack/` | Agent pack copied by **Decky: Init Pack** (`.vscode/mcp.json`, `.cursor/*`, etc.) |
-| `example-plugin/` | Minimal plugin for preview smoke tests |
+| `example-plugin/` | Minimal example plugin |
 | `templates/` | Scaffolder rename manifest |
 
 ## CI
@@ -118,5 +110,5 @@ GitHub Actions builds the VSIX on version tags: [.github/workflows/build-vsix.ym
 ## Related docs
 
 - [MCP_TOOLS.md](MCP_TOOLS.md) — MCP tool reference for plugin workspaces
-- [PREVIEW_LIMITATIONS.md](PREVIEW_LIMITATIONS.md) — what the in-IDE preview can and cannot do
+- [PREVIEW_LIMITATIONS.md](PREVIEW_LIMITATIONS.md) — note: the in-IDE preview was retired
 - [VSCODE_SMOKE_TEST.md](VSCODE_SMOKE_TEST.md) — VS Code verification checklist

@@ -1,7 +1,7 @@
 {
   "name": "decky-plugin-studio-extension",
   "displayName": "Decky Plugin Studio",
-  "description": "Streamline Decky Loader plugin development with live preview, MCP tools, and agent pack for VS Code and Cursor",
+  "description": "Streamline Decky Loader plugin development with MCP tools and an agent pack for VS Code and Cursor",
   "version": "0.3.11",
   "publisher": "decky-plugin-studio",
   "license": "Apache-2.0",
@@ -38,11 +38,6 @@
       {
         "command": "decky.createPlugin",
         "title": "Create New Plugin",
-        "category": "Decky"
-      },
-      {
-        "command": "decky.openPreview",
-        "title": "Open Preview",
         "category": "Decky"
       },
       {
@@ -102,11 +97,6 @@
     "configuration": {
       "title": "Decky Plugin Studio",
       "properties": {
-        "deckyPluginStudio.previewHttpAllow": {
-          "type": "string",
-          "default": "127.0.0.1:11434,127.0.0.1:1234,api.steampowered.com:443,store.steampowered.com:443",
-          "description": "Comma-separated host:port allowlist for preview HTTP passthrough (Ollama, Steam Web API, mDNS hosts)"
-        },
         "deckyPluginStudio.localLoaderUnit": {
           "type": "string",
           "default": "plugin_loader.service",

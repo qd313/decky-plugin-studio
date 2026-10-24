@@ -30,7 +30,7 @@ export class DeckyStatusBar {
       100,
     );
     this.item.name = "Decky Plugin Studio";
-    this.item.command = "decky.openPreview";
+    this.item.command = "decky.showMcpOutput";
     this.item.show();
     this.refresh();
   }
@@ -62,11 +62,11 @@ export class DeckyStatusBar {
       return;
     }
 
-    this.item.command = "decky.openPreview";
+    this.item.command = "decky.showMcpOutput";
     this.item.backgroundColor = undefined;
     this.item.text =
-      `$(${s.previewRunning ? "play" : "debug-pause"}) Decky ` +
-      `${dot(s.previewRunning)}${dot(s.tunnelRunning)}${dot(s.ollamaReachable)}`;
+      `$(${s.deckReachable ? "play" : "debug-pause"}) Decky ` +
+      `${dot(s.deckReachable)}${dot(s.tunnelRunning)}${dot(s.ollamaReachable)}`;
     this.item.tooltip = this.tooltipFor(s);
   }
 
@@ -80,15 +80,13 @@ export class DeckyStatusBar {
         "",
         "| | | |",
         "|---|---|---|",
-        row("Preview", s.previewRunning, "live preview is beta"),
         row("Tunnel", s.tunnelRunning),
         row("Deck", s.deckReachable),
         row("Ollama", s.ollamaReachable),
         `| Ingest | ${s.ingestCount} | events |`,
-        `| Hardware | ${s.hwPreset} | |`,
         `| Server | ${s.mcpHealth} | |`,
         "",
-        "Click to open the preview.",
+        "Click to open the server log.",
       ].join("\n"),
     );
     md.supportThemeIcons = true;

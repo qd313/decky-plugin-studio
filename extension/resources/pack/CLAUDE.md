@@ -10,7 +10,7 @@ under `.claude/`.
 - NEVER implement Decky D-pad sibling or column hops by discovering targets with `document.querySelector` / `aria-label` / `data-*` / class probes, or by treating `document.activeElement` as proof that focus moved. On Deck those lookups repeatedly miss even when the controls are on-screen, and returning `false` from `onMove*` then lets Steam spatial nav steal the hop (wrong diagonal). ALWAYS register the mounted Deck focus-owner nodes at render time (callback refs / a small registry) and hop between those registered owners; return `true` from `onMove*` once the target is registered so Steam spatial nav cannot steal the move.
 - NEVER apply durable layout corrections via ref-set inline styles on React-managed nodes; route dynamic geometry through CSS custom properties on a stable scope root consumed by `!important` rules, or the JSX `style` prop.
 - After changes to `src/`, `main.py`, or `plugin.json`, run **`plugin_build`** (MCP) or `./scripts/build.ps1` / `./scripts/build.sh` before on-device QA.
-- For Deck debug sessions, use the MCP tools: `deck_startTunnel`, `deck_probeIngest`, `deck_tailIngest`, `preview_runSequence` — do not ask the user to run tunnel scripts manually.
+- For Deck debug sessions, use the MCP tools: `deck_startTunnel`, `deck_probeIngest`, `deck_tailIngest` — do not ask the user to run tunnel scripts manually.
 - Plugin `fetch` to `http://127.0.0.1:7682` on the Deck requires a reverse tunnel from the dev PC unless developing on local SteamOS/Bazzite.
 
 See `docs/focus-graph-patterns.md` for the worked patterns, including Pattern D
@@ -34,7 +34,7 @@ vs deferred follow-up.
 ## MCP tool naming
 
 The studio's MCP server exposes tools with **underscores**, not the dotted names
-used in older prose: `deck_deploy`, `preview_runSequence`, `plugin_diffRpc`. In
+used in older prose: `deck_deploy`, `plugin_lintFocus`, `plugin_diffRpc`. In
 Claude Code they appear fully qualified as
 `mcp__decky-plugin-studio__deck_deploy`. Run `plugin_detect` first to confirm the
 workspace really is a Decky plugin.

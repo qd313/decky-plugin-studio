@@ -2,7 +2,7 @@
 name: decky-onboard
 description: >-
   First-hour Decky plugin setup with Decky Plugin Studio: Init Pack, deck.configure,
-  preview smoke, first build/deploy, deck.openPlugin checklist, and first screenshot.
+  focus lint, first build/deploy, deck.openPlugin checklist, and first screenshot.
   Use when onboarding a new plugin repo or helping a new contributor get unblocked.
 ---
 
@@ -21,14 +21,13 @@ description: >-
    - MCP **`deck.configure`** with `{ ip, user }`, or
    - Copy `.env.example` → `.env` with `DECK_IP` / `DECK_USER`.
    - Run **`scripts/setup-dev.ps1`** / **`scripts/setup-dev.sh`** once for SSH + passwordless sudo (dev-only).
-3. Command Palette → **Decky: Open Preview**.
 
 ## First validation loop
 
 | Step | MCP / command |
 |------|----------------|
 | Detect workspace | **`plugin.detect`** |
-| Preview smoke | `node scripts/run-preview-suite.mjs --tier=smoke` (preview open) |
+| Focus lint | **`plugin.lintFocus`** |
 | Build | **`plugin.build`** |
 | RPC contract | **`plugin.diffRpc`** — fix `frontendOnly` / `backendOnly` before deploy |
 | Deploy | **`deck.deploy`** |
@@ -42,8 +41,8 @@ Run **`deck.getEnv`** and record `deckReachable`, `plugin.name`, and `remote` fi
 ## Escalation
 
 - Focus/layout bugs on device → **decky-debugger** subagent
-- Tier QA after onboard → **decky-tier-qa** skill
+- On-device QA after onboard → the `deck.*` tools and `docs/device-qa-runbook.md`
 
 ## Do not
 
-- Ship based on preview alone — deploy for focus and Steam Input edge cases.
+- Ship on a green build alone — deploy for focus and Steam Input edge cases.

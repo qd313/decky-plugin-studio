@@ -1,7 +1,7 @@
 import { execSync as nodeExecSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import { loadPreviewConfig } from "../preview/previewConfig.js";
+import { loadPluginConfig } from "../pluginConfig.js";
 import { CdpTarget, hasSteamUiTargets } from "../deck/cdp.js";
 
 /**
@@ -35,7 +35,7 @@ export function runWithRetry(
 }
 
 export function runPreDeployHook(pluginRoot: string): void {
-  const cmd = loadPreviewConfig(pluginRoot).preDeployCommand;
+  const cmd = loadPluginConfig(pluginRoot).preDeployCommand;
   if (!cmd?.trim()) return;
   proc.execSync(cmd, {
     cwd: pluginRoot,

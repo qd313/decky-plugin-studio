@@ -186,7 +186,7 @@ export async function initPack(targetRoot?: string): Promise<void> {
   const templatesCopied = copyStudioTemplates(workspaceRoot);
   if (templatesCopied > 0) {
     vscode.window.showInformationMessage(
-      `Decky: ${templatesCopied} template file(s) added (preview suite, scripts, harness).`
+      `Decky: ${templatesCopied} template file(s) added (scripts, test harness).`
     );
   }
 }

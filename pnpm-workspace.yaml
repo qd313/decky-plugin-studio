@@ -1,14 +1,13 @@
 packages:
   - "extension"
   - "mcp-server"
-  - "preview-server"
 
 # pnpm 10+ refuses to run a dependency's install scripts unless it is listed
 # here. pnpm wrote these three keys itself with the placeholder value
 # "set this to true or false" and waited for an answer; until one was given,
 # every `pnpm install` aborted with ERR_PNPM_IGNORED_BUILDS.
 allowBuilds:
-  # Native binary. tsx (mcp-server tests) and vite (preview-server) are both
+  # Native binary. tsx (mcp-server tests) is
   # unusable without it, so this one is not optional.
   esbuild: true
   # Signs the .vsix during `pnpm package:vsix`.

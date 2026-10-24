@@ -35,7 +35,7 @@ deck.readPluginLog → no tracebacks after smoke
 - [ ] Plugin zip layout matches Decky template (`dist/`, `main.py`, `plugin.json`, optional `py_modules/`, `assets/`).
 - [ ] No secrets in zip (`.env`, API keys).
 - [ ] README describes install and permissions.
-- [ ] On-device Tier 0 smoke passed (`decky-tier-qa` or runbook).
+- [ ] On-device Tier 0 smoke passed (`docs/device-qa-runbook.md`).
 
 ## MCP tools
 

@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { initPack } from "./commands/initPack";
 import { createPlugin } from "./commands/createPlugin";
-import { openPreview } from "./commands/openPreview";
 import {
   deployToDeck,
   captureScreenshot,
@@ -13,7 +12,6 @@ import { runDoctor } from "./commands/doctor";
 import { DeckyTreeProvider } from "./ui/treeProvider";
 import { DeckyStatusBar } from "./ui/statusBar";
 import { AutomationStatusBar } from "./ui/automationStatusBar";
-import { getPreviewManager } from "./commands/openPreview";
 import { spawnMcpProcess, stopMcpProcess, updateMcpState, showMcpOutput } from "./mcp/client";
 
 let treeProvider: DeckyTreeProvider;
@@ -46,7 +44,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("decky.armAutomation", () => armAutomation()),
     vscode.commands.registerCommand("decky.initPack", () => initPack()),
     vscode.commands.registerCommand("decky.createPlugin", () => createPlugin()),
-    vscode.commands.registerCommand("decky.openPreview", () => openPreview()),
     vscode.commands.registerCommand("decky.deployToDeck", () => deployToDeck()),
     vscode.commands.registerCommand("decky.captureScreenshot", () => captureScreenshot()),
     vscode.commands.registerCommand("decky.startTunnel", () => startTunnel()),
@@ -109,13 +106,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push({
     dispose: () => {
-      getPreviewManager().stop();
       stopMcpProcess();
     },
   });
 }
 
 export function deactivate(): void {
-  getPreviewManager().stop();
   stopMcpProcess();
 }
