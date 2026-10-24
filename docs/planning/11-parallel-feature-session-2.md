@@ -726,7 +726,7 @@ C, auto-merged), and three files where lane G's removals met other lanes' additi
 (`copy-scripts.mjs`, `index.ts`, `toolRegistry.ts`), all resolved by hand. Tests: 493 → 578 in
 `mcp-server`; the `preview-server` package and its 2 tests are gone. `pnpm build`, the extension
 typecheck and `pnpm run package:vsix` with the bundled smoke test are green. The VSIX is 8.04 MB
-(was 32 MB). Tool count 42.
+(was 32 MB). Tool count 43.
 
 | Lane | Commit | Tests added | What its honesty paragraph said to check on a device |
 |------|--------|-------------|------------------------------------------------------|

@@ -3,7 +3,7 @@
 Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) legend (effort/risk, 1 = lowest).
 
 Last full check against the code and against bonsAI's device log: **2026-10-22** (`main` at `43afc0b`,
-version 0.3.11, 493 + 2 tests green). **2026-10-24: parallel feature session 2 ran and all eight lanes landed on `main`** (`a348319` to `0526765`, 578 tests, 42 tools, VSIX packaged). Everything it built is desk-verified only; the device pass is owed. **The in-IDE preview is retired** (lane G, `9d30a33`). `main` is not pushed: the release workflow would publish `v0.3.11` on the next push because `extension/package.json` changed and that tag does not exist. bonsAI's own record of what each DPS tool did on the real Deck is
+version 0.3.11, 493 + 2 tests green). **2026-10-24: parallel feature session 2 ran and all eight lanes landed on `main`** (`a348319` to `0526765`, 578 tests, 43 tools, VSIX packaged). Everything it built is desk-verified only; the device pass is owed. **The in-IDE preview is retired** (lane G, `9d30a33`). `main` is not pushed: the release workflow would publish `v0.3.11` on the next push because `extension/package.json` changed and that tag does not exist. bonsAI's own record of what each DPS tool did on the real Deck is
 `Documents/bonsAI/docs/mcp-setup.md` § "DPS findings log"; device verdicts below come from there, not
 from commit messages.
 
