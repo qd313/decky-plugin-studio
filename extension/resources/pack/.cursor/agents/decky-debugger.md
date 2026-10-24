@@ -14,7 +14,7 @@ Your job: **get runtime evidence on-screen or in a workspace log file yourself, 
 
 | Step | MCP tool |
 |------|----------|
-| Configure Deck IP/user | `deck.configure({ ip, user, port, ingestPort })` |
+| Configure Deck IP/user | `deck.configure({ DECK_IP, DECK_USER })` |
 | Check tunnel/ingest/deck | `deck.status()` |
 | Start/stop reverse tunnel | `deck.startTunnel()` / `deck.stopTunnel()` |
 | Verify ingest path | `deck.probeIngest()` |

@@ -1,11 +1,31 @@
 # Device QA runbook
 
-**Purpose:** What to run on Steam Deck (or in preview) next, in priority order.
+**Purpose:** What to run on the Steam Deck (or a stand-in) next, in priority order.
 
-**Automated preview suite:** `node scripts/run-preview-suite.mjs --tier=smoke` (requires **Decky: Open Preview in Cursor**).  
-**Evidence:** `node scripts/run-preview-suite.mjs --tier=smoke --evidence` → `docs/test-evidence/<batch>/<date>-<sha>/`.
+The in-IDE preview and its test suite were retired on 2026-10-24. All UI checks run on a machine.
 
-Record **build id / git SHA** and **SteamOS** when marking Pass / Partial / Fail.
+Record **build id / git SHA**, **SteamOS**, and **the machine** (the `machine` stamp on every
+result) when marking Pass / Partial / Fail.
+
+---
+
+## Before a run
+
+1. **Pick the machine.** `deck.listMachines` lists them. Pass `machine: "<name>"` on every
+   `deck.*` call; without it you drive `deck`, the real Deck. A stand-in's verdict is never the
+   Deck's: every result says `machine: { name, kind, os }`.
+2. **Make sure you hold the machine.** A driving call takes the machine's lease for your session.
+   If another live session holds it, the call is refused and names them. Stop and tell the user.
+3. **Run `deck.checkReady` first.** Declare what the run needs (`awake`, `buildMatches`,
+   `runningAppId`, `pluginOpen`, `noForeignCdpTunnel`, `focusRingOwned`, ...). Add `machineKind:
+   "deck"` when only the real Deck counts. On a Windows stand-in it also checks that Big Picture
+   is in front. A `fail` or `unknown` stops the run at step zero.
+4. **Hold it awake** for a long run with `deck.holdAwake`, and release it with
+   `deck.restorePowerSettings` at the end. **Snapshot settings** first with
+   `deck.snapshotSettings` if the run changes them, and put them back with
+   `deck.restoreSettings`.
+
+If anything looks wrong, call `deck.stopAutomation`. Only a human re-arms it.
 
 ---
 
@@ -15,7 +35,7 @@ Record **build id / git SHA** and **SteamOS** when marking Pass / Partial / Fail
 |-----|---------|
 | **P0–P3** | Importance — P0 = core product; P3 = polish |
 | **S0–S3** | Setup cost — S0 = QAM open; S3 = reboot / clean install |
-| **Tier 0–4** | Run order — complete lower tiers before higher unless PR-scoped |
+| **Tier 1–4** | Run order — complete lower tiers before higher unless PR-scoped |
 
 ---
 
@@ -30,11 +50,23 @@ these words, so the rig can set the state up instead of a person:
 | **without a game running** / **no game** | `RunningApps` is empty | `deck.exitGame {}` — `nothingRunning: true` when it already is |
 | **with a game running and without** | run the row twice, once in each state, and record both | `deck.launchGame`, the row, `deck.exitGame`, the row again |
 
-Name the game in the row (e.g. *Half-Life 2*): the rig launches only what it is told, from the
-Recent Games shelf, and never launches a second game. Both verbs leave the ring wherever Steam
-puts it — get the plugin back with `deck.openPlugin`, which opens the QAM over a running game.
-Each writes `runs/launch-game_<ts>.json` / `runs/exit-game_<ts>.json`; cite the file in the
-row's evidence. Design and device measurements: `docs/planning/07-launch-and-exit-a-game.md`.
+Name the game in the row (e.g. *Half-Life 2*). `deck.listGames` shows what is installed and
+what is on the Recent Games shelf, with no press. The rig launches only what it is told, and
+never a second game.
+
+**Fallbacks.** On the maintainer's Deck the Steam button has opened no menu since 2026-10-10.
+The tools work round it, and the result says which route ran:
+
+- `deck.launchGame` reports `launchRoute`: `shelf`, `library` (a game not on the shelf, found in
+  the Library grid; never run on a Deck yet), or `home` (no menu: the QAM is closed with the
+  GUIDE+A chord and the Home shelf is walked).
+- `deck.exitGame` reports `via`: `steam-menu`, or `steam-close-call` when no menu opens (Steam's
+  own close call, not a press). It also checks the process list, so a game that left
+  `RunningApps` but still runs is not called exited.
+
+Both leave the ring wherever Steam puts it. Get the plugin back with `deck.openPlugin`, which
+opens the QAM over a running game. Each writes `runs/launch-game_<ts>.json` /
+`runs/exit-game_<ts>.json`; cite the file in the row's evidence.
 
 ---
 
@@ -42,7 +74,6 @@ row's evidence. Design and device measurements: `docs/planning/07-launch-and-exi
 
 | Tier | Status | Last run | Notes |
 |------|--------|----------|-------|
-| 0 | Open | — | Preview smoke batch (`--tier=smoke`) |
 | 1 | Open | — | Core shipped features on Deck |
 | 2 | Open | — | Extended / opt-in scenarios |
 | 3 | Open | — | Boundaries, permissions edge cases |
@@ -50,73 +81,34 @@ row's evidence. Design and device measurements: `docs/planning/07-launch-and-exi
 
 ---
 
-## Tier 0 — Preview smoke (S0)
-
-Run in Cursor with preview open, or on Deck after `deck.deploy`.
-
-### SMOKE-RPC-greeting (P0)
-
-- [ ] `get_greeting` RPC returns expected string for a test name.
-- [ ] No traceback in plugin log.
-
-**Automated:** `node scripts/run-preview-suite.mjs --filter=SMOKE-RPC`
-
-### SMOKE-DOM-shell (P0)
-
-- [ ] Plugin shell renders (title, primary controls visible).
-- [ ] No crash on first paint.
-
-**Automated:** `node scripts/run-preview-suite.mjs --filter=SMOKE-DOM-shell`
-
-### SMOKE-DOM-focus-sequence (P1)
-
-- [ ] D-pad **Down** moves focus within the plugin panel.
-- [ ] Focus path includes a `Focusable` node.
-
-**Automated:** `node scripts/run-preview-suite.mjs --filter=focus-sequence`
-
----
-
 ## Tier 1 — On-device core (S1)
 
-Requires `deck.deploy` and QAM access on Steam Deck.
+Requires `deck.deploy` and QAM access on the Deck.
 
 ### Example checklist
 
-- [ ] Plugin appears in QAM sidebar; opens without crash.
+- [ ] Plugin appears in QAM sidebar; opens without crash (`deck.openPlugin`).
 - [ ] Primary user action works end-to-end (RPC + UI feedback).
 - [ ] B / back returns to QAM without leaving orphaned modals.
+- [ ] `deck.sweep` over the main pane reads `stopsFocusedButNotVisible: 0`.
 
 ---
 
 ## Tier 2+ — Extended QA
 
-Add plugin-specific scenarios under `tests/preview-suite/` and reference them from `tier-manifest.json`.
-
-| Batch key | JSON file | When to run |
-|-----------|-----------|-------------|
-| `smoke` | `smoke.json` | Every PR touching `src/`, `main.py`, or `plugin.json` |
-| *(add)* | *(add)* | Release candidates, feature flags |
+Save each passing run as a check with `deck.saveCheck`, and rerun them all after a deploy with
+`deck.replayChecks`.
 
 ---
 
 ## Commands reference
 
 ```bash
-# Smoke batch (preview)
-node scripts/run-preview-suite.mjs --tier=smoke
-
-# Single scenario by id fragment
-node scripts/run-preview-suite.mjs --tier=smoke --filter=SMOKE-RPC
-
-# Capture evidence artifacts
-node scripts/run-preview-suite.mjs --tier=smoke --evidence
-
 # Build before on-device QA
 ./scripts/build.ps1   # Windows
 ./scripts/build.sh    # Linux / SteamOS
 ```
 
-**Preview prerequisites:** Open preview in Cursor; IPC bridge uses `~/.decky-plugin-studio/preview-ipc/`; state in `~/.decky-plugin-studio/preview-state.json`.
-
-**On-device prerequisites:** Configure `DECK_IP` / SSH; use MCP `deck.deploy` or project deploy script; reverse tunnel for ingest if debugging from dev PC.
+**On-device prerequisites:** Configure `DECK_IP` / `DECK_USER` (`deck.configure`) and SSH; use
+MCP `deck.deploy` or the project deploy script; start the reverse tunnel for ingest if debugging
+from a dev PC.

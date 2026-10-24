@@ -35,7 +35,7 @@ Run **`plugin.lintFocus`** and record every finding (one-way moves, unreachable 
 Only the Deck shows real Steam Input chords and CEF focus. After the static pass:
 
 1. **`deck.deploy`**
-2. **`deck.openPlugin`** checklist
+2. **`deck.openPlugin`** — opens the panel by driving the Deck
 3. **`deck.readFocus`** / **`deck.assertFocusMove`** for where the ring really goes
 4. **`deck.captureScreenshot`** or **decky-screenshot-ingest** for evidence
 

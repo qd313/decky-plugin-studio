@@ -67,7 +67,7 @@ If the CLI install fails:
 ```powershell
 pnpm run build
 pnpm run package:vsix
-code --install-extension extension/decky-plugin-studio-extension-0.1.0.vsix --force
+code --install-extension extension/decky-plugin-studio-extension-0.3.11.vsix --force
 ```
 
 Or in VS Code / Cursor: **Extensions → … → Install from VSIX** and select the file under `extension/`.
@@ -100,12 +100,23 @@ pnpm run package:mcp    # mcp-server/decky-plugin-studio-mcp-*.tgz
 | `extension/` | VSIX extension (commands, tree, status bar) |
 | `mcp-server/` | MCP tools (deck, plugin, ingest) |
 | `pack/` | Agent pack copied by **Decky: Init Pack** (`.vscode/mcp.json`, `.cursor/*`, etc.) |
+| `bridge/` | The ESP32 controller bridge: firmware, and the press, chord and virtual-pad scripts under `bridge/tools/` |
+| `scripts/standin/` | Setup scripts for stand-in machines (Windows Decky, VMs, a Bazzite host) |
 | `example-plugin/` | Minimal example plugin |
 | `templates/` | Scaffolder rename manifest |
 
+## Stopping and arming the rig
+
+```powershell
+pnpm stop   # stop all Deck automation now (the killswitch)
+pnpm arm    # re-arm it; only a human should run this
+```
+
+The status bar and the **Decky: Stop All Deck Automation** / **Decky: Arm Deck Automation** commands do the same.
+
 ## CI
 
-GitHub Actions builds the VSIX on version tags: [.github/workflows/build-vsix.yml](../.github/workflows/build-vsix.yml).
+GitHub Actions builds the VSIX ([.github/workflows/build-vsix.yml](../.github/workflows/build-vsix.yml)) on a `v*` tag, on a push to `main` that changes `extension/package.json` or `package.json`, and on a manual run.
 
 ## Related docs
 

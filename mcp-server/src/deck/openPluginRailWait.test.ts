@@ -6,8 +6,9 @@
  * (pane 999) was missing from the rail for over 100 s. Two deck_openPlugin tries
  * failed with "walked 10 rail entries without the Decky pane appearing"; the
  * third worked, with the tab back. A walk along a rail with no Decky entry can
- * only fail, so the tool now presses nothing while the menu is open and the page
- * has no Decky pane, polls for up to 120 s, and says how long it waited.
+ * only fail, so the tool now presses no D-pad button while the menu is open and
+ * the page has no Decky pane. It polls for up to 120 s, closing and reopening the
+ * menu every 10 s (the reopen step, 0527dfa), and says how long it waited.
  *
  * The fake Quick Access page here is driven by the clock and by which buttons
  * were pressed, not by read counts, so the number of polls the wait makes does

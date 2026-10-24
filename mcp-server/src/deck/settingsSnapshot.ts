@@ -31,10 +31,9 @@
  * that with what arrived and refuses a mismatch (one automatic second try, then an error that
  * names both sizes). The small buffered copy has no such check yet.
  *
- * UNVERIFIED ON HARDWARE. This assumes the real, well-documented Decky Loader
- * convention -- `~/homebrew/settings/<plugin name>` and
- * `~/homebrew/data/<plugin name>` -- but nothing here has been run against a
- * real Deck. See this lane's report for the honest limits.
+ * Paths follow the Decky Loader convention -- `~/homebrew/settings/<plugin name>`
+ * and `~/homebrew/data/<plugin name>`. Verified on the Deck 2026-10-22 (bonsAI's
+ * DPS findings log): a snapshot of the settings folder passed.
  */
 import { ChildProcess, spawn } from "child_process";
 import { checkTarFile } from "./tarCheck.js";

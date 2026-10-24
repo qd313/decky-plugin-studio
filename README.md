@@ -1,26 +1,35 @@
 # Decky Plugin Studio
 
-VS Code / Cursor extension for **Decky Loader** plugin development: live in-IDE QAM preview, MCP tools for build/deploy/debug on a real Steam Deck, composited screenshots and screen recordings, and an agent pack for your plugin repo.
+VS Code / Cursor extension for **Decky Loader** plugin development: MCP tools that build, deploy and test your plugin on a real Steam Deck, composited screenshots and screen recordings, and an agent pack for your plugin repo.
 
-> **Live preview is very much beta.** It is great for fast UI and RPC iteration, but focus, layout, Steam Input, and gamescope compositing still need on-device QA. See [Preview limitations](docs/PREVIEW_LIMITATIONS.md).
+The in-IDE preview was retired on 2026-10-24. UI checks run on the Deck, or on a stand-in.
 
 ## What you get
 
 | Feature | What it does |
 |---------|----------------|
-| **Live preview** | QAM-sized webview with HMR, virtual gamepad, hardware simulator, Python sidecar for real `main.py` RPC |
-| **MCP tools** | Agents and commands for `deck.deploy`, `deck.captureScreenshot`, `deck.record`, preview suite, tunnel/ingest |
+| **MCP tools** | 43 tools for agents: build, deploy, logs, capture, and driving the Deck (see the list below) |
 | **Composited capture** | Screenshots and recordings that include QAM + your plugin UI (not raw game-only kmsgrab) |
 | **Init Pack** | Drops `AGENTS.md`, MCP config, agents/skills/hooks for **Cursor and/or Claude Code**, and optional `scripts/` into your plugin repo |
 | **Create New Plugin** | Clones decky-plugin-template, renames boilerplate, runs Init Pack |
 
+What the tools cover:
+
+- **Bridge and focus tools.** An ESP32 board plugged into the Deck acts as a real gamepad. Agents press buttons (the triggers `LT` and `RT` too), walk the D-pad, run sequences and sweeps, and read where the focus ring is and whether a person could see it.
+- **Killswitch.** `deck.stopAutomation` stops every press at once. Only a human re-arms it.
+- **Launch and exit a game** by pressing buttons, with a read before every A. `deck.listGames` lists what can be started.
+- **Run hygiene.** Check the Deck is ready before a run, keep it awake, snapshot and restore the plugin's settings, and replay saved checks after a deploy.
+- **Stand-in machines.** Drive a Bazzite VM or a Windows PC running Big Picture as well as the Deck. Every result names the machine, and only one session drives a machine at a time.
+- **Focus lint.** `plugin.lintFocus` checks D-pad wiring from source.
+- **Doctor.** `studio.doctor` (and **Decky: Doctor**) checks DPS's own setup.
+
 ## Install
 
-1. Download the latest `.vsix` from [GitHub Releases](https://github.com/decky-plugin-studio/decky-plugin-studio/releases)
+1. Download the latest `.vsix` from [GitHub Releases](https://github.com/qd313/decky-plugin-studio/releases)
 2. **Extensions** → **…** → **Install from VSIX…**
 3. Reload the editor
 
-The **status bar** (bottom-right) shows the installed version, preview/tunnel state, and ingest count.
+The **status bar** (bottom-right) shows the installed version, tunnel state, ingest count, and whether Deck automation is armed.
 
 ## Quick start
 
@@ -55,20 +64,13 @@ Command Palette → **`Decky: Init Pack`**
 
 Copies agent guidance, MCP config, skills, `.env.example`, and the full `scripts/` toolkit (build, setup-dev, capture, tunnel, watch-deploy).
 
-### 4. Open preview (beta)
-
-Command Palette → **`Decky: Open Preview`**
-
-- Edit `src/` → Vite HMR in the QAM frame  
-- Edit `main.py` → Python sidecar restarts with preserved state  
-
-**Do not ship** based on preview alone — deploy to a Deck for focus and layout bugs.
-
-### 5. Day-to-day loop
+### 4. Day-to-day loop
 
 ```
-preview (fast UI) → build/deploy → on-device QA
+build/deploy → on-device QA
 ```
+
+If setup looks wrong, run **`Decky: Doctor`** first.
 
 | Task | MCP (agents) | Shell (human fallback) |
 |------|----------------|------------------------|
@@ -84,7 +86,7 @@ preview (fast UI) → build/deploy → on-device QA
 
 **Artifacts:** `screenshots/`, `recordings/`.
 
-### 6. Shell scripts reference
+### 5. Shell scripts reference
 
 After **Init Pack** (or in [example-plugin/](example-plugin/)), scripts live under **`scripts/`** in your plugin repo. Source templates: [`templates/scripts/`](templates/scripts/) in this repo.
 
@@ -104,16 +106,16 @@ After **Init Pack** (or in [example-plugin/](example-plugin/)), scripts live und
 
 Init Pack **skips existing** script files — delete old `scripts/build.*` or choose **Overwrite all** to pick up template updates.
 
-### 7. MCP in Cursor / VS Code / Claude Code
+### 6. MCP in Cursor / VS Code / Claude Code
 
-After Init Pack, your plugin repo’s MCP config points at the extension’s MCP server — `mcp.json` and `.vscode/mcp.json` for Cursor/VS Code, `.mcp.json` for Claude Code. The server speaks the standard MCP protocol, so all 34 tools appear in any MCP client’s tool list. Tools are documented in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
+After Init Pack, your plugin repo’s MCP config points at the extension’s MCP server — `mcp.json` and `.vscode/mcp.json` for Cursor/VS Code, `.mcp.json` for Claude Code. The server speaks the standard MCP protocol, so all 43 tools appear in any MCP client’s tool list. Tools are documented in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
 
-MCP tool names use underscores (`deck_deploy`, `preview_runSequence`); the dotted forms in prose refer to the same tools.
+MCP tool names use underscores (`deck_deploy`, `deck_runSequence`); the dotted forms in prose refer to the same tools.
 
 Example agent flows:
 
 - `deck.configure` → `plugin.build` → `deck.deploy` → `deck.captureScreenshot`
-- `preview.start` → `preview.runSequence` for smoke tests
+- `deck.checkReady` → `deck.openPlugin` → `deck.sweep` for a focus check on the Deck
 - `deck.record` with `{ seconds: 15, mode: "game", quality: "compressed" }`
 
 ## Capture prerequisites
@@ -136,7 +138,6 @@ Optional: `deck.installCaptureHelper` installs `studio-record` / `studio-capture
 ## More documentation
 
 - [MCP tools reference](docs/MCP_TOOLS.md)
-- [Preview limitations](docs/PREVIEW_LIMITATIONS.md) — beta preview vs on-device QA
 - [Consumer sync (bonsAI & other plugins)](docs/MCP_CONSUMER_SYNC.md)
 - [Device QA runbook](docs/device-qa-runbook.md)
 

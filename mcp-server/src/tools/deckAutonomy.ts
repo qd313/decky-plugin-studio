@@ -99,7 +99,7 @@ export function openPlugin(): {
       `Open the "${pluginName}" plugin panel`,
       "Keep the plugin panel visible for deck.captureScreenshot / deck.record",
     ],
-    note: "Deck UI cannot be automated in v1; follow the checklist manually.",
+    note: "This is the manual checklist (drive: false). Without drive: false, deck_openPlugin opens the panel itself through the bridge.",
   };
 }
 

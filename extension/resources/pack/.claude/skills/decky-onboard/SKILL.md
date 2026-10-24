@@ -2,7 +2,7 @@
 name: decky-onboard
 description: >-
   First-hour Decky plugin setup with Decky Plugin Studio: Init Pack, deck.configure,
-  focus lint, first build/deploy, deck.openPlugin checklist, and first screenshot.
+  focus lint, first build/deploy, deck.openPlugin (opens the panel on the Deck), and first screenshot.
   Use when onboarding a new plugin repo or helping a new contributor get unblocked.
 ---
 
@@ -18,7 +18,7 @@ description: >-
 
 1. Command Palette → **Decky: Init Pack** (copies agents, skills, MCP config, scripts).
 2. Configure Deck:
-   - MCP **`deck.configure`** with `{ ip, user }`, or
+   - MCP **`deck.configure`** with `{ DECK_IP, DECK_USER }` (those exact keys), or
    - Copy `.env.example` → `.env` with `DECK_IP` / `DECK_USER`.
    - Run **`scripts/setup-dev.ps1`** / **`scripts/setup-dev.sh`** once for SSH + passwordless sudo (dev-only).
 
@@ -31,7 +31,7 @@ description: >-
 | Build | **`plugin.build`** |
 | RPC contract | **`plugin.diffRpc`** — fix `frontendOnly` / `backendOnly` before deploy |
 | Deploy | **`deck.deploy`** |
-| Open plugin on Deck | **`deck.openPlugin`** — follow returned checklist |
+| Open plugin on Deck | **`deck.openPlugin`** — drives the Deck to open the panel; `drive: false` returns a manual checklist instead |
 | Screenshot | **`deck.captureScreenshot`** (QAM + plugin visible) |
 
 ## Environment snapshot

@@ -2,134 +2,286 @@
 
 For installing or building the extension, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-> **Preview:** `preview.*` tools drive the in-IDE QAM preview, which is **very much beta**. Use `deck.deploy` + on-device QA for focus, layout, and Steam Input.
+The server registers **43 tools**. MCP names use underscores (`deck_deploy`); this page writes
+them with a dot (`deck.deploy`). Both mean the same tool. The source of truth is
+`mcp-server/src/toolRegistry.ts`: each tool's own description there is what an agent sees.
+
+The in-IDE preview was retired on 2026-10-24. The 16 `preview_*` tools are gone. UI checks now
+run on the Deck, or on a stand-in.
+
+## Shared parameters and the result stamp
+
+- **`machine`** — every `deck.*` tool takes `machine: "<name>"` (except `deck.listMachines` and
+  `deck.automationStatus`, which cover every machine). The name comes from `deck.listMachines`.
+  Without it you drive the registry default, normally `deck`: the real Deck from `deck.env`.
+- **The stamp** — every result carries `machine: { name, kind, os }`. `kind` is `deck` or
+  `standin`. Never file a stand-in's verdict as the Deck's.
+- **`deadlineMs`** — every tool takes a wall-clock limit for that one call. Defaults: 10 minutes
+  for driving tools (press, walk, sweep, sequence, open, launch, exit, deploy, snapshot,
+  record...), 30 s for `deck.status` and the registry and killswitch tools, 60 s for the rest.
+  When it passes, the call returns an error naming the tool, the deadline and the last stage it
+  reported. Child processes it started are killed. A driving tool's pad is released. The stop
+  latch is **not** set.
+- **One driver per machine (the lease)** — a driving call takes the machine's lease for your
+  session. A second live session's driving call is refused, naming the holder, its purpose and
+  when the lease frees itself. Reads, the killswitch, the restore tools and the registry tools
+  never need it. A lease expires after ten minutes without a call, or when its owner process is
+  dead.
+- **One call at a time per machine** — two driving calls from the same session on one machine
+  wait in line. A call that waited reports `waitedForPreviousCallMs`, and the wait counts against
+  its deadline. Reads do not wait.
 
 ## Workspace config
 
-Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json):
+Plugin repos may include [`.decky/preview.json`](../pack/.decky/preview.json). The name is left
+over from the preview. Two keys are still read; any other key is ignored.
 
 | Field | Purpose |
 |-------|---------|
-| `rpcMode` | `discover` (default), `allowlist`, or `dev` |
-| `rpcAllowlist` | Extra allowed RPC methods |
-| `rpcDenylist` | Always blocked (`_main`, `_unload`, …) |
-| `ipcTimeoutMs` | IPC wait for snapshot/RPC (default 120000) |
-| `preDeployCommand` | Shell command before `deck.deploy` |
-| `panelRootSelector` | CSS selector your panel renders at its root (e.g. `.my-plugin-scope`). Lets `deck.openPlugin` tell "my panel is open" from "my name is a row in Decky's plugin list" |
-| `permissions` | Preview permission simulator map |
+| `panelRootSelector` | CSS selector your panel renders at its root (e.g. `.my-plugin-scope`). Lets `deck.openPlugin` and `deck.checkReady` tell "my panel is open" from "my name is a row in Decky's plugin list" |
+| `preDeployCommand` | Shell command run before `deck.deploy` |
 
-## deck.*
+## Machines and setup
 
-- **deck.configure** — `{ ip?, user?, port?, ingestPort? }`
-- **deck.status** — tunnel, ingest, deck, ollama state, `automationArmed`, and bridge state as **`bridgePortOpen`**. `bridgePortOpen` says only what it measures: the serial port opened and the firmware acked. It is **not** a claim that the board's other USB lead reaches the Deck — with that lead unplugged this still reads `true` (measured 2026-08-27). **`bridgeReady` remains as a deprecated alias** carrying the identical value, because a live consumer reads it; prefer `bridgePortOpen` in new code.
-- **deck.startTunnel** / **deck.stopTunnel**
-- **deck.probeIngest** / **deck.tailIngest** — `{ since?, lines?, hypothesisId? }`
-- **deck.captureScreenshot** — `{ mode?: "auto"|"game"|"desktop", allowNonPluginUi?: boolean }`  
-  Returns `{ path, bytes, mode, method, image }` **and an MCP `image` content block beside the JSON text block**, so a model can actually see the picture instead of being handed a filename it cannot open. Images over ~1.5 MB of base64 are downscaled (nearest-neighbour, 25% steps, 240px floor) rather than dropped; if one is dropped or unreadable anyway, the `image` field in the text block says so — the text never lets a caller believe it received a picture it did not. Composited methods preferred (`gamescope-atom`, `grim`). Open QAM + plugin first.
-- **deck.record** — `{ seconds?, mode?, quality?: "compressed"|"full", allowNonPluginUi?: boolean }`  
-  Returns `{ path, bytes, mode, method, seconds }`. Requires composited `pipewire-gamescope` or `wf-recorder` unless `allowNonPluginUi`. Artifacts: `<workspace>/recordings/`.
-- **deck.installCaptureHelper** — `{ which?: "record"|"capture"|"both" }` — installs `studio-record` / `studio-capture` on Deck `~/.local/bin` (remote SSH only).
-- **deck.deploy** — `{ mode?: "auto"|"local"|"remote", waitForLoader?: boolean, loaderTimeoutMs?: number }` — unified copy manifest + retry. After the loader restart it waits (default on, 30 s bound) until `plugin_loader` is active and Steam's UI pages are listed over CDP, and reports the wait in `loader`; `loader.ready: false` means the deadline passed and the next `deck.*` call may still land in the restart.
-- **deck.reloadPlugin** — `{ mode?: "auto"|"local"|"remote", waitForLoader?: boolean, loaderTimeoutMs?: number }` — restart `plugin_loader` without redeploy; same post-restart wait and `loader` block as `deck.deploy`
-- **deck.openPlugin** — `{ pluginName?, drive?, rootSelector?, tabBudget?, listBudget? }` — drives Steam through the bridge to open the panel, verifying each stage against a live focus read. Set `rootSelector` (or `panelRootSelector` in `.decky/preview.json`) so "already open" is decided by your own markup rather than inferred from Decky's pane labels — the list advertises every installed plugin's name, so without it an unmounted panel can read as open. `drive: false` returns the manual checklist only. Safe straight after `deck.deploy`: the first read waits out the loader restart, and the QAM open chord (a toggle) is fired only on the Quick Access page's own report that the menu is shut (`probe-qam` stage), never on a null read from another page.
-- **deck.readPluginLog** — `{ lines?, filter? }` — tail `plugin_loader` journal via SSH/local shell; filter applied in-process (not shell)
-- **deck.getEnv** — workspace, deck config, tunnel, plugin detect, optional remote SteamOS probe
+- **deck.configure** — `{ DECK_IP?, DECK_USER? }` writes `deck.env`, the real Deck's address.
+  Other keys are written to `deck.env` as they are, and nothing reads `ip` or `user`, so use the
+  upper-case names. With **`machine`** it adds or changes that machine's entry in
+  `~/.config/decky-plugin-studio/machines.json` instead: `kind` (`deck` | `standin`), `os`
+  (`steamos` | `bazzite` | `windows`), `local`, `host`, `user`, `press` (`bridge` | `uinput` |
+  `vigem` | `none`), `bridgePort`, `padPort`, `cdpPort`, `pluginsDir`, `vm`, `note`; `remove:
+  true` deletes it; `makeDefault: true` makes it the machine used when a call names none.
+- **deck.listMachines** — every machine this server can drive, with kind, os, local or not,
+  press transport, who holds its lease and whether the killswitch stopped it. Read-only.
+- **deck.releaseMachine** — `{ machine?, force? }` releases your session's lease. `force: true`
+  evicts another live session's lease; do that only when the user says that session is gone.
+- **deck.status** — tunnel, ingest, Deck reachable, Ollama, `automationArmed`, and the bridge as
+  **`bridgePortOpen`**. That says only that the serial port opened and the firmware answered. A
+  board unplugged from the Deck still reads `true`. `bridgeReady` is the same value under its old
+  name, kept for bonsAI; use `bridgePortOpen`. On a Windows machine it also reports
+  `bigPicture: { foreground, visibilityState, hasFocus }`. Cheap; call it first.
+- **deck.getEnv** — workspace, Deck config, tunnel, plugin detect, and a remote SteamOS probe.
+  The loader state is one word, or `unknown` when ssh says nothing.
+- **studio.doctor** — `{ workspace?, extensionVersion? }` checks DPS itself for setup drift,
+  without touching a Deck: the MCP config files point at a server that exists and matches the
+  extension's version; the version pins agree; nothing else holds the ingest port; the bridge
+  scripts and capture scripts resolve and Python can import `serial` (and `vgamepad` on
+  Windows); `machines.json` parses; `deck.env` has `DECK_IP` and `DECK_USER`; the killswitch
+  state. Each check is `ok: true | false | "unknown"` with `saw` and `fix`. A check that could
+  not run is `unknown`, never a pass. The extension's **Decky: Doctor** command runs it.
+  Desk-verified only.
 
-### Focus rig (on-device, bridge board + CDP)
+## Killswitch
 
-Every focus read answers **two** questions: *where is the ring* (`gpfocus`) and *could a person
-see it* (`visibility`). They are different facts — a control focused behind a bottom-pinned dock
-has the right selector, label and rect and is still invisible — and until 2026-08-31 the rig
-measured only the first.
+- **deck.stopAutomation** — `{ reason?, port?, machine? }`. Releases every held button, aborts
+  runs in flight, cuts the tunnels, and refuses every later press until a human re-arms. With
+  `machine` it stops one machine only. Always safe: it presses nothing.
+- **deck.automationStatus** — armed or stopped, when and by whom, and which tunnels are live.
+  Check this when a press refuses: a stopped rig and a broken bridge look the same from one
+  failed press.
 
-- **deck.readFocus** — `{ cdpUrl? }` → `{ ok, gpfocus, visibility, scrollPane, gpfocusWithin, activeElement, agree, quickAccessTab, visibleQuickAccessTab, … }`
-  - `visibility` — `{ verdict: "visible"|"partial"|"covered"|"offscreen", visiblePercent: 0–100, coveredBy, clippedBy, points: { visible, covered, clipped, offscreen } }`. A 3×3 grid of points across the focused rect, each put through `document.elementFromPoint`: the element or a descendant is *visible*; another element on top is *covered* (`coveredBy` names it, e.g. `div.bonsai-main-tab-dock > button.Focusable.bonsai-chip`); an ancestor is *clipped* (nothing on top — an overflow clip, reported under `offscreen`, `clippedBy` names it); off the viewport is *offscreen*. `elementFromPoint` skips `pointer-events: none`, so decorative scrims are not coverers and no plugin's dock is special-cased. It is a DOM hit-test, not eyes: wrong colours and compositing artifacts still need a screenshot or a human. `null` when nothing owns the ring.
-  - `scrollPane` — `{ selector, scrollTop, scrollHeight, clientHeight }` of the nearest scrolling ancestor, or `null`.
-- **deck.assertFocusMove** — `{ press, expect?, holdMs?, settleTimeoutMs?, port?, cdpUrl? }` — press, then read until focus stops changing; `moved` and `matched` reported separately.
-- **deck.walkTo** — `{ direction, text, exact?, budget?, stallLimit?, acquireFocus?, port?, cdpUrl? }` — direction presses only, never A/B/START. Returns `found`, `matched`, `seen`, `stalled`, `overshot`, and **`visibility`** for the stop it ended on; `found: true` with a verdict other than `visible` is shouted in `summary` (`found after 3 press(es): <BUTTON> "Show details", but COVERED by …`).
-- **deck.runSequence** — `{ steps: [{ press, expect?, label?, requireVisible?, … }], stopOnFailure?, mustReachText?, requireVisible?, runName?, writeEvidence?, acquireFocus?, port?, cdpUrl? }` — one tunnel, cycle detection, evidence file under `runs/`. Each step now carries `visibility` / `visible`; the result carries `stopsFocusedButNotVisible` (the starting read counted) and `notVisibleStops`. **`requireVisible` fails a step the way `expect` does — default `false` for this release (report-only: measured, counted, shouted, not failed); it flips to fail-by-default next release.**
-- **deck.sweep** — `{ direction?: "DOWN", returnTrip?: true, lanes?: 0, laneButton?: "RB", budget?: 80, stallLimit?: 2, acquireFocus?, runName?, writeEvidence?, port?, cdpUrl? }` — free play, scripted: walk `direction` until the ring stops or cycles, walk back, optionally repeat per carousel lane via LB/RB. Direction presses and LB/RB only, never A/B/START. Records at **every** stop: `label`, `selector`, `rect`, pane `scrollTop`, `visibility`. Writes `runs/<runName|sweep_<ts>>.json` containing exactly `{ tool, pattern, ok, reason, stopped, totals, notVisible, legs, stops }` — nothing clock-dependent — so a consumer commits a baseline (`runs/sweep-main-tab.expected.json`) and QA becomes *sweep → diff*. `totals` = `{ stopsRecorded, stopsVisited, unlabeledStops, cycles, stopsFocusedButNotVisible, presses, legs }`; read `stopsFocusedButNotVisible` first. The tool result adds `summary`, `durationMs`, `evidenceFile`, `fidelity`, `acquired`, `pressRetries`. Measured on bonsAI's Main tab: 38 rows in 41 presses (~27 s); two back-to-back runs differed by one byte, a 1px rect jitter on an animated chip — diff `totals`, labels and verdicts before rects.
-- **deck.pressButton** — `{ buttons, holdMs?, port?, verify?, cdpUrl?, verifySettleMs? }` — raw bridge press; refuses without the board. **A list of buttons is a SIMULTANEOUS press (one HID report), not a chord**: `[GUIDE, A]` that way is a bare GUIDE to Steam — the main menu opens and the A lands in whatever it shows (measured 2026-08-26). Use `deck.pressChord` for hold-then-tap. Retries once, after 350 ms, on exactly one failure — the serial port held by another opener (`PermissionError` on COM open) — and reports `retried: true`; every other failure is a refusal.  
-  **Fidelity is earned, not assumed.** A plain press reports `fidelity: "wire-sent"` — the firmware acked the command, and that is the *only* thing an ack proves. It says nothing about whether the Deck received anything: with the board's Deck-side USB lead unplugged the ack still arrives (measured 2026-08-27, when every layer reported success and nothing happened). `fidelity: "steam-routed"` is no longer reachable that way — pass `verify: true` to earn it, which reads Steam's gamepad focus over CDP before and after the press and reports `steam-routed` only when that focus actually changed, `wire-sent` with an honest reason when it did not. It costs a CDP round trip, so it is opt-in. Known limit, shared with `deck.assertFocusMove`: a focus diff cannot tell "the board is unplugged" from "the press landed on a control that legitimately did not move focus."
+There is no arming tool. Re-arming is the user's: the status bar, **Decky: Arm Deck
+Automation**, or `pnpm arm`.
 
-  **Multi-press tools earn it too, and report the weakest press.** `deck.walkTo`, `deck.sweep`, `deck.runSequence`, `deck.assertFocusMove`, `deck.openPlugin` and the game-session tools each used to derive `steam-routed` from a press *count*, so a twenty-press sweep down a dead wire claimed every press had reached Steam. They now report the weakest claim any single press earned: `walkTo`, `sweep`, `runSequence` and `assertFocusMove` earn it per press from focus reads they were already making (so it costs nothing extra and needs no `verify` flag), while `openPlugin` and the game-session tools earn it from the end state they confirm — an open plugin panel, or an app id appearing in Steam's own `RunningApps`, cannot be reached by presses that never got there. One unverified press in a run drags the whole run to `wire-sent`.
-- **deck.pressChord** — `{ hold, tap, port? }` — hold one button, tap another, release: the real chord, four HID reports in sequence. `hold: "GUIDE", tap: "A"` is the Quick Access Menu toggle. Same refusals as `deck.pressButton`. Prefer `deck.openPlugin` when the goal is the panel — it asks the Quick Access page whether the menu is already open before toggling it.
-- **deck.launchGame** — `{ name? | appid?, budget?: 40, waitMs?: 60000, runName?, writeEvidence?, port?, cdpUrl? }` — starts a game by pressing what a thumb would: GUIDE → *Home* → RIGHT along the Recent Games shelf → A on the tile → A on *Play*, each stage verified by a read before the next press (`RunningApps` and the library first, zero presses; the tile by the app id in its own `<img src>`, never its text; the button by the exact label `Play`; the launch by the app id appearing in `RunningApps`, under a second on device). Refuses before pressing: neither or both of `name`/`appid`; a *different* game running (named, with a pointer at `deck.exitGame` — never a second game); an ambiguous name (candidates listed); an uninstalled game; an app page showing *Install / Update / Buy / Pre-load / Pre-purchase / Purchase / Add to Cart / Download*; a game not on the shelf (v1: play it once by hand, or extend to the Library grid). `alreadyRunning: true` with zero presses when it is up already. **When GUIDE does not open Steam's main menu** (the maintainer's Deck since 2026-10-10), the *Home-screen route*: GUIDE+A chord to close the QAM if a read shows it open → only on `/library/home` with the ring on a Recent Games tile, RIGHT along the shelf and, past its end, LEFT → A on the tile → A on *Play*, as above; not on Home is a refusal (the only way there without the menu is B, never sent). `via: "steam-menu" | "home-screen"` says which route ran. Result in the shape of `deck.openPlugin`'s — `{ ok, appid, name, alreadyRunning?, running, route, via?, stages, seen, presses, fidelity, stopped, reason?, checklist?, evidenceFile, summary }` — and `runs/<runName|launch-game_<ts>>.json` holds the stages, the controls seen, `RunningApps` before and after, and the duration. Leaves the ring where Steam puts it (route `/apprunning`); `deck.openPlugin` gets the panel back, over the running game.
-- **deck.exitGame** — `{ waitMs?: 60000, runName?, writeEvidence?, port?, cdpUrl? }` — GUIDE (the menu opens on the game's own entry) → RIGHT (*Resume game*) → DOWN to the exact *Exit game* → A → A on *Confirm* only when a read shows the ring on it; anything else on the ring is a refusal that reports the game still running. Done when the app id leaves `RunningApps`; reports the measured post-exit state (`/library/app/<appid>`, ring on *Play*). `nothingRunning: true` with zero presses when nothing is up. **When GUIDE opens no menu at all** (the maintainer's Deck since 2026-10-10), Steam's own close-game call (`SteamClient.Apps.TerminateApp` in `SharedJSContext`, after the killswitch check) instead of presses: summary *"closed without the Steam menu: …"*, `via: "steam-close-call"` (else `"steam-menu"`), `fidelity` stays `"wire-sent"` because no press closed it. A menu that opens on the wrong entry is still a refusal. Evidence `runs/<runName|exit-game_<ts>>.json`.
-- **deck.readPage** / **deck.waitFor** — evaluate an expression in the plugin's page (read, do not drive).
-- **deck.stopAutomation** / **deck.automationStatus** — the killswitch; re-arming is not a tool.
+## Tunnel, ingest, logs
 
-### Run hygiene (set up a run, prove it is worth starting, replay it)
+- **deck.startTunnel** / **deck.stopTunnel** — reverse SSH tunnel so the Deck can push debug logs.
+- **deck.probeIngest** / **deck.tailIngest** — `{ since?, lines?, hypothesisId? }`.
+- **deck.readPluginLog** — `{ lines?, filter? }` tails the `plugin_loader` journal.
 
-Added 2026-09-07. **Every tool in this section is desk-verified only — none has run against a real
-Deck yet.** They are listed here so they are discoverable, not because they are trusted.
+The ingest port is `DEBUG_INGEST_PORT` in the server's environment (default 7682).
 
-- **deck.checkReady** — `{ awake?, buildMatches?, runningAppId?, pluginOpen?, noForeignCdpTunnel?, modalOnScreen?, focusRingOwned?, pluginRoot?, pluginName?, rootSelector?, cdpUrl?, targetsSettleMs?, timeoutMs? }` — takes a **declared** state and returns the diff against the actual one, so a run fails at step zero with a named reason instead of blind. Every field is optional and an absent field is not checked. Returns `{ ok, checks: { <name>: { declared, actual, verdict: "pass"|"fail"|"unknown", reason } }, failed[], unknown[], summary }`. **An unknown never reads as a pass**: a reader that errors reports `unknown`, which is its own outcome. `buildMatches` hashes every file in the deploy manifest locally and compares against one `sha256sum` pass over the installed directory on the Deck, distinguishing "hash differs" from "never deployed" from "could not ask". Honest limit: `modalOnScreen` only detects a modal that has captured the focus ring (the one class this repo has measured), so a modal that does not grab the ring reads as "no modal".
-- **deck.saveCheck** / **deck.replayChecks** — save a `deck.sweep` or `deck.runSequence` result, with its expected landings, as a named check file in the consumer's repo; then rerun every saved check after a deploy and diff each against its saved result. Landings, totals, visibility verdicts and per-step pass/fail are compared; `durationMs`, `evidenceFile`, `pressRetries`, `fidelity`, `acquired` and generated prose are **ignored on purpose** — a check that fails for a reason unrelated to the plugin trains people to ignore red. Each check records the build hash it passed against, so a diff can say "this changed" separately from "this was never true here". A malformed or truncated check file is rejected with a clear message and the rest of the replay continues.
-- **deck.holdAwake** `{ ttlMinutes?: 30, note? }` / **deck.restorePowerSettings** `{}` — stop the Deck sleeping mid-run by holding a systemd-logind **block inhibitor**, and release it afterwards. Steam suspends through logind, so the lock refuses its suspend outright and Steam logs `Access denied due to active block inhibitor` (measured 2026-09-08). **Nothing on the Deck is modified** — it is a lease, not a setting, so there is nothing to put back and every failure falls toward "sleeps again". **The hold is verified, not assumed:** the lock is read back from `systemd-inhibit --list` and returned as `evidence`; if it is not there, the call reports `ok: false` and says the Deck can still sleep. `restorePowerSettings` keeps its name for consumers already calling it, and is a clean no-op when nothing is held. **Read the battery warning below.**
-- **deck.snapshotSettings** `{ includeData?: false, ttlMinutes?: 30, note? }` / **deck.restoreSettings** `{}` — copy the plugin's settings directory (optionally its data directory) off the Deck into a checksummed run file, and put exactly that copy back. Restore stages then swaps rather than extracting over the live directory, and clears the old remote directory first, so a restore is byte-identical rather than a merge.
+## Capture
 
-All four state tools share one state machine (`snapshotLease.ts`), by design rather than by coincidence:
+- **deck.captureScreenshot** — `{ mode?: "auto"|"game"|"desktop", allowNonPluginUi? }`. Returns
+  `{ path, bytes, mode, method }` **and an MCP `image` block**, so a model can see the picture.
+  Big images are scaled down, not dropped; the text says if one was dropped anyway. On the Deck,
+  composited methods are preferred (`gamescope-atom`, `grim`); open the QAM and your plugin first.
+  **On a Windows stand-in** it captures the Big Picture page over Steam's debugger (`method:
+  "cdp"`), falling back to a PowerShell window grab (`"window-grab"`). The Quick Access menu is not
+  composited in there. The Windows path is desk-verified only.
+- **deck.record** — `{ seconds?, mode?, quality?: "compressed"|"full", allowNonPluginUi? }`.
+  Writes to `<workspace>/recordings/`. Still refuses on Windows.
+- **deck.installCaptureHelper** — `{ which?: "record"|"capture"|"both" }` installs
+  `studio-record` / `studio-capture` into `~/.local/bin` on the Deck.
 
-- Old values are written to a run file **the instant they are read**, before anything changes, so a crashed session still leaves them recoverable.
-- A second snapshot over an unrestored one is **refused**, naming the stale snapshot and the tool that restores it.
-- Restore is a clean no-op when nothing was snapshotted, and safe to call twice.
-- A partially-written or hand-edited run file is **detected** (checksum) rather than silently trusted.
-- Snapshots expire after `ttlMinutes` (default 30) and expiry fails toward the *safe* state — the Deck sleeps again, the settings go back.
+## Plugin lifecycle
 
-> **Battery warning, and the honest limit on expiry.** Expiry is checked **lazily**, when one of these
-> tools is next called — not by a background timer, which could not survive the crash the run file
-> exists to protect against. So a session that calls `deck.holdAwake` and then never calls any of
-> these tools again leaves the Deck awake indefinitely. A Deck left never sleeping drains itself with
-> nobody watching. Always pair a hold with its restore.
+- **deck.deploy** — `{ mode?: "auto"|"local"|"remote", waitForLoader?, loaderTimeoutMs? }`. Builds,
+  copies, restarts the loader, and by default waits (30 s bound) until the loader is active and
+  Steam lists its pages. `loader.ready: false` means the wait ran out.
+- **deck.reloadPlugin** — same arguments. Restarts the loader without a redeploy, with the same
+  wait.
+- **deck.openPlugin** — `{ pluginName?, drive?, rootSelector?, tabBudget?, listBudget?, port?,
+  cdpUrl? }`. **Drives the Deck** through the bridge to open your panel, checking every stage
+  against a focus read. It uses only the D-pad while searching and presses A only on a control
+  labelled with the plugin's name. **`drive: false`** returns the manual checklist and presses
+  nothing. Set `rootSelector` (or `panelRootSelector`) so "already open" is decided by your own
+  markup. The open chord is a toggle, so it is sent only when the Quick Access page itself says
+  the menu is shut. Waits it makes:
+  - After `deck.reloadPlugin`, up to 45 s for the Quick Access page to come back before the first
+    read (stage `wait-qam-after-restart`).
+  - After the chord, it re-reads every 300 ms for up to 3 s before calling the open a failure.
+  - When the menu is open but Decky's tab is missing from the rail, it presses no D-pad button
+    and waits up to 120 s (stage `wait-decky-tab`). Every 10 s it closes and reopens the menu,
+    checking each step with a read (stage `reopen-qam`).
+  - A first try that failed with nothing pressed, or only the chord, is tried once more inside
+    the same call. The result then has `retried`, and stages are prefixed `try1:` / `try2:`.
 
-### Capture environment
+  **On the Deck after a reload it is still not reliable**: on 2026-10-22 it opened the panel 3 of 3
+  on a first set and 1 of 3 on a stricter set (two failed 1 s after the reload with a debugger
+  connection reset).
+
+## Focus rig (bridge board + CDP)
+
+Every focus read answers two questions: **where is the ring** (`gpfocus`) and **could a person
+see it** (`visibility`).
+
+- **deck.readFocus** — `{ cdpUrl?, timeoutMs? }` → `{ ok, gpfocus, visibility, scrollPane,
+  gpfocusWithin, activeElement, agree, quickAccessTab, visibleQuickAccessTab, timedOutPages,
+  slowestPageMs, … }`.
+  - Every Steam page is asked at once. `timeoutMs` (default 10000) is the budget per page, so a
+    frozen page costs one timeout, not one per page. The read returns as soon as the ring's page
+    is known. A page that timed out gets a 500 ms budget on the next read. `timedOutPages` names
+    the pages that did not answer; `slowestPageMs` is the slowest wait. On a Windows machine only
+    Big Picture's pages are asked.
+  - `visibility` — `{ verdict: "visible"|"partial"|"covered"|"offscreen", visiblePercent,
+    coveredBy, clippedBy, points, sample }`. A control with words is sampled along its text
+    lines (`sample: "text"`), three points per line, cut to what its clipping boxes let through,
+    so a folded section line with an ellipsis reads whole. A control with no text is sampled on a
+    3x3 grid over its box (`sample: "box"`). It is a DOM hit test, not eyes: colours and
+    compositing still need a screenshot. The text-line sampler passed on the Deck 2026-10-22.
+  - `scrollPane` — the nearest scrolling ancestor's `{ selector, scrollTop, scrollHeight,
+    clientHeight }`, or `null`.
+- **deck.readPage** — `{ expression, target?, timeoutMs?, cdpUrl? }` evaluates an expression in
+  the plugin's page and returns JSON. Read, do not drive.
+- **deck.waitFor** — `{ expression, equals?, waitMs?, intervalMs?, target?, cdpUrl? }` polls an
+  expression until it is truthy (or equals `equals`). A timeout is a finding, not an error.
+- **deck.pressButton** — `{ buttons, holdMs?, port?, verify?, cdpUrl? }`. A real press through the
+  bridge. Buttons: `UP DOWN LEFT RIGHT A B X Y LB RB SELECT START GUIDE L3 R3 LT RT`. **`LT` and
+  `RT` are the triggers** (L2 and R2, pulled all the way); they need firmware `05_triggers` or
+  later. A list is a **simultaneous** press, not a chord: `[GUIDE, A]` opens the main menu. Use
+  `deck.pressChord` for hold-then-tap. Retries once, after 350 ms, only when another opener holds
+  the serial port.
+
+  **Fidelity is earned.** A plain press reports `fidelity: "wire-sent"`: the firmware acked, and
+  that is all. `verify: true` reads focus before and after and reports `"steam-routed"` only
+  when focus moved. Multi-press tools report the weakest press in the run.
+- **deck.pressChord** — `{ hold, tap, port? }`. Hold one button, tap another, release. `hold:
+  "GUIDE", tap: "A"` is the Quick Access Menu toggle. Prefer `deck.openPlugin` when you want the
+  panel.
+- **deck.assertFocusMove** — `{ press, expect?, holdMs?, settleTimeoutMs?, port?, cdpUrl? }`.
+  Press, read until focus settles, report `moved` and `matched` apart.
+- **deck.walkTo** — `{ direction, text, exact?, budget?, stallLimit?, acquireFocus?, port?,
+  cdpUrl? }`. Direction presses only, never A/B/START. Returns `found`, `matched`, `seen`,
+  `stalled`, `overshot` and `visibility` for the stop it ended on.
+- **deck.runSequence** — `{ steps: [{ press, expect?, label?, requireVisible?, holdMs?,
+  settleTimeoutMs? }], requireVisible?, stopOnFailure?, mustReachText?, runName?,
+  writeEvidence?, acquireFocus?, port?, cdpUrl? }`. One tunnel, cycle detection, evidence under
+  `runs/`. **`requireVisible` now defaults to on**: a step whose landing spot a person could not
+  see fails, the way a wrong `expect` does. Pass `false` for the run, or per step, to only
+  measure and report it.
+- **deck.sweep** — `{ direction?, returnTrip?, lanes?, laneButton?, budget?, stallLimit?,
+  acquireFocus?, runName?, writeEvidence?, port?, cdpUrl? }`. Walks one way until the ring stops
+  or cycles, walks back, and can repeat per carousel lane with LB/RB. Records label, selector,
+  rect, `scrollTop` and visibility at every stop, into a `runs/` file built for diffing. Read
+  `totals.stopsFocusedButNotVisible` first.
+
+## Games
+
+- **deck.listGames** — `{ cdpUrl? }`. Presses nothing. Installed titles (`name`, `appid`,
+  `nonSteam`), the Recent Games shelf's app ids (only when Home is up with the ring on a shelf
+  tile; otherwise `null` with `recentShelfReason`), `RunningApps`, and `notInstalledCount`. The
+  shelf read is device-unverified.
+- **deck.launchGame** — `{ name? | appid?, budget?, waitMs?, runName?, writeEvidence?, port?,
+  cdpUrl? }`. Starts a game by pressing what a thumb would, with a read before every A. It never
+  drives by script. Refuses before pressing when: neither or both of `name`/`appid`; a different
+  game is running; the name is ambiguous; the game is not installed; the app page shows Install /
+  Update / Buy / Pre-load / Pre-purchase / Purchase / Add to Cart / Download. `alreadyRunning:
+  true` costs no presses. Routes, reported as **`launchRoute`**:
+  - `shelf` — Steam button, Home, the Recent Games shelf, A on the tile, A on Play.
+  - `library` — a game not on the shelf is looked for in the Library grid: Steam button, the menu
+    entry "Library", then a D-pad walk to the tile whose image carries the app id. **Never run on
+    a Deck yet.**
+  - `home` — when the Steam button opens no menu (the maintainer's Deck since 2026-10-10), the
+    QAM is closed with the GUIDE+A chord and the shelf on the Home screen is walked RIGHT, then
+    LEFT. Anywhere but Home is a refusal, because the only way Home without the menu is B, which
+    it never presses.
+
+  `via` says `"steam-menu"` or `"home-screen"`. Writes `runs/launch-game_<ts>.json`.
+- **deck.exitGame** — `{ waitMs?, runName?, writeEvidence?, port?, cdpUrl? }`. Steam button,
+  RIGHT, DOWN to "Exit game", A, then A on "Confirm" only when a read shows the ring on it. Done
+  when the app id leaves `RunningApps`. An empty `RunningApps` is not believed alone: on
+  steamos/bazzite it also asks the process list (`pgrep` for Steam's launch line). A live process
+  refuses with `processAlive: true` and its `pid`; nothing is pressed or killed. Windows skips the
+  check and says so (`processAlive: null`, `processCheck`). When the menu opens on Home with a
+  game underneath, it walks UP to the game's entry. When the Steam button opens no menu at all,
+  it asks Steam to close the game (`SteamClient.Apps.TerminateApp`): `via: "steam-close-call"`,
+  summary "closed without the Steam menu", fidelity stays `wire-sent`. The process check and the
+  walk UP are desk-verified only. Writes `runs/exit-game_<ts>.json`.
+
+Both leave the ring where Steam puts it; `deck.openPlugin` gets the panel back, even over a
+running game.
+
+## Run hygiene (set up a run, prove it is worth starting, replay it)
+
+- **deck.checkReady** — `{ awake?, buildMatches?, runningAppId?, pluginOpen?, noForeignCdpTunnel?,
+  modalOnScreen?, focusRingOwned?, machineKind?, foreground?, pluginRoot?, pluginName?,
+  rootSelector?, cdpUrl?, targetsSettleMs?, timeoutMs? }`. Takes a **declared** state and returns
+  the diff against the real one, so a run fails at step zero with a named reason. Every field is
+  optional; an absent field is not checked. Each check is `pass`, `fail` or `unknown`, and
+  **unknown is never a pass**. `machineKind: "deck"` fails at once on a stand-in. `foreground`
+  checks that Big Picture is the window in front; it is checked by default on a Windows machine,
+  where Steam only takes pad input while Big Picture is in front. On Windows, a walk will not
+  place the ring with a blind press while Big Picture is behind. `foreground` is desk-verified
+  only. `modalOnScreen` only sees a modal that has taken the focus ring.
+- **deck.saveCheck** / **deck.replayChecks** — save a `deck.sweep` or `deck.runSequence` result
+  with its expected landings as a named check file, then rerun every saved check after a deploy
+  and diff. Timing, retries, fidelity and generated prose are ignored on purpose. Each check
+  records the build hash it passed against.
+- **deck.holdAwake** — `{ ttlMinutes?: 30, note? }`. Holds a systemd-logind **block inhibitor**
+  on sleep, so Steam's suspend is refused. Nothing on the Deck is changed. The lock is read back
+  from `systemd-inhibit --list` and returned as `evidence`; if it is not there, the call says the
+  Deck can still sleep. The lock **releases itself** after `ttlMinutes` (1 to 480).
+- **deck.restorePowerSettings** — releases that lock, and checks it is gone. A clean no-op when
+  nothing is held. **Pair every hold with a restore**; the TTL is a safety net, not the plan.
+- **deck.snapshotSettings** — `{ includeData?, ttlMinutes?: 30, note?, replace? }`. Copies the
+  plugin's settings folder (optionally its data folder) off the Deck into a checksummed run file.
+  - A big folder is streamed straight to a file. `method` says `"buffered"` or `"streamed"`.
+  - A streamed copy is checked against the size and checksum the Deck computed. A bad copy is
+    taken once more; a second bad copy is an error naming both sizes.
+  - An earlier snapshot that expired is put back first, but only if it is younger than 6 hours.
+    An older one is set aside, not restored, and the summary says so. A damaged earlier copy is
+    set aside too.
+  - A second snapshot over an unrestored one is refused. **`replace: true`** sets the earlier run
+    file aside under a dated name instead, and names it.
+  - Passed on the Deck 2026-10-22 (236 MB settings folder). `replace` is desk-verified only.
+- **deck.restoreSettings** — puts exactly that copy back. It checks the archive first and stages
+  then swaps, so the live folder is never half-written. A clean no-op when nothing was taken.
+
+## Plugin source
+
+- **plugin.detect** / **plugin.build** / **plugin.verifyZip**
+- **plugin.diffRpc** — `{ backendOnly, frontendOnly, matched }` from `main.py` against the
+  frontend's `call()` sites.
+- **plugin.lintFocus** — `{ pluginRoot? }` checks D-pad focus wiring from source: one-way moves,
+  unreachable controls, controls with no A action, banned patterns (R13: D-pad through DOM
+  `keydown`; R14: `instanceof Element`/`Node` across documents). Static only.
+
+## Capture environment
 
 | Variable | Purpose |
 |----------|---------|
 | `DECKY_STUDIO_WORKSPACE` | Plugin workspace root (artifacts, cwd) |
+| `DEBUG_INGEST_PORT` | Port the debug-ingest server listens on (default 7682) |
 | `DECKY_STUDIO_ALLOW_STEAMOS_RW` | Set `0` to skip optional pacman/steamos-readonly on Deck |
 | `BONSAI_ALLOW_STEAMOS_RW` | Legacy alias (still read) |
-
-## plugin.*
-
-- **plugin.detect** / **plugin.build** / **plugin.verifyZip**
-- **plugin.diffRpc** — `{ backendOnly, frontendOnly, matched, previewDenied? }` from `main.py` vs `src/` `call()` sites
-
-## preview.*
-
-- **preview.start** / **preview.stop** / **preview.status** — `preview.start` now **checks that the preview URL actually answers** before reporting `running: true`; it previously set a boolean and claimed success without asking anything. When nothing answers it reports `running: false` with a reason.
-- **preview.health** — preview open + IPC readiness
-- **preview.injectFocusEvent** — `{ direction }`
-- **preview.setHardware** — partial hardware state
-- **preview.runSequence** — `{ inputs, delayMs?, hwOverrides?, snapshot? }`
-- **preview.callRpc** — `{ method, args?, collectEmitsMs? }` — discovery-based allowlist; optional emit collection window
-- **preview.tailEmit** — `{ since?, lines?, event? }` — tail sidecar `decky.emit` log (`emit-log.jsonl`)
-- **preview.callTestHook** — `{ method, args? }` — `window.__deckyPreviewTestHooks`
-- **preview.snapshotDom** — `{ selector? }`
-- **preview.captureScreenshot** — `{ selector? }` → `screenshots/preview/`
-- **preview.compareScreenshot** — `{ name, selector?, threshold?, updateBaseline? }` — vs `tests/preview-baselines/<name>.png`
-- **preview.setHttpAllow** — `{ allowlist }`
-- **preview.setPermissions** — `{ permissions: { hardware_control: false, … } }`
-- **preview.readLog** — `{ lines? }`
-
-## Preview test suite
-
-After **Decky: Init Pack** and **Decky: Open Preview**:
-
-```bash
-node scripts/run-preview-suite.mjs --tier=smoke
-node scripts/run-preview-suite.mjs --update-baselines   # refresh preview-baselines/
-```
-
-See [device-qa-runbook.md](../docs/device-qa-runbook.md).
 
 ## Skills and agents (Init Pack)
 
 | Skill / agent | MCP tools used |
 |---------------|----------------|
-| **decky-onboard** | `deck.configure`, `plugin.detect`, `plugin.build`, `deck.deploy`, `deck.openPlugin` |
+| **decky-onboard** | `deck.configure`, `plugin.detect`, `plugin.lintFocus`, `plugin.build`, `deck.deploy`, `deck.openPlugin` |
 | **decky-release** | `plugin.build`, `plugin.verifyZip`, `plugin.diffRpc`, `deck.deploy` |
-| **decky-focus-audit** | `preview.runSequence`, `preview.compareScreenshot`, `deck.captureScreenshot` |
+| **decky-focus-audit** | `plugin.lintFocus`, `deck.openPlugin`, `deck.readFocus`, `deck.assertFocusMove`, `deck.captureScreenshot` |
 | **decky-debugger** | `deck.tailIngest`, `deck.readPluginLog`, `deck.reloadPlugin` |
-| **decky-focus-architect** | design-time; validates with preview + device QA |
+| **decky-focus-architect** | design-time; validates with `plugin.lintFocus` and on-device QA |
