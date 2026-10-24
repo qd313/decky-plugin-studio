@@ -8,6 +8,21 @@ export async function deployToDeck(): Promise<void> {
     vscode.window.showInformationMessage(`Deploy: ${JSON.stringify(result)}`);
   } catch (err) {
     vscode.window.showErrorMessage(`Deploy failed: ${err}`);
+  } finally {
+    await releaseLease();
+  }
+}
+
+/**
+ * A one-shot command that drove the Deck took the machine's lease inside the
+ * extension's own process. Without this it would sit there for up to ten
+ * minutes and refuse an agent's next driving call. Never throws.
+ */
+async function releaseLease(): Promise<void> {
+  try {
+    await callMcpTool("deck_releaseMachine", {});
+  } catch {
+    /* nothing held, or the server is gone; either way there is no lease to leak */
   }
 }
 
@@ -23,6 +38,8 @@ export async function captureScreenshot(): Promise<void> {
     }
   } catch (err) {
     vscode.window.showErrorMessage(`Screenshot failed: ${err}`);
+  } finally {
+    await releaseLease();
   }
 }
 

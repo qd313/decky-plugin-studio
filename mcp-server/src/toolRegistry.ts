@@ -952,6 +952,21 @@ export const TOOLS: ToolDef[] = [
     inputSchema: noArgs,
   },
 
+  // ---- Studio: self-check -----------------------------------------------
+  {
+    name: "studio_doctor",
+    description:
+      "Check Decky Plugin Studio itself for setup drift, without touching a Deck. Returns a list of checks, each { name, ok: true | false | \"unknown\", saw, fix }, plus okCount, failCount and unknownCount; failures come first. Checks: the MCP config your IDE reads (.mcp.json, mcp.json, .cursor/mcp.json, .vscode/mcp.json) points at a server entry file that exists and is the same version as the extension; the four version pins agree (when the workspace is a DPS checkout); no other process holds the ingest port (the only port the server listens on); bridge/tools pad.py, chord.py and vpad.py and the capture scripts resolve from the running build, and Python can import serial (and vgamepad on Windows); machines.json parses and each machine has what its press transport needs; deck.env has DECK_IP and DECK_USER (absent is fine for a stand-in-only setup); and the killswitch latch state. \"unknown\" means the check could not run (no Python, an unreadable file, a check that errored) and is never a pass. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string", description: "Folder whose MCP config and version pins to check. Default: the server's workspace." },
+        extensionVersion: { type: "string", description: "The extension's version, when the caller knows it. Default: read from extension/package.json, else the server's own." },
+      },
+      additionalProperties: false,
+    },
+  },
+
   // ---- Plugin: build & validation ---------------------------------------
   {
     name: "plugin_detect",

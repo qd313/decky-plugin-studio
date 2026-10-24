@@ -75,6 +75,11 @@
         "command": "decky.showMcpOutput",
         "title": "Show Studio Server Log",
         "category": "Decky"
+      },
+      {
+        "command": "decky.doctor",
+        "title": "Doctor",
+        "category": "Decky"
       }
     ],
     "viewsContainers": {

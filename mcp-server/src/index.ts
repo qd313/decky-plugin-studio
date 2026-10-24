@@ -35,6 +35,7 @@ import * as deck from "./tools/deck.js";
 import * as plugin from "./tools/plugin.js";
 import * as preview from "./tools/preview.js";
 import * as deckAutonomy from "./tools/deckAutonomy.js";
+import { studioDoctor } from "./tools/doctor.js";
 import { diffRpc } from "./preview/rpcDiff.js";
 import { lintFocus } from "./lint/index.js";
 import { readFocus } from "./deck/readFocus.js";
@@ -603,6 +604,12 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
 
     case "tools/deck_restoreSettings":
       return restoreSettings();
+
+    case "tools/studio_doctor":
+      return studioDoctor({
+        workspace: params.workspace != null ? String(params.workspace) : undefined,
+        extensionVersion: params.extensionVersion != null ? String(params.extensionVersion) : undefined,
+      });
 
     case "tools/plugin_diffRpc":
       return diffRpc();

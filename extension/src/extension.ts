@@ -9,6 +9,7 @@ import {
   stopTunnel,
 } from "./commands/deployToDeck";
 import { stopAutomation, armAutomation } from "./commands/stopAutomation";
+import { runDoctor } from "./commands/doctor";
 import { DeckyTreeProvider } from "./ui/treeProvider";
 import { DeckyStatusBar } from "./ui/statusBar";
 import { AutomationStatusBar } from "./ui/automationStatusBar";
@@ -52,7 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("decky.stopTunnel", () => stopTunnel()),
     vscode.commands.registerCommand("decky.showOpenPluginHint", async () => {
       const { callMcpTool } = await import("./mcp/client");
-      const result = (await callMcpTool("deck_openPlugin", {})) as {
+      const result = (await callMcpTool("deck_openPlugin", { drive: false })) as {
         pluginName?: string;
         checklist?: string[];
       };
@@ -61,7 +62,8 @@ export function activate(context: vscode.ExtensionContext): void {
         `Open "${result.pluginName ?? "plugin"}" on Deck: ${lines[0] ?? "Open QAM → Decky → your plugin"}`
       );
     }),
-    vscode.commands.registerCommand("decky.showMcpOutput", () => showMcpOutput()),
+    vscode.commands.registerCommand("decky.doctor", () => runDoctor(context)),
+    vscode.commands.registerCommand("decky.showMcpOutput",() => showMcpOutput()),
     vscode.commands.registerCommand("decky.refreshTree", () => {
       treeProvider.refresh();
       statusBar.refresh();
