@@ -357,3 +357,147 @@ test("buildMatches on a local machine: nothing installed is a confident fail", (
   assert.equal(r.matches, false);
   assert.match(r.reason ?? "", /has not been deployed/);
 });
+
+// ---------------------------------------------------------------------------
+// deck_focusBigPicture (focusBigPicture). The fake answers evaluates in order:
+// gate read, IsWindowMinimized, the bring-to-front call, gate read again. The
+// recipes themselves were measured on the maintainer's PC on 2026-10-25; what
+// these prove is the control flow around them and that nothing is taken on
+// trust: `ok` follows the second gate read, never the call's success.
+// ---------------------------------------------------------------------------
+const { focusBigPicture } = await import("./foreground.js");
+
+const minimizedPage = { visibilityState: "hidden", hasFocus: false };
+const behindPage = { visibilityState: "visible", hasFocus: false };
+
+function scripted(answers: unknown[]) {
+  return startFakeCdp(["SharedJSContext", BPM], (title, i) =>
+    title === BPM ? answers[Math.min(i, answers.length - 1)] : unfocusedPage,
+  );
+}
+
+test("focusBigPicture: already in front does nothing and says so", async () => {
+  const fake = await startFakeCdp(["SharedJSContext", BPM], (title) => (title === BPM ? visible : unfocusedPage));
+  try {
+    let restored = 0;
+    const r = await focusBigPicture(fake.base, { settleMs: 0, restoreWindow: () => void restored++ });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.steps, []);
+    assert.equal(r.wasMinimized, false);
+    assert.equal(restored, 0);
+    assert.equal(fake.evaluations(), 1, "one gate read, nothing else");
+    assert.match(r.reason, /already the foreground window/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: behind another window -> Steam's call, no restore, ok from the second read", async () => {
+  const fake = await scripted([behindPage, false, "ok", visible]);
+  try {
+    let restored = 0;
+    const r = await focusBigPicture(fake.base, { settleMs: 0, restoreWindow: () => void restored++ });
+    assert.equal(r.ok, true);
+    assert.equal(r.wasMinimized, false);
+    assert.equal(restored, 0, "not minimized, so no Win32 restore");
+    assert.equal(r.steps.length, 1);
+    assert.match(r.steps[0], /BringToFront\(1\)/);
+    assert.equal(r.before.foreground, false);
+    assert.equal(r.after?.foreground, true);
+    assert.equal(fake.evaluations(), 4);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: minimized -> Win32 restore first, then Steam's call", async () => {
+  const fake = await scripted([minimizedPage, true, "ok", visible]);
+  try {
+    const order: string[] = [];
+    const r = await focusBigPicture(fake.base, {
+      settleMs: 0,
+      restoreWindow: () => {
+        order.push("restore");
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.wasMinimized, true);
+    assert.deepEqual(order, ["restore"]);
+    assert.equal(r.steps.length, 2);
+    assert.match(r.steps[0], /ShowWindow\(SW_RESTORE\)/);
+    assert.match(r.steps[1], /BringToFront/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: minimized and the restore throws -> ok false, the error named, gate re-read", async () => {
+  const fake = await scripted([minimizedPage, true, minimizedPage]);
+  try {
+    const r = await focusBigPicture(fake.base, {
+      settleMs: 0,
+      restoreWindow: () => {
+        throw new Error("powershell.exe exited 3");
+      },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.wasMinimized, true);
+    assert.match(r.reason, /Win32 restore failed: powershell.exe exited 3/);
+    assert.equal(r.after?.foreground, false);
+    assert.equal(fake.evaluations(), 3, "gate, minimized, gate again; the bring-to-front call is not made");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: minimized with no restore available -> refuses, does not call Steam", async () => {
+  const fake = await scripted([minimizedPage, true]);
+  try {
+    const r = await focusBigPicture(fake.base, { settleMs: 0 });
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /restore script was not available/);
+    assert.equal(fake.evaluations(), 2);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: Steam's call 'succeeds' but the gate still reads behind -> ok false", async () => {
+  const fake = await scripted([behindPage, false, "ok", behindPage]);
+  try {
+    const r = await focusBigPicture(fake.base, { settleMs: 0, restoreWindow: () => {} });
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /still not in front/);
+    assert.match(r.reason, /by hand/);
+    assert.equal(r.after?.foreground, false);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: Steam's call throws -> recorded as a step, gate still decides", async () => {
+  const fake = await scripted([behindPage, false, { __throw: "SteamClient is not defined" }, visible]);
+  try {
+    const r = await focusBigPicture(fake.base, { settleMs: 0, restoreWindow: () => {} });
+    assert.equal(r.ok, true, "the gate read says in front, so ok -- whatever the call said");
+    assert.match(r.steps[0], /bring-to-front call failed: .*SteamClient is not defined/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: no Big Picture page -> ok false, unknown, nothing done", async () => {
+  const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);
+  try {
+    let restored = 0;
+    const r = await focusBigPicture(fake.base, { settleMs: 0, restoreWindow: () => void restored++ });
+    assert.equal(r.ok, false);
+    assert.equal(r.wasMinimized, "unknown");
+    assert.equal(r.after, null);
+    assert.equal(restored, 0);
+    assert.equal(fake.evaluations(), 0);
+    assert.match(r.reason, /could not read whether Big Picture is in front/);
+  } finally {
+    await fake.close();
+  }
+});

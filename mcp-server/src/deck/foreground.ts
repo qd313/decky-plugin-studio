@@ -16,6 +16,7 @@
  */
 import { evaluate, listTargets, rewriteWsHost } from "./cdp.js";
 import { openCdpTunnel } from "./cdpTunnel.js";
+import { execFileSync } from "child_process";
 
 export const BIG_PICTURE_TITLE = "Steam Big Picture Mode";
 
@@ -112,5 +113,177 @@ export async function readBigPictureForeground(
     reason: foreground
       ? `Big Picture is the foreground window (visibilityState ${visibilityState}, hasFocus ${hasFocus})`
       : notForegroundSentence({ visibilityState, hasFocus }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// deck_focusBigPicture: put Big Picture back in front without a hand.
+//
+// Measured on the maintainer's PC, 2026-10-25, with the gate above as the
+// oracle. Three states, two recipes:
+//   - behind another window (visible, hasFocus false): Steam's own
+//     SteamClient.Window.BringToFront(1) followed by SetKeyFocus(false) then
+//     SetKeyFocus(true) brings it forward and gives it focus. SetKeyFocus(true)
+//     alone does nothing when Steam already believes it has focus, which is
+//     why the toggle. BringToFront needs the int, not a bool.
+//   - minimized (hidden, hasFocus false, IsWindowMinimized true): no Steam
+//     call restores it (ShowWindow, BringToFront, RestoreWindowSizeAndPosition
+//     were all tried). One Win32 ShowWindow(SW_RESTORE) does, and a background
+//     process may call it. Then the recipe above for focus.
+//   - already in front: nothing is done, and the result says so.
+// Nothing here presses a button. A window-manager that refuses is reported,
+// never worked around: the result's `after` is the gate read again, so a
+// caller never has to take this tool's word for it.
+// ---------------------------------------------------------------------------
+
+
+export interface FocusBigPictureResult {
+  /** true only when the gate reads foreground after the attempt. */
+  ok: boolean;
+  before: ForegroundResult;
+  after: ForegroundResult | null;
+  /** Whether Steam said its window was minimized before anything was done. */
+  wasMinimized: boolean | "unknown";
+  /** What was done, in order. Empty when Big Picture was already in front. */
+  steps: string[];
+  /** One plain paragraph. */
+  reason: string;
+}
+
+export interface FocusBigPictureOptions {
+  /** Per-call CDP budget in ms (default 4000). */
+  timeoutMs?: number;
+  /** How long to give Windows to settle before the second gate read (default 700). */
+  settleMs?: number;
+  /**
+   * Un-minimize the window. Default: the packaged restore-window.ps1 through
+   * PowerShell. Tests pass a stub; a throw is reported, not retried.
+   */
+  restoreWindow?: () => void;
+}
+
+const MINIMIZED_EXPRESSION = "SteamClient.Window.IsWindowMinimized()";
+const BRING_TO_FRONT_EXPRESSION =
+  "(SteamClient.Window.BringToFront(1), SteamClient.Window.SetKeyFocus(false), SteamClient.Window.SetKeyFocus(true), 'ok')";
+
+export function defaultRestoreWindow(scriptPath: string): () => void {
+  return () => {
+    execFileSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+      stdio: "pipe",
+      timeout: 15_000,
+    });
+  };
+}
+
+/**
+ * Bring Big Picture to the front on a Windows stand-in. `cdpBase` is Steam's
+ * local debugger (a stand-in is local, so no tunnel). Never throws: every
+ * failure is an `ok: false` with the gate's own reading in `after`.
+ */
+export async function focusBigPicture(
+  cdpBase: string,
+  opts: FocusBigPictureOptions,
+): Promise<FocusBigPictureResult> {
+  const timeoutMs = opts.timeoutMs ?? 4000;
+  const settleMs = opts.settleMs ?? 700;
+  const steps: string[] = [];
+
+  const before = await readBigPictureForeground(cdpBase, { timeoutMs });
+  if (before.foreground === true) {
+    return {
+      ok: true,
+      before,
+      after: before,
+      wasMinimized: false,
+      steps,
+      reason: "Big Picture was already the foreground window; nothing was done.",
+    };
+  }
+  if (before.foreground === "unknown") {
+    return {
+      ok: false,
+      before,
+      after: null,
+      wasMinimized: "unknown",
+      steps,
+      reason: `could not read whether Big Picture is in front, so nothing was done: ${before.reason}`,
+    };
+  }
+
+  // The gate read found the page, so the websocket url is there to find again.
+  let wsUrl: string;
+  try {
+    const targets = await listTargets(cdpBase, timeoutMs);
+    const url = targets.find((t) => t.title === BIG_PICTURE_TITLE && t.webSocketDebuggerUrl)?.webSocketDebuggerUrl;
+    if (!url) throw new Error(`no "${BIG_PICTURE_TITLE}" page is listed any more`);
+    wsUrl = rewriteWsHost(url, cdpBase);
+  } catch (err) {
+    return {
+      ok: false,
+      before,
+      after: null,
+      wasMinimized: "unknown",
+      steps,
+      reason: `Big Picture is behind, and its page could not be reached to fix that: ${(err as Error).message}`,
+    };
+  }
+
+  let wasMinimized: boolean | "unknown" = "unknown";
+  try {
+    const v = await evaluate<unknown>(wsUrl, MINIMIZED_EXPRESSION, timeoutMs);
+    wasMinimized = typeof v === "boolean" ? v : "unknown";
+  } catch (err) {
+    steps.push(`could not ask Steam whether its window is minimized (${(err as Error).message}); went on as if it is not`);
+  }
+
+  if (wasMinimized === true) {
+    const restore = opts.restoreWindow;
+    if (!restore) {
+      return {
+        ok: false,
+        before,
+        after: null,
+        wasMinimized,
+        steps,
+        reason:
+          "Big Picture is minimized, and Steam cannot restore its own window; the Win32 restore script was not available, so nothing was done.",
+      };
+    }
+    try {
+      restore();
+      steps.push("restored the minimized window with one Win32 ShowWindow(SW_RESTORE), because Steam's own calls cannot");
+    } catch (err) {
+      const after = await readBigPictureForeground(cdpBase, { timeoutMs });
+      return {
+        ok: after.foreground === true,
+        before,
+        after,
+        wasMinimized,
+        steps,
+        reason: `Big Picture is minimized and the Win32 restore failed: ${(err as Error).message}. Afterwards: ${after.reason}.`,
+      };
+    }
+  }
+
+  try {
+    await evaluate<unknown>(wsUrl, BRING_TO_FRONT_EXPRESSION, timeoutMs);
+    steps.push("asked Steam to bring Big Picture to the front and take key focus (BringToFront(1), SetKeyFocus off then on)");
+  } catch (err) {
+    steps.push(`Steam's bring-to-front call failed: ${(err as Error).message}`);
+  }
+
+  if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
+  const after = await readBigPictureForeground(cdpBase, { timeoutMs });
+  const ok = after.foreground === true;
+  return {
+    ok,
+    before,
+    after,
+    wasMinimized,
+    steps,
+    reason: ok
+      ? `Big Picture is the foreground window now (was: ${before.reason}).`
+      : `Big Picture is still not in front after the attempt: ${after.reason}. ` +
+        "Bring it forward by hand (click it, or alt-tab to it); if that also fails, Steam may have a modal of its own up.",
   };
 }

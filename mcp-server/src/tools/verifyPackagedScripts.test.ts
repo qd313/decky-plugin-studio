@@ -70,6 +70,7 @@ test("fails, naming what's missing, when the scripts directory exists but a requ
       assert.ok(check.missing!.some((m) => m.includes("studio-capture.sh")));
       assert.ok(check.missing!.some((m) => m.includes("studio-record.sh")));
       assert.ok(check.missing!.some((m) => m.includes("grab-window.ps1")));
+      assert.ok(check.missing!.some((m) => m.includes("restore-window.ps1")));
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -90,6 +91,10 @@ test("passes when every required script is present in the packaged bundle", () =
     fs.copyFileSync(
       path.join(mcpServerRoot, "scripts", "standin", "windows", "grab-window.ps1"),
       path.join(grabDir, "grab-window.ps1"),
+    );
+    fs.copyFileSync(
+      path.join(mcpServerRoot, "scripts", "standin", "windows", "restore-window.ps1"),
+      path.join(grabDir, "restore-window.ps1"),
     );
 
     const check = verifyPackagedScripts(root);

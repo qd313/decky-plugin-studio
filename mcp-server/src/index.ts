@@ -46,10 +46,11 @@ import { openPluginWithRetry } from "./deck/openPluginRetry.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
-import { closeSharedCdpTunnel, padEndpointIfOpen } from "./deck/cdpTunnel.js";
+import { closeSharedCdpTunnel, openCdpTunnel, padEndpointIfOpen } from "./deck/cdpTunnel.js";
+import { getScriptsDir } from "./tools/captureOrchestrator.js";
 import { saveCheck, replayChecks } from "./checks/checkRunner.js";
 import { checkDeckReady, DeclaredState } from "./deck/checkReady.js";
-import { bigPictureStatus } from "./deck/foreground.js";
+import { bigPictureStatus, focusBigPicture, defaultRestoreWindow } from "./deck/foreground.js";
 import { holdAwake, restorePowerSettings } from "./deck/holdAwake.js";
 import { snapshotSettings, restoreSettings } from "./deck/settingsSnapshot.js";
 import { loadPluginConfig } from "./pluginConfig.js";
@@ -643,6 +644,30 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         host: m.host,
         pingFn: deck.pingDeck,
       });
+    }
+
+    case "tools/deck_focusBigPicture": {
+      const m = currentMachine();
+      if (m.os !== "windows") {
+        return {
+          ok: false,
+          before: null,
+          after: null,
+          wasMinimized: "unknown",
+          steps: [],
+          reason: `"${m.name}" is ${m.os}: Big Picture is the only window there, so there is nothing to bring to the front. This tool is for a Windows stand-in.`,
+        };
+      }
+      const tunnel = await openCdpTunnel();
+      try {
+        return await focusBigPicture(tunnel.base, {
+          settleMs: params.settleMs != null ? Number(params.settleMs) : undefined,
+          timeoutMs: params.timeoutMs != null ? Number(params.timeoutMs) : undefined,
+          restoreWindow: defaultRestoreWindow(path.join(getScriptsDir(), "standin", "windows", "restore-window.ps1")),
+        });
+      } finally {
+        tunnel.close();
+      }
     }
 
     case "tools/deck_readPluginLog":

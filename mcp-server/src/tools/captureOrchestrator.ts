@@ -134,6 +134,8 @@ const REQUIRED_SCRIPT_FILES = [
   path.join("deck", "studio-record.sh"),
   // deck_captureScreenshot's Windows stand-in fallback.
   path.join("standin", "windows", "grab-window.ps1"),
+  // deck_focusBigPicture: un-minimize Big Picture on a Windows stand-in.
+  path.join("standin", "windows", "restore-window.ps1"),
 ];
 
 export type PackagedScriptsCheck =

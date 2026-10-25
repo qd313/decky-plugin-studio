@@ -126,6 +126,19 @@ export const TOOLS: ToolDef[] = [
     inputSchema: noArgs,
   },
   {
+    name: "deck_focusBigPicture",
+    description:
+      "Windows stand-in only: put Steam Big Picture back in front without a hand, so a run does not need the maintainer to alt-tab to it first. Reads the foreground gate (the same reading deck_status's bigPicture and deck_checkReady's foreground use), then: if Steam says its window is minimized, one Win32 ShowWindow(SW_RESTORE) through the packaged restore-window.ps1 (Steam cannot restore its own window); then Steam's own SteamClient.Window.BringToFront(1) and a SetKeyFocus off/on toggle over CDP; then reads the gate again. Presses nothing, takes no lease. `ok` is true only when the second read says Big Picture is in front -- the result carries `before`, `after`, `wasMinimized` and `steps`, so nothing has to be taken on this tool's word. Already in front: nothing is done, ok true, steps empty. On steamos/bazzite it refuses: Big Picture is the only window there. Measured on the maintainer's PC 2026-10-25 for the covered and the minimized cases.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        settleMs: { type: "number", default: 700, description: "How long to give Windows before the second gate read, in ms." },
+        timeoutMs: { type: "number", default: 4000, description: "Budget per CDP call, in ms." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_getEnv",
     description:
       "Read back the currently configured Deck environment (IP, user, paths) without modifying it.",
