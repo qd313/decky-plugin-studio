@@ -762,6 +762,21 @@ once for item 2):
 | 3 (C) | Proven. A real Big Picture home, `method: "cdp"`, 3.2 MB, image block, stamped `this-pc / standin / windows`. The window-grab fallback never ran. |
 | 4 (D) | Proven for the deadline and the queue. `deadlineMs: 1` returned the honest error; two presses at once ran in order (`waitedForPreviousCallMs: 258`), a read beside them did not wait. The mid-walk stall the item wanted to time does not exist on this build. The known gap (an abandoned promise may still press) is untested. |
 
+**The Deck half ran the same evening** (the lease was free; bonsai-da and bigfella-94 confirmed by
+message that they would not drive it, the 0.6.0 release chat could not be reached; the Deck was idle
+on its screensaver, bonsAI's panel open):
+
+| Item | Verdict on the Deck |
+|------|---------------------|
+| Hand test | **Passed.** Lone GUIDE → `MainMenu`, ring on "Home", steam-routed; B closed it; LT changed nothing on Home (wire-sent); lone GUIDE → menu again; B. The 2026-10-10 Steam-button bug is closed: the triggers resting half pulled were the cause. |
+| 5 (E) | `getEnv` reads `pluginLoaderActive: "active"`. Three `snapshotSettings { replace: true }` in a row: 231 MB, ~6 s each, Deck-side size and checksum matching, the earlier holds set aside as `settings-hold.replaced-<ts>.json`, the surviving archives byte-identical (sha256 f50fe498…); `restoreSettings` clean. **Not exercised:** the `requireVisible` flip -- bonsAI's panel has no covered stop any more (`sweep` DOWN: 12 controls, 16 presses, all visible). |
+| 6 (F) | `listGames`: 273 installed, 0 running, 0 presses, shelf honestly "not read" (ring off the tiles). `launchGame { appid: 1794680 }` (Vampire Survivors, not on the shelf): menu route, Home, 20 RIGHT presses to the shelf's end, Library opened on the grid with real tiles (app ids from the tile images), then after one row **DOWN did not move the ring** and it refused with "last tile seen: Grim Dawn", A never pressed, 31 presses in 24 s. `exitGame` with nothing running: `processAlive: false` from the process list, zero presses. The with-a-game-running shape did not run. Evidence: bonsAI `runs/p11-phase2-laneF-launch.json`. |
+| 7 (H) | `studio_doctor` from the bonsAI checkout: 7 ok, 0 unknown. The deliberate pin break was not tried. |
+
+**Open after the pass:** the Library grid's DOWN step (lane F); the `requireVisible` flip on a real
+covered stop (needs a plugin that has one); the lease owner token under two live servers (lane E);
+lane D's abandoned-promise gap.
+
 **Also 2026-10-25:** the maintainer asked for a way to put Big Picture in front without a hand.
 Measured on the PC: Steam's `SteamClient.Window.BringToFront(1)` plus a `SetKeyFocus(false)` /
 `SetKeyFocus(true)` toggle brings a covered Big Picture forward (the toggle, because `true` alone
@@ -772,4 +787,8 @@ Known limit: the Windows lock screen leaves Big Picture's page reading visible a
 Switching Steam's UI mode by call (`SteamClient.UI.SetUIMode`, `steam://open/bigpicture`) was
 located but not tried: it might drop Decky for Windows' injection on the live stand-in.
 
-**Owed on the Deck:** the four-step Steam-button hand test, then items 5 to 7 (E, F, H).
+**Later the same evening** the UI-mode switch was tried on `this-pc` and works: `SetUIMode(7)`
+goes to the desktop client, `SetUIMode(4)` rebuilds Big Picture (new window uids) in about half
+a second, Decky's loader object and its Quick Access tab survive. `deck_focusBigPicture` now does
+this first when no Big Picture page is listed (`uiModeBefore` in the result; 12 tests, 590 total).
+Issues #4 and #5 were closed with the stand-in verdicts.

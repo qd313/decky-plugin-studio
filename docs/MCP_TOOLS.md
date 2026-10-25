@@ -59,18 +59,22 @@ over from the preview. Two keys are still read; any other key is ignored.
   board unplugged from the Deck still reads `true`. `bridgeReady` is the same value under its old
   name, kept for bonsAI; use `bridgePortOpen`. On a Windows machine it also reports
   `bigPicture: { foreground, visibilityState, hasFocus }`. Cheap; call it first.
-- **deck.focusBigPicture** — `{ settleMs?: 700, timeoutMs?: 4000 }`, **Windows stand-in only**.
-  Puts Big Picture back in front without a hand. Reads the foreground gate; if Steam says its
+- **deck.focusBigPicture** — `{ settleMs?: 700, timeoutMs?: 4000, modeSwitchWaitMs?: 20000 }`,
+  **Windows stand-in only**. Puts Big Picture in front without a hand. If no Big Picture page is
+  listed and Steam reports UI mode 7 (the desktop client), it switches Steam to Big Picture
+  (`SteamClient.UI.SetUIMode(4)` in SharedJSContext) and waits for the page; `uiModeBefore` says
+  what it found. Then it reads the foreground gate; if Steam says its
   window is minimized, one Win32 `ShowWindow(SW_RESTORE)` through the packaged
   `restore-window.ps1` (Steam cannot restore its own window); then Steam's own
   `SteamClient.Window.BringToFront(1)` and a `SetKeyFocus` off/on toggle over CDP; then reads the
   gate again. Presses nothing, takes no lease. `ok` is true only when the second read says Big
   Picture is in front; `before`, `after`, `wasMinimized` and `steps` are in the result. Already in
   front: nothing is done, `steps` empty. Refuses on steamos/bazzite. **Measured on the
-  maintainer's PC 2026-10-25:** the minimized case through the tool (1.4 s), the covered case by
-  the same calls run by hand (a terminal window in front; `checkReady` passed afterwards). Known
-  limit: with the Windows lock screen up, Big Picture's page still reads visible and focused, so
-  the gate and this tool both say "in front" while nothing can be seen.
+  maintainer's PC 2026-10-25, each through the tool:** minimized → in front in 1.4 s; covered by
+  a terminal window → in front in 0.7 s (Steam's call alone, no restore); desktop mode → Big
+  Picture in 0.9 s, the page up after 0.5 s, Decky's loader object and its Quick Access tab both
+  present afterwards. Known limit: with the Windows lock screen up, Big Picture's page still reads
+  visible and focused, so the gate and this tool both say "in front" while nothing can be seen.
 - **deck.getEnv** — workspace, Deck config, tunnel, plugin detect, and a remote SteamOS probe.
   The loader state is one word, or `unknown` when ssh says nothing.
 - **studio.doctor** — `{ workspace?, extensionVersion? }` checks DPS itself for setup drift,
@@ -80,7 +84,8 @@ over from the preview. Two keys are still read; any other key is ignored.
   Windows); `machines.json` parses; `deck.env` has `DECK_IP` and `DECK_USER`; the killswitch
   state. Each check is `ok: true | false | "unknown"` with `saw` and `fix`. A check that could
   not run is `unknown`, never a pass. The extension's **Decky: Doctor** command runs it.
-  Desk-verified only.
+  On the maintainer's PC 2026-10-25 from the bonsAI checkout: 7 ok, 0 failing, 0 unknown. The
+  extension command is compile-checked only.
 
 ## Killswitch
 
@@ -205,7 +210,8 @@ see it** (`visibility`).
 - **deck.listGames** — `{ cdpUrl? }`. Presses nothing. Installed titles (`name`, `appid`,
   `nonSteam`), the Recent Games shelf's app ids (only when Home is up with the ring on a shelf
   tile; otherwise `null` with `recentShelfReason`), `RunningApps`, and `notInstalledCount`. The
-  shelf read is device-unverified.
+  shelf read is device-unverified. On the Deck 2026-10-25: 273 installed, 0 running, 0 presses,
+  and the shelf honestly "not read" because the ring was not on a tile.
 - **deck.launchGame** — `{ name? | appid?, budget?, waitMs?, runName?, writeEvidence?, port?,
   cdpUrl? }`. Starts a game by pressing what a thumb would, with a read before every A. It never
   drives by script. Refuses before pressing when: neither or both of `name`/`appid`; a different
@@ -222,6 +228,12 @@ see it** (`visibility`).
     it never presses.
 
   `via` says `"steam-menu"` or `"home-screen"`. Writes `runs/launch-game_<ts>.json`.
+  **Library route on the Deck 2026-10-25 (first device run):** the lone Steam button opened the menu
+  again, Home and the shelf were walked (20 RIGHT presses to "View more in your Library"), the
+  Library opened on the grid with real tiles (ARC Raiders, Deep Rock Galactic, ... Grim Dawn, app
+  ids read from the tile images), and after one row DOWN did not move the ring; the tool refused
+  with the last tile named and never pressed A. `launchRoute` was null. The DOWN stall is the
+  open question for the grid walk; evidence in bonsAI `runs/p11-phase2-laneF-launch.json`.
 - **deck.exitGame** — `{ waitMs?, runName?, writeEvidence?, port?, cdpUrl? }`. Steam button,
   RIGHT, DOWN to "Exit game", A, then A on "Confirm" only when a read shows the ring on it. Done
   when the app id leaves `RunningApps`. An empty `RunningApps` is not believed alone: on
@@ -231,7 +243,7 @@ see it** (`visibility`).
   game underneath, it walks UP to the game's entry. When the Steam button opens no menu at all,
   it asks Steam to close the game (`SteamClient.Apps.TerminateApp`): `via: "steam-close-call"`,
   summary "closed without the Steam menu", fidelity stays `wire-sent`. The process check and the
-  walk UP are desk-verified only. Writes `runs/exit-game_<ts>.json`.
+  walk UP are desk-verified only. Writes `runs/exit-game_<ts>.json`. On the Deck 2026-10-25 with nothing running: `processAlive: false` from the process list, zero presses.
 
 Both leave the ring where Steam puts it; `deck.openPlugin` gets the panel back, even over a
 running game.
@@ -272,7 +284,9 @@ running game.
     set aside too.
   - A second snapshot over an unrestored one is refused. **`replace: true`** sets the earlier run
     file aside under a dated name instead, and names it.
-  - Passed on the Deck 2026-10-22 (236 MB settings folder). `replace` is desk-verified only.
+  - Passed on the Deck 2026-10-22 (236 MB settings folder). `replace` passed on the Deck
+    2026-10-25: three in a row, about 6 s each for 231 MB, the two earlier holds set aside as
+    `settings-hold.replaced-<ts>.json`, the surviving archives byte-identical, then a clean restore.
 - **deck.restoreSettings** — puts exactly that copy back. It checks the archive first and stages
   then swaps, so the live folder is never half-written. A clean no-op when nothing was taken.
 
