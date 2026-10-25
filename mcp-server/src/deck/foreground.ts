@@ -140,6 +140,11 @@ export async function readBigPictureForeground(
 export interface FocusBigPictureResult {
   /** true only when the gate reads foreground after the attempt. */
   ok: boolean;
+  /**
+   * Steam's UI mode before anything was done: 4 is Big Picture, 7 the desktop
+   * client. Read only when no Big Picture page was listed; null otherwise.
+   */
+  uiModeBefore: number | null;
   before: ForegroundResult;
   after: ForegroundResult | null;
   /** Whether Steam said its window was minimized before anything was done. */
@@ -160,6 +165,86 @@ export interface FocusBigPictureOptions {
    * PowerShell. Tests pass a stub; a throw is reported, not retried.
    */
   restoreWindow?: () => void;
+  /** How long to wait for the Big Picture page after switching UI mode (default 20000 ms). */
+  modeSwitchWaitMs?: number;
+  /** How often to look for that page while waiting (default 500 ms). */
+  modeSwitchPollMs?: number;
+}
+
+/** Steam's UI modes, as SteamClient.UI.GetUIMode() reports them. */
+export const UI_MODE_BIG_PICTURE = 4;
+export const UI_MODE_DESKTOP = 7;
+const SHARED_JS_CONTEXT = "SharedJSContext";
+const GET_UI_MODE_EXPRESSION = "SteamClient.UI.GetUIMode()";
+const SET_BIG_PICTURE_EXPRESSION = `(SteamClient.UI.SetUIMode(${UI_MODE_BIG_PICTURE}), 'ok')`;
+
+/**
+ * When no Big Picture page is listed, Steam is probably in desktop mode (7).
+ * Measured 2026-10-25 on the maintainer's PC: SteamClient.UI.SetUIMode(4) in
+ * SharedJSContext rebuilds the Big Picture windows (new uids) within a few
+ * seconds, Decky's loader object survives in SharedJSContext and its Quick
+ * Access tab is in the rebuilt window, and the gate then reads in front.
+ * Returns the mode read (or null), and pushes what it did onto `steps`.
+ */
+async function switchToBigPictureIfNeeded(
+  cdpBase: string,
+  timeoutMs: number,
+  waitMs: number,
+  pollMs: number,
+  steps: string[],
+): Promise<{ uiMode: number | null; bigPictureListed: boolean }> {
+  let targets: Awaited<ReturnType<typeof listTargets>>;
+  try {
+    targets = await listTargets(cdpBase, timeoutMs);
+  } catch {
+    return { uiMode: null, bigPictureListed: false };
+  }
+  const listed = () => targets.some((t) => t.title === BIG_PICTURE_TITLE && t.webSocketDebuggerUrl);
+  if (listed()) return { uiMode: null, bigPictureListed: true };
+
+  const shared = targets.find((t) => t.title === SHARED_JS_CONTEXT && t.webSocketDebuggerUrl)?.webSocketDebuggerUrl;
+  if (!shared) return { uiMode: null, bigPictureListed: false };
+  const wsUrl = rewriteWsHost(shared, cdpBase);
+
+  let uiMode: number | null = null;
+  try {
+    const v = await evaluate<unknown>(wsUrl, GET_UI_MODE_EXPRESSION, timeoutMs);
+    uiMode = typeof v === "number" ? v : null;
+  } catch (err) {
+    steps.push(`no Big Picture page is listed and Steam's UI mode could not be read (${(err as Error).message})`);
+    return { uiMode: null, bigPictureListed: false };
+  }
+  if (uiMode === null || uiMode === UI_MODE_BIG_PICTURE) {
+    // Already Big Picture by Steam's account, yet no page: not a mode problem.
+    return { uiMode, bigPictureListed: false };
+  }
+
+  try {
+    await evaluate<unknown>(wsUrl, SET_BIG_PICTURE_EXPRESSION, timeoutMs);
+  } catch (err) {
+    steps.push(`Steam is in UI mode ${uiMode}, and SetUIMode(${UI_MODE_BIG_PICTURE}) failed: ${(err as Error).message}`);
+    return { uiMode, bigPictureListed: false };
+  }
+  const started = Date.now();
+  while (Date.now() - started < waitMs) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    try {
+      targets = await listTargets(cdpBase, timeoutMs);
+    } catch {
+      continue;
+    }
+    if (listed()) {
+      steps.push(
+        `switched Steam from UI mode ${uiMode}${uiMode === UI_MODE_DESKTOP ? " (desktop)" : ""} to Big Picture ` +
+          `(SetUIMode ${UI_MODE_BIG_PICTURE}); its page appeared after ${Date.now() - started} ms`,
+      );
+      return { uiMode, bigPictureListed: true };
+    }
+  }
+  steps.push(
+    `switched Steam from UI mode ${uiMode} with SetUIMode(${UI_MODE_BIG_PICTURE}), but no Big Picture page appeared within ${waitMs} ms`,
+  );
+  return { uiMode, bigPictureListed: false };
 }
 
 const MINIMIZED_EXPRESSION = "SteamClient.Window.IsWindowMinimized()";
@@ -188,20 +273,34 @@ export async function focusBigPicture(
   const settleMs = opts.settleMs ?? 700;
   const steps: string[] = [];
 
+  const mode = await switchToBigPictureIfNeeded(
+    cdpBase,
+    timeoutMs,
+    opts.modeSwitchWaitMs ?? 20_000,
+    opts.modeSwitchPollMs ?? 500,
+    steps,
+  );
+  const uiModeBefore = mode.uiMode;
+
   const before = await readBigPictureForeground(cdpBase, { timeoutMs });
   if (before.foreground === true) {
     return {
       ok: true,
+      uiModeBefore,
       before,
       after: before,
       wasMinimized: false,
       steps,
-      reason: "Big Picture was already the foreground window; nothing was done.",
+      reason:
+        steps.length === 0
+          ? "Big Picture was already the foreground window; nothing was done."
+          : `Big Picture is the foreground window after: ${steps.join("; ")}.`,
     };
   }
   if (before.foreground === "unknown") {
     return {
       ok: false,
+      uiModeBefore,
       before,
       after: null,
       wasMinimized: "unknown",
@@ -220,6 +319,7 @@ export async function focusBigPicture(
   } catch (err) {
     return {
       ok: false,
+      uiModeBefore,
       before,
       after: null,
       wasMinimized: "unknown",
@@ -241,6 +341,7 @@ export async function focusBigPicture(
     if (!restore) {
       return {
         ok: false,
+        uiModeBefore,
         before,
         after: null,
         wasMinimized,
@@ -256,6 +357,7 @@ export async function focusBigPicture(
       const after = await readBigPictureForeground(cdpBase, { timeoutMs });
       return {
         ok: after.foreground === true,
+        uiModeBefore,
         before,
         after,
         wasMinimized,
@@ -277,6 +379,7 @@ export async function focusBigPicture(
   const ok = after.foreground === true;
   return {
     ok,
+    uiModeBefore,
     before,
     after,
     wasMinimized,

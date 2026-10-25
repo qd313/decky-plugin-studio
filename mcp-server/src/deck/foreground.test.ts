@@ -495,8 +495,108 @@ test("focusBigPicture: no Big Picture page -> ok false, unknown, nothing done", 
     assert.equal(r.wasMinimized, "unknown");
     assert.equal(r.after, null);
     assert.equal(restored, 0);
-    assert.equal(fake.evaluations(), 0);
+    assert.equal(r.uiModeBefore, null, "SharedJSContext answered with no mode number");
+    assert.equal(fake.evaluations(), 1, "one GetUIMode ask, no switch, no gate evaluate");
     assert.match(r.reason, /could not read whether Big Picture is in front/);
+  } finally {
+    await fake.close();
+  }
+});
+
+// --- the UI-mode switch (desktop client -> Big Picture) -------------------
+// The fake's target list is a function, so the Big Picture page can appear
+// after SetUIMode is evaluated, the way Steam rebuilds its windows.
+
+/** Per-title scripted answers, so SharedJSContext and Big Picture can be driven apart. */
+function byTitle(script: Record<string, unknown[]>) {
+  const counters: Record<string, number> = {};
+  return (title: string) => {
+    const answers = script[title] ?? [unfocusedPage];
+    const i = counters[title] ?? 0;
+    counters[title] = i + 1;
+    return answers[Math.min(i, answers.length - 1)];
+  };
+}
+
+test("focusBigPicture: no Big Picture page and UI mode 7 -> SetUIMode(4), wait for the page, then the usual recipe", async () => {
+  let setModeCalled = false;
+  const fake = await startFakeCdp(
+    () => (setModeCalled ? ["SharedJSContext", BPM] : ["SharedJSContext"]),
+    (title: string, _i: number) => {
+      if (title === "SharedJSContext") {
+        if (!setModeCalled) {
+          // first evaluate: GetUIMode -> 7; second: SetUIMode -> flips the list
+          const answer = sharedReads === 0 ? 7 : "ok";
+          if (sharedReads === 1) setModeCalled = true;
+          sharedReads++;
+          return answer;
+        }
+        return "ok";
+      }
+      return bpmAnswers[Math.min(bpmReads++, bpmAnswers.length - 1)];
+    },
+  );
+  let sharedReads = 0;
+  let bpmReads = 0;
+  const bpmAnswers = [behindPage, false, "ok", visible];
+  try {
+    const r = await focusBigPicture(fake.base, {
+      settleMs: 0,
+      modeSwitchWaitMs: 3000,
+      modeSwitchPollMs: 20,
+      restoreWindow: () => {},
+    });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.uiModeBefore, 7);
+    assert.ok(setModeCalled, "SetUIMode(4) was evaluated in SharedJSContext");
+    assert.match(r.steps[0], /switched Steam from UI mode 7 \(desktop\) to Big Picture/);
+    assert.match(r.steps[1], /BringToFront\(1\)/);
+    assert.equal(r.after?.foreground, true);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: no Big Picture page but UI mode already 4 -> no switch, unknown as before", async () => {
+  const fake = await startFakeCdp(["SharedJSContext"], byTitle({ SharedJSContext: [4] }));
+  try {
+    const r = await focusBigPicture(fake.base, { settleMs: 0, restoreWindow: () => {} });
+    assert.equal(r.ok, false);
+    assert.equal(r.uiModeBefore, 4);
+    assert.deepEqual(r.steps, []);
+    assert.equal(fake.evaluations(), 1, "GetUIMode only; SetUIMode is not sent when Steam says Big Picture");
+    assert.match(r.reason, /could not read whether Big Picture is in front/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: switched but the page never appears -> ok false, the wait named", async () => {
+  const fake = await startFakeCdp(["SharedJSContext"], byTitle({ SharedJSContext: [7, "ok"] }));
+  try {
+    const r = await focusBigPicture(fake.base, {
+      settleMs: 0,
+      modeSwitchWaitMs: 60,
+      modeSwitchPollMs: 10,
+      restoreWindow: () => {},
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.uiModeBefore, 7);
+    assert.equal(r.steps.length, 1);
+    assert.match(r.steps[0], /no Big Picture page appeared within 60 ms/);
+    assert.equal(fake.evaluations(), 2, "GetUIMode and SetUIMode, nothing more");
+  } finally {
+    await fake.close();
+  }
+});
+
+test("focusBigPicture: Big Picture page listed -> the UI mode is never asked", async () => {
+  const fake = await startFakeCdp(["SharedJSContext", BPM], byTitle({ [BPM]: [visible] }));
+  try {
+    const r = await focusBigPicture(fake.base, { settleMs: 0, restoreWindow: () => {} });
+    assert.equal(r.ok, true);
+    assert.equal(r.uiModeBefore, null);
+    assert.equal(fake.evaluations(), 1);
   } finally {
     await fake.close();
   }

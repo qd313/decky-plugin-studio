@@ -651,6 +651,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       if (m.os !== "windows") {
         return {
           ok: false,
+          uiModeBefore: null,
           before: null,
           after: null,
           wasMinimized: "unknown",
@@ -664,6 +665,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
           settleMs: params.settleMs != null ? Number(params.settleMs) : undefined,
           timeoutMs: params.timeoutMs != null ? Number(params.timeoutMs) : undefined,
           restoreWindow: defaultRestoreWindow(path.join(getScriptsDir(), "standin", "windows", "restore-window.ps1")),
+          modeSwitchWaitMs: params.modeSwitchWaitMs != null ? Number(params.modeSwitchWaitMs) : undefined,
         });
       } finally {
         tunnel.close();
