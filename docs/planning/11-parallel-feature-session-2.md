@@ -745,6 +745,10 @@ Release whenever the tag for the current version is missing, and `v0.3.11` was n
 push now would release device-unverified code as 0.3.11. The push and the bump are one deliberate
 act after phase 2.
 
+> **Correction 2026-10-25:** wrong premise. `v0.3.11` was tagged and released on 2026-10-06 with the
+> bump, the workflow skips the release when the tag exists, and `main` was pushed at `47f569e` on
+> 2026-10-24 (artifact only). The next release is a deliberate 0.3.12 bump.
+
 **Also that day:** firmware `06_trigger_rest` was flashed (Deck-side cable unplugged, `status`
 read back the triggers at -127); the Steam-button hand test could not run because a bonsAI session
 held the Deck's lease with Deep Rock Galactic: Survivor running. Six stale branches and their
