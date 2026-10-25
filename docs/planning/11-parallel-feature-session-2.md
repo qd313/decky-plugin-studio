@@ -752,5 +752,24 @@ worktrees were deleted; issue #2 was closed; `main`'s own `node_modules` had to 
 after it emptied while the lanes ran `pnpm install` in worktrees nested under `.claude/worktrees/`
 (cause not found; worth watching next session).
 
-**Phase 2 is unchanged and owed.** First act on the Deck: the four-step hand test for the Steam
-button; then items 5 to 7 above. On `this-pc`: items 1 to 4.
+**Phase 2, the `this-pc` half, ran 2026-10-25** (Big Picture in front, the maintainer alt-tabbing
+once for item 2):
+
+| Item | Verdict on `this-pc` |
+|------|----------------------|
+| 1 (A) | Proven. `deck_readFocus` 6 ms a read, 5 pages asked, no timeouts; a verified press about 240 ms (was 20-30 s); with Big Picture hidden a read is 4 ms. |
+| 2 (B) | Proven. Covered: `checkReady` failed on `foreground` alone ("visibilityState hidden, hasFocus true"), `walkTo` pressed nothing and said why, `status` read hidden. In front: all three passed. `buildMatches` on the local `pluginsDir` gave a real hash verdict (fail: the stand-in's bonsAI, 163 files, was behind the local build, 185 files). New: with Big Picture behind, Steam drops the gamepad ring, so a `verify: true` press refuses on the focus read before the gate. Not tested on purpose: a plain press while covered (the pad would feed the front window). |
+| 3 (C) | Proven. A real Big Picture home, `method: "cdp"`, 3.2 MB, image block, stamped `this-pc / standin / windows`. The window-grab fallback never ran. |
+| 4 (D) | Proven for the deadline and the queue. `deadlineMs: 1` returned the honest error; two presses at once ran in order (`waitedForPreviousCallMs: 258`), a read beside them did not wait. The mid-walk stall the item wanted to time does not exist on this build. The known gap (an abandoned promise may still press) is untested. |
+
+**Also 2026-10-25:** the maintainer asked for a way to put Big Picture in front without a hand.
+Measured on the PC: Steam's `SteamClient.Window.BringToFront(1)` plus a `SetKeyFocus(false)` /
+`SetKeyFocus(true)` toggle brings a covered Big Picture forward (the toggle, because `true` alone
+is a no-op when Steam thinks it has focus); no Steam call restores a minimized window, one Win32
+`ShowWindow(SW_RESTORE)` does. Shipped as `deck_focusBigPicture` (Windows stand-in only, presses
+nothing, `ok` follows a second gate read), with `restore-window.ps1`, 8 tests, 586 total, 44 tools.
+Known limit: the Windows lock screen leaves Big Picture's page reading visible and focused.
+Switching Steam's UI mode by call (`SteamClient.UI.SetUIMode`, `steam://open/bigpicture`) was
+located but not tried: it might drop Decky for Windows' injection on the live stand-in.
+
+**Owed on the Deck:** the four-step Steam-button hand test, then items 5 to 7 (E, F, H).

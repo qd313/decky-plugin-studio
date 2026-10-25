@@ -46,6 +46,7 @@ MCP names use underscores (`deck_deploy`); the dotted names here mean the same t
 | `deck.launchGame` | Start a game by pressing buttons, from the Recent Games shelf or the Library grid; refuses a second game, an uninstalled one, or Install/Update/Buy |
 | `deck.exitGame` | Exit the running game — Steam menu → Exit game → Confirm; done when `RunningApps` empties and no game process is left |
 | `deck.checkReady` | Declare the state a run needs (awake, build hash, game, tab, no foreign tunnel, no modal, ring owned, machine kind, Big Picture in front) and get the diff against reality — fails at step zero with a named reason. An unknown never reads as a pass |
+| `deck.focusBigPicture` | Windows stand-in only: bring Big Picture back in front (Win32 restore if minimized, then Steam's own bring-to-front and focus calls) and read the gate again; presses nothing |
 | `deck.saveCheck` / `deck.replayChecks` | Save a sweep or sequence with its expected landings as a named check file; rerun them all after a deploy and diff. Timing, retries and fidelity are ignored on purpose |
 | `deck.holdAwake` / `deck.restorePowerSettings` | Hold a logind sleep inhibitor for a run, then release it. Nothing on the Deck is changed, and the lock releases itself after its TTL. **Still pair every hold with a restore** |
 | `deck.snapshotSettings` / `deck.restoreSettings` | Copy the plugin's settings (optionally data) directory off the Deck and put exactly that copy back |

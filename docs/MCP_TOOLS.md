@@ -2,7 +2,7 @@
 
 For installing or building the extension, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-The server registers **43 tools**. MCP names use underscores (`deck_deploy`); this page writes
+The server registers **44 tools**. MCP names use underscores (`deck_deploy`); this page writes
 them with a dot (`deck.deploy`). Both mean the same tool. The source of truth is
 `mcp-server/src/toolRegistry.ts`: each tool's own description there is what an agent sees.
 
@@ -59,6 +59,18 @@ over from the preview. Two keys are still read; any other key is ignored.
   board unplugged from the Deck still reads `true`. `bridgeReady` is the same value under its old
   name, kept for bonsAI; use `bridgePortOpen`. On a Windows machine it also reports
   `bigPicture: { foreground, visibilityState, hasFocus }`. Cheap; call it first.
+- **deck.focusBigPicture** — `{ settleMs?: 700, timeoutMs?: 4000 }`, **Windows stand-in only**.
+  Puts Big Picture back in front without a hand. Reads the foreground gate; if Steam says its
+  window is minimized, one Win32 `ShowWindow(SW_RESTORE)` through the packaged
+  `restore-window.ps1` (Steam cannot restore its own window); then Steam's own
+  `SteamClient.Window.BringToFront(1)` and a `SetKeyFocus` off/on toggle over CDP; then reads the
+  gate again. Presses nothing, takes no lease. `ok` is true only when the second read says Big
+  Picture is in front; `before`, `after`, `wasMinimized` and `steps` are in the result. Already in
+  front: nothing is done, `steps` empty. Refuses on steamos/bazzite. **Measured on the
+  maintainer's PC 2026-10-25:** the minimized case through the tool (1.4 s), the covered case by
+  the same calls run by hand (a terminal window in front; `checkReady` passed afterwards). Known
+  limit: with the Windows lock screen up, Big Picture's page still reads visible and focused, so
+  the gate and this tool both say "in front" while nothing can be seen.
 - **deck.getEnv** — workspace, Deck config, tunnel, plugin detect, and a remote SteamOS probe.
   The loader state is one word, or `unknown` when ssh says nothing.
 - **studio.doctor** — `{ workspace?, extensionVersion? }` checks DPS itself for setup drift,
@@ -98,7 +110,8 @@ The ingest port is `DEBUG_INGEST_PORT` in the server's environment (default 7682
   composited methods are preferred (`gamescope-atom`, `grim`); open the QAM and your plugin first.
   **On a Windows stand-in** it captures the Big Picture page over Steam's debugger (`method:
   "cdp"`), falling back to a PowerShell window grab (`"window-grab"`). The Quick Access menu is not
-  composited in there. The Windows path is desk-verified only.
+  composited in there. The Windows path was proven on `this-pc` 2026-10-25: a real Big Picture
+  home, `method: "cdp"`, 3.2 MB, returned as an image block.
 - **deck.record** — `{ seconds?, mode?, quality?: "compressed"|"full", allowNonPluginUi? }`.
   Writes to `<workspace>/recordings/`. Still refuses on Windows.
 - **deck.installCaptureHelper** — `{ which?: "record"|"capture"|"both" }` installs
@@ -143,7 +156,8 @@ see it** (`visibility`).
     frozen page costs one timeout, not one per page. The read returns as soon as the ring's page
     is known. A page that timed out gets a 500 ms budget on the next read. `timedOutPages` names
     the pages that did not answer; `slowestPageMs` is the slowest wait. On a Windows machine only
-    Big Picture's pages are asked.
+    Big Picture's pages are asked. Proven on `this-pc` 2026-10-25: 6 ms a read, 5 pages, no
+    timeouts; a verified press about 240 ms where it had been 20-30 s.
   - `visibility` — `{ verdict: "visible"|"partial"|"covered"|"offscreen", visiblePercent,
     coveredBy, clippedBy, points, sample }`. A control with words is sampled along its text
     lines (`sample: "text"`), three points per line, cut to what its clipping boxes let through,
@@ -232,8 +246,12 @@ running game.
   **unknown is never a pass**. `machineKind: "deck"` fails at once on a stand-in. `foreground`
   checks that Big Picture is the window in front; it is checked by default on a Windows machine,
   where Steam only takes pad input while Big Picture is in front. On Windows, a walk will not
-  place the ring with a blind press while Big Picture is behind. `foreground` is desk-verified
-  only. `modalOnScreen` only sees a modal that has taken the focus ring.
+  place the ring with a blind press while Big Picture is behind. `foreground` was proven on
+  `this-pc` 2026-10-25: covered, it failed naming the reason, `deck.walkTo` pressed nothing, and
+  `buildMatches` gave a real hash verdict on the local plugins folder; in front, all passed.
+  Measured there too: with Big Picture behind, Steam drops the gamepad ring, so a
+  `verify: true` press refuses on the focus read before it can refuse on the gate. `modalOnScreen`
+  only sees a modal that has taken the focus ring.
 - **deck.saveCheck** / **deck.replayChecks** — save a `deck.sweep` or `deck.runSequence` result
   with its expected landings as a named check file, then rerun every saved check after a deploy
   and diff. Timing, retries, fidelity and generated prose are ignored on purpose. Each check

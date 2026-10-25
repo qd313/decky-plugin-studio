@@ -8,7 +8,7 @@ The in-IDE preview was retired on 2026-10-24. UI checks run on the Deck, or on a
 
 | Feature | What it does |
 |---------|----------------|
-| **MCP tools** | 43 tools for agents: build, deploy, logs, capture, and driving the Deck (see the list below) |
+| **MCP tools** | 44 tools for agents: build, deploy, logs, capture, and driving the Deck (see the list below) |
 | **Composited capture** | Screenshots and recordings that include QAM + your plugin UI (not raw game-only kmsgrab) |
 | **Init Pack** | Drops `AGENTS.md`, MCP config, agents/skills/hooks for **Cursor and/or Claude Code**, and optional `scripts/` into your plugin repo |
 | **Create New Plugin** | Clones decky-plugin-template, renames boilerplate, runs Init Pack |
@@ -108,7 +108,7 @@ Init Pack **skips existing** script files — delete old `scripts/build.*` or ch
 
 ### 6. MCP in Cursor / VS Code / Claude Code
 
-After Init Pack, your plugin repo’s MCP config points at the extension’s MCP server — `mcp.json` and `.vscode/mcp.json` for Cursor/VS Code, `.mcp.json` for Claude Code. The server speaks the standard MCP protocol, so all 43 tools appear in any MCP client’s tool list. Tools are documented in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
+After Init Pack, your plugin repo’s MCP config points at the extension’s MCP server — `mcp.json` and `.vscode/mcp.json` for Cursor/VS Code, `.mcp.json` for Claude Code. The server speaks the standard MCP protocol, so all 44 tools appear in any MCP client’s tool list. Tools are documented in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
 
 MCP tool names use underscores (`deck_deploy`, `deck_runSequence`); the dotted forms in prose refer to the same tools.
 
