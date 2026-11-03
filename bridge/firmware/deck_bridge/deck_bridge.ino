@@ -1,6 +1,15 @@
-// 06_trigger_rest - serial command channel + neutral-on-silence watchdog, with
-// the two triggers (LT, RT) as axes since 2026-10-08, resting at the bottom of
-// their range since 2026-10-11 (see TRIGGER_REST). Was 05_triggers, 04_command.
+// 07_version - serial command channel + neutral-on-silence watchdog, with the
+// two triggers (LT, RT) as axes since 2026-10-08, resting at the bottom of their
+// range since 2026-10-11 (see TRIGGER_REST), and saying which program it is
+// since 07 (see FW_PROGRAM). Was 06_trigger_rest, 05_triggers, 04_command.
+//
+// History, one line per program (the file is bumped in place; the earlier
+// programs live in git, not as copies):
+//   04_command       the command channel and the watchdog
+//   05_triggers      LT and RT as the Z and Rz axes, resting at 0 (half pulled)
+//   06_trigger_rest  the triggers rest at -127; the lone Steam button opens its menu
+//   07_version       the status reply and the boot banner carry "fw"; nothing
+//                    else changed, the trigger rest stays at -127
 //
 // The board does NOTHING on its own. It presses only what the PC tells it to,
 // and it releases everything the moment the PC goes quiet. Per plan 19 L6 the
@@ -12,7 +21,8 @@
 //   {"t":"press","b":["DOWN"],"ms":80}    press, hold ms, auto-release
 //   {"t":"hold","b":["A","DOWN"]}         hold until released or watchdog fires
 //   {"t":"release"}                       everything to neutral, now
-//   {"t":"status"}                        report current state
+//   {"t":"status"}                        report current state, plus "fw": the
+//                                         program's name (FW_PROGRAM)
 //   {"t":"press","ax":[0,0,127,-127,0,0]} raw axes x y z rz rx ry, for mapping
 //                                         (z and rz rest at -127: TRIGGER_REST)
 //
@@ -31,6 +41,11 @@
 #endif
 
 USBHIDGamepad Gamepad;
+
+// The program's name. Bump it with every change to this file, so the board can
+// say what it runs and the PC never has to guess from the resting axes. A board
+// flashed before 07_version has no such field, and its status reply has no "fw".
+#define FW_PROGRAM "07_version"
 
 static const uint32_t WATCHDOG_MS = 750;   // silence tolerated before neutral
 static const uint32_t MAX_PRESS_MS = 5000; // refuse to hold longer than this
@@ -148,10 +163,14 @@ static void goNeutral() {
 
 // ---- replies -------------------------------------------------------------
 
-static void reply(const char *t, const char *detail = nullptr) {
-  Serial.printf("{\"ok\":true,\"t\":\"%s\",\"buttons\":%u,\"dirs\":%u,"
+// withFw is for status only: the name goes in the one reply a caller asks for it
+// with, not in every ack of a press.
+static void reply(const char *t, const char *detail = nullptr, bool withFw = false) {
+  Serial.printf("{\"ok\":true,\"t\":\"%s\",", t);
+  if (withFw) Serial.printf("\"fw\":\"%s\",", FW_PROGRAM);
+  Serial.printf("\"buttons\":%u,\"dirs\":%u,"
                 "\"ax\":[%d,%d,%d,%d,%d,%d],\"ms\":%lu",
-                t, (unsigned)curButtons, (unsigned)curDirs,
+                (unsigned)curButtons, (unsigned)curDirs,
                 curAxes[0], curAxes[1], curAxes[2], curAxes[3], curAxes[4], curAxes[5],
                 (unsigned long)millis());
   if (detail) Serial.printf(",\"detail\":\"%s\"", detail);
@@ -215,7 +234,7 @@ static void handleLine(const char *line) {
   }
 
   if (strcmp(t, "status") == 0) {
-    reply("status", watchdogTripped ? "watchdog-tripped" : "live");
+    reply("status", watchdogTripped ? "watchdog-tripped" : "live", true);
     return;
   }
 
@@ -291,7 +310,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  Serial.println("{\"boot\":\"deck-bridge 06_trigger_rest\",\"watchdog_ms\":750}");
+  Serial.println("{\"boot\":\"deck-bridge " FW_PROGRAM "\",\"fw\":\"" FW_PROGRAM "\",\"watchdog_ms\":750}");
 
   Gamepad.begin();
   USB.begin();

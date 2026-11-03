@@ -26,6 +26,13 @@ import {
 import { openPadEndpoint } from "../deck/cdpTunnel.js";
 import { padStatus, PadEndpoint, PadExchange } from "../deck/padClient.js";
 import { noteLoaderRestart } from "../deck/loaderRestart.js";
+import { leaseHeldByOther } from "../deck/lease.js";
+import {
+  FIRMWARE_NOT_PROBED,
+  FIRMWARE_NOT_READ,
+  FIRMWARE_PRE_07,
+  parseStatusFirmware,
+} from "../deck/bridgeTools.js";
 
 function shellCmd(): string {
   return process.platform === "win32" ? "cmd.exe" : "/bin/sh";
@@ -377,6 +384,14 @@ export interface BridgeProbeResult {
    * which it never meant.
    */
   bridgeReady: boolean;
+  /**
+   * The program the board says it runs: the "fw" string of its status reply.
+   * `"unknown (pre-07)"` when the board answered and the reply had no "fw", which
+   * only a board flashed before `07_version` does. Any other `"unknown (...)"`
+   * means the board was not reached or not asked, so nothing is known about it.
+   * Never worked out from the resting axes.
+   */
+  bridgeFirmware: string;
   port: string;
   reason?: string;
 }
@@ -401,6 +416,8 @@ export interface VirtualPadProbe {
   /** Buttons the pad is holding right now. Non-empty while a run is mid-press. */
   held?: string[];
   watchdogTripped?: boolean;
+  /** The daemon's "fw" ("vpad"); `"unknown (no fw field)"` when it predates the field. */
+  firmware?: string;
   reason?: string;
 }
 
@@ -439,14 +456,21 @@ export async function probeVirtualPad(
     backend: String(x.ack.backend ?? m.press),
     held: Array.isArray(x.ack.held) ? (x.ack.held as string[]) : [],
     watchdogTripped: Boolean(x.ack.watchdog_tripped),
+    firmware: typeof x.ack.fw === "string" && x.ack.fw ? x.ack.fw : "unknown (no fw field)",
   };
 }
 
-export type BridgeStatusRunner = (
-  padTool: string,
-  port: string,
-  timeoutMs: number
-) => { ok: boolean; reason?: string };
+export interface BridgeStatusResult {
+  ok: boolean;
+  reason?: string;
+  /**
+   * The "fw" of the status reply when there was one; `null` when a status reply
+   * came back without it; absent when no status reply was read at all.
+   */
+  firmware?: string | null;
+}
+
+export type BridgeStatusRunner = (padTool: string, port: string, timeoutMs: number) => BridgeStatusResult;
 
 /**
  * Ask pad.py to open the port and answer a `status` query -- never `press` or
@@ -454,7 +478,7 @@ export type BridgeStatusRunner = (
  * not part of the status command at all, so there is nothing here that could
  * move the ring even by accident.
  */
-function runPadStatus(padTool: string, port: string, timeoutMs: number): { ok: boolean; reason?: string } {
+function runPadStatus(padTool: string, port: string, timeoutMs: number): BridgeStatusResult {
   const result = spawnSync("python", [padTool, "status", "--port", port], {
     stdio: ["ignore", "pipe", "pipe"],
     timeout: timeoutMs,
@@ -473,7 +497,9 @@ function runPadStatus(padTool: string, port: string, timeoutMs: number): { ok: b
     );
     return { ok: false, reason: `pad.py status exit ${result.status}: ${detail}` };
   }
-  return { ok: true };
+  // The reply is printed as it came, so the program's name is read, not inferred.
+  const seen = parseStatusFirmware(result.stdout?.toString() ?? "");
+  return seen.replied ? { ok: true, firmware: seen.firmware } : { ok: true };
 }
 
 /**
@@ -503,7 +529,7 @@ export async function probeBridge(
   // query, so this probe can be unit-tested and CI-run with zero hardware risk.
   const disabledReason = bridgeDisabled();
   if (disabledReason) {
-    return { bridgePortOpen: false, bridgeReady: false, port, reason: disabledReason };
+    return { bridgePortOpen: false, bridgeReady: false, bridgeFirmware: FIRMWARE_NOT_READ, port, reason: disabledReason };
   }
 
   const pad = findPad();
@@ -511,6 +537,7 @@ export async function probeBridge(
     return {
       bridgePortOpen: false,
       bridgeReady: false,
+      bridgeFirmware: FIRMWARE_NOT_READ,
       port,
       reason: `bridge/tools/pad.py not found from ${import.meta.url}`,
     };
@@ -522,17 +549,63 @@ export async function probeBridge(
       return {
         bridgePortOpen: false,
         bridgeReady: false,
+        bridgeFirmware: FIRMWARE_NOT_READ,
         port,
         reason: result.reason ?? "bridge status probe failed",
       };
     }
-    return { bridgePortOpen: true, bridgeReady: true, port };
+    return {
+      bridgePortOpen: true,
+      bridgeReady: true,
+      // A reply without "fw" is the pre-07 board; no reply read at all is not a statement about the program.
+      bridgeFirmware:
+        typeof result.firmware === "string" ? result.firmware : result.firmware === null ? FIRMWARE_PRE_07 : FIRMWARE_NOT_READ,
+      port,
+    };
   } catch (err) {
     return {
       bridgePortOpen: false,
       bridgeReady: false,
+      bridgeFirmware: FIRMWARE_NOT_READ,
       port,
       reason: `bridge status probe threw: ${(err as Error).message}`,
     };
   }
+}
+
+/**
+ * The board's program, read the way deck_status reads it and with the same
+ * restraint: a machine that does not press through the bridge board is not asked,
+ * and a serial port another session holds the lease on is left alone (the status
+ * poll opening it is what collided with a press on 2026-08-31). Everything else
+ * is `probeBridge`, which only ever asks for `status`.
+ */
+export async function readBridgeFirmware(
+  opts: {
+    machine?: Machine;
+    heldByOther?: (machine: string) => { owner: string; purpose: string } | null;
+    probe?: () => Promise<BridgeProbeResult>;
+  } = {}
+): Promise<{ probed: boolean; firmware: string; port: string; reason?: string }> {
+  const m = opts.machine ?? currentMachine();
+  const port = getConfiguredBridgePort();
+  if (m.press !== "bridge") {
+    return {
+      probed: false,
+      firmware: FIRMWARE_NOT_PROBED,
+      port: "",
+      reason: `machine "${m.name}" presses through ${m.press === "none" ? "nothing (press: none)" : `a virtual pad (${m.press})`}, not the bridge board`,
+    };
+  }
+  const holder = (opts.heldByOther ?? leaseHeldByOther)(m.name);
+  if (holder) {
+    return {
+      probed: false,
+      firmware: FIRMWARE_NOT_PROBED,
+      port,
+      reason: `not probed: "${m.name}" is leased by ${holder.owner} (${holder.purpose}); a status read stays off a leased serial port`,
+    };
+  }
+  const r = await (opts.probe ?? probeBridge)();
+  return { probed: true, firmware: r.bridgeFirmware, port: r.port, ...(r.reason ? { reason: r.reason } : {}) };
 }

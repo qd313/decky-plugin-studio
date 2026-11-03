@@ -76,6 +76,41 @@ that are easy to get wrong: `USBMode=default` (means TinyUSB, required for HID)
 and `CDCOnBoot=default` (means CDC *disabled*, keeps the log on the COM port).
 Both Arduino option names read backwards from what they do.
 
+### Which program is on the board
+
+`firmware/deck_bridge/` is one file, bumped in place: the earlier programs live
+in git, not as numbered copies. Its header carries the history, and the program's
+name is `FW_PROGRAM` in `deck_bridge.ino`. Bump it with every change to the file.
+
+| Program | Written | What changed | Says its name? |
+|---|---|---|---|
+| `04_command` | 2026-08 | the JSON command channel and the watchdog | no |
+| `05_triggers` | 2026-10-08 | `LT` and `RT` as the Z and Rz axes; they rest at 0 (half pulled) | no |
+| `06_trigger_rest` | 2026-10-11 | the triggers rest at -127; a lone Steam button opens its menu again (flashed 2026-10-24) | no |
+| `07_version` | 2026-11-02 | the `status` reply and the boot banner carry `"fw":"07_version"`; nothing else | yes |
+
+Before `07_version` the only tell was the resting axes (`06` rests the triggers
+at -127, `05` at 0), which is a guess about a program, not its name. Now:
+
+    python pad.py status
+    <- {"ok":true,"t":"status","fw":"07_version","buttons":0,"dirs":0,"ax":[0,0,-127,-127,0,0],...}
+
+A status reply with **no** `fw` means the board runs a program from before
+`07_version`. `deck_status` reports it as `bridgeFirmware: "unknown (pre-07)"`
+and `studio_doctor` carries the same word; neither works out an older program's
+name from the axes. A stand-in's virtual pad (`vpad.py`) answers `"fw":"vpad"`,
+so the field is never absent from a machine that has no board.
+
+**Flashing `07_version` (written at the desk and compiled; not yet flashed):**
+
+1. Unplug the board's **Deck-side** cable (the rule above: a reflash while it is
+   connected can inject phantom input).
+2. `.\flash.ps1 deck_bridge` from `bridge/tools`, over the PC-side cable.
+3. `python pad.py status`: the reply must carry `"fw":"07_version"` and
+   `ax:[0,0,-127,-127,0,0]` (the trigger rest did not change).
+4. Plug the Deck-side cable back in, then the four-step hand test below: GUIDE
+   opens the menu, B closes it, LT, GUIDE opens it again.
+
 ## Sketches
 
 - **01_hello** — prints chip info and a tick per second. Proves the board and
@@ -360,7 +395,7 @@ The hand test, no flash needed (each step one press):
 If step 2 fails too, the triggers are not the cause; look next at Steam's own
 settings for the board (Settings > Controller: Guide Button Chord Layout, and
 the board's own layout, reset to default) and at whether Steam updated between
-2026-10-07 and 2026-10-10. If step 4 fails, flash `06_trigger_rest` (unplug the
+2026-10-07 and 2026-10-10. If step 4 fails, flash `06_trigger_rest` or later (`07_version` keeps the rest; unplug the
 Deck-side cable first) and repeat steps 1-4: both GUIDE presses should open the
 menu.
 

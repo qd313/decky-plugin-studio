@@ -37,7 +37,7 @@
  */
 import { spawn } from "child_process";
 
-import { findBridgeTool, findPadTool } from "./bridgeTools.js";
+import { findBridgeTool, findPadTool, parseStatusFirmware } from "./bridgeTools.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { openCdpTunnel, openPadEndpoint } from "./cdpTunnel.js";
 import { readFocusAt } from "./readFocus.js";
@@ -77,13 +77,22 @@ const TRIGGER_NAMES: readonly string[] = ["LT", "RT"];
  * program from before the triggers existed: say so, and how to fix it, rather
  * than leaving the caller with a bare "unknown button name". Undefined for every
  * other output.
+ *
+ * The program is named when the board said so: `firmware` is the "fw" of a
+ * status reply, or it is read from any status reply in `out`. A board that
+ * refuses LT or RT is from before `05_triggers`, so it has no "fw" to give, and
+ * the text says what is known (it refused the name) rather than a program name.
  */
-export function oldFirmwareHint(out: string, buttons: readonly string[]): string | undefined {
+export function oldFirmwareHint(out: string, buttons: readonly string[], firmware?: string | null): string | undefined {
   if (!/unknown button name/i.test(out)) return undefined;
   if (!buttons.some((b) => TRIGGER_NAMES.includes(b.trim().toUpperCase()))) return undefined;
+  const fw = firmware ?? parseStatusFirmware(out).firmware;
+  const running = fw
+    ? `the board says it runs ${fw}, and it refused LT and RT (they came with 2026-10-08's 05_triggers)`
+    : "the board refused LT and RT and reports no program name, so it runs a program from before 05_triggers (2026-10-08)";
   return (
-    "the board is running its program from before LT and RT existed (2026-10-08). " +
-    "Unplug the board's Deck-side cable, run bridge/tools/flash.ps1 deck_bridge, then plug it back in"
+    `${running}. ` +
+    "Unplug the board's Deck-side cable, run bridge/tools/flash.ps1 deck_bridge (the current program names itself in its status reply), then plug it back in"
   );
 }
 

@@ -17,7 +17,7 @@ the board's firmware speaks, so the host side needs no second vocabulary.
 
 Protocol (identical to the board's, plus `chord`):
 
-    -> {"t":"status"}                      <- {"ok":true,"t":"status","backend":"uinput","held":[]}
+    -> {"t":"status"}                      <- {"ok":true,"t":"status","fw":"vpad","backend":"uinput","held":[]}
     -> {"t":"press","b":["A"],"ms":80}     <- {"ok":true,"t":"press","b":["A"],"ms":80}   (after the release)
     -> {"t":"hold","b":["DOWN"]}           <- {"ok":true,"t":"hold","held":["DOWN"]}
     -> {"t":"hb"}                          (no reply; refreshes the watchdog)
@@ -297,7 +297,9 @@ class Pad:
                                   "detail": "hold cap reached, neutralized" if too_long else "link silent, neutralized"})
 
     def status(self):
-        return {"backend": self.backend.name, "held": sorted(self.held),
+        # "fw" is the field the board's firmware sends to name its program. A virtual pad has
+        # no program number, so it says what it is; the field is never absent from a stand-in.
+        return {"fw": "vpad", "backend": self.backend.name, "held": sorted(self.held),
                 "watchdog_ms": WATCHDOG_MS, "watchdog_tripped": self.watchdog_tripped,
                 "uptime_s": round(time.monotonic() - self.started, 1), "pid": os.getpid()}
 

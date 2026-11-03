@@ -23,6 +23,8 @@ import { automationStatus } from "../deck/killswitch.js";
 import { findBridgeTool } from "../deck/bridgeTools.js";
 import { isIngestRunning } from "../ingest/server.js";
 import { verifyPackagedScripts } from "./captureOrchestrator.js";
+import { readBridgeFirmware } from "./deckAutonomy.js";
+import { FIRMWARE_PRE_07 } from "../deck/bridgeTools.js";
 
 export type CheckVerdict = true | false | "unknown";
 
@@ -56,6 +58,12 @@ export interface DoctorContext {
   probePython: (moduleName: string) => PythonProbe;
   /** Whether this process is the one listening on the ingest port. */
   ingestRunningHere: () => boolean;
+  /**
+   * Ask the bridge board which program it runs, with one `status` over its serial
+   * port. Optional so a context built before the check existed still compiles; a
+   * context without it reads as "could not be checked".
+   */
+  bridgeFirmware?: () => Promise<{ probed: boolean; firmware: string; port: string; reason?: string }>;
 }
 
 export type CheckFn = (ctx: DoctorContext) => DoctorCheck | Promise<DoctorCheck>;
@@ -306,6 +314,25 @@ export const checkScriptsAndPython: CheckFn = (ctx) => {
   return pass(name, notes.join("; "));
 };
 
+// ---- 4b. the board's firmware ------------------------------------------------
+
+export const checkBridgeFirmware: CheckFn = async (ctx) => {
+  const name = "Bridge board's firmware";
+  if (!ctx.bridgeFirmware) return unknown(name, "this context cannot ask the board");
+  const r = await ctx.bridgeFirmware();
+  if (!r.probed) {
+    return unknown(name, r.reason ?? "the board was not asked", "Run it again when no other session is driving this machine, on a machine that presses through the board.");
+  }
+  if (r.firmware === FIRMWARE_PRE_07) {
+    // The board answered, so this is a finding and not a gap: it runs a program from before the board named itself.
+    return pass(name, `the board on ${r.port} answers status and reports no program name (${r.firmware}): it runs a program from before 07_version. Flash deck_bridge (Deck-side cable unplugged) for the board to say which one it runs`);
+  }
+  if (r.firmware.startsWith("unknown")) {
+    return unknown(name, `the board on ${r.port} did not say which program it runs: ${r.reason ?? r.firmware}`, "Check the board is plugged into this PC and the port is right (deck.env DECK_BRIDGE_PORT).");
+  }
+  return pass(name, `the board on ${r.port} says it runs ${r.firmware}`);
+};
+
 // ---- 5. machines.json ------------------------------------------------------
 
 export const checkMachines: CheckFn = () => {
@@ -367,6 +394,7 @@ export const ALL_CHECKS: Array<[string, CheckFn]> = [
   ["Version pins agree", checkVersionPins],
   ["Ingest port is ours", checkPorts],
   ["Bridge scripts and Python", checkScriptsAndPython],
+  ["Bridge board's firmware", checkBridgeFirmware],
   ["machines.json is valid", checkMachines],
   ["deck.env has the real Deck's address", checkDeckEnv],
   ["Killswitch state", checkKillswitch],
@@ -410,6 +438,7 @@ export function defaultContext(workspace?: string, extensionVersion?: string): D
     findBridgeTool,
     probePython: defaultProbePython,
     ingestRunningHere: isIngestRunning,
+    bridgeFirmware: () => readBridgeFirmware(),
   };
 }
 

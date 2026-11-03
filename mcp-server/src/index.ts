@@ -35,6 +35,7 @@ import * as deck from "./tools/deck.js";
 import * as plugin from "./tools/plugin.js";
 import * as deckAutonomy from "./tools/deckAutonomy.js";
 import { studioDoctor } from "./tools/doctor.js";
+import { FIRMWARE_NOT_PROBED } from "./deck/bridgeTools.js";
 import { diffRpc } from "./rpc/rpcDiff.js";
 import { lintFocus } from "./lint/index.js";
 import { readFocus } from "./deck/readFocus.js";
@@ -284,13 +285,21 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       // The status poll stays off a serial port another session is driving
       // through (ROADMAP: "status poll opens COM7"); a virtual pad is a TCP
       // socket that takes any number of clients, so it is always probed.
-      let bridge: { bridgePortOpen: boolean; bridgeReady: boolean; port: string; reason?: string; probed: boolean };
+      let bridge: {
+        bridgePortOpen: boolean;
+        bridgeReady: boolean;
+        bridgeFirmware: string;
+        port: string;
+        reason?: string;
+        probed: boolean;
+      };
       let virtualPad: deckAutonomy.VirtualPadProbe | null = null;
       if (m.press === "bridge") {
         bridge = heldByOther
           ? {
               bridgePortOpen: false,
               bridgeReady: false,
+              bridgeFirmware: FIRMWARE_NOT_PROBED,
               port: deckAutonomy.getConfiguredBridgePort(),
               probed: false,
               reason: `not probed: "${m.name}" is leased by ${heldByOther.owner} (${heldByOther.purpose}); the status poll stays off a leased serial port`,
@@ -300,6 +309,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         bridge = {
           bridgePortOpen: false,
           bridgeReady: false,
+          bridgeFirmware: FIRMWARE_NOT_PROBED,
           port: "",
           probed: false,
           reason: `machine "${m.name}" presses through ${m.press === "none" ? "nothing (press: none)" : `a virtual pad (${m.press})`}, not the bridge board`,
@@ -326,6 +336,10 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         // Deprecated: use bridgePortOpen. Same value, kept so an existing
         // consumer (bonsAI) reading this name does not break on the rename.
         bridgeReady: bridge.bridgeReady,
+        // The program the board says it runs ("07_version"), "unknown (pre-07)" when it answered with no
+        // name, or another "unknown (...)" when it was not asked or did not answer. Never read off the axes.
+        // On a stand-in this is the virtual pad's own "fw" ("vpad").
+        bridgeFirmware: virtualPad?.reachable && virtualPad.firmware ? virtualPad.firmware : bridge.bridgeFirmware,
         bridgePort: bridge.port,
         bridgeReason: bridge.reason,
         bridgeProbed: bridge.probed,
