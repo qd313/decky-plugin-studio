@@ -441,6 +441,38 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "deck_typeText",
+    description:
+      "Type text into the plugin's own field by CDP injection (Input.insertText) -- NOT through the controller, the bridge or Steam's on-screen keyboard, so the result's fidelity is \"injected\", ranked below \"wire-sent\", and it proves nothing about the path a person uses to type: a field that takes injected text works, which is a different fact from a controller being able to fill it. The honest fallback until a bridge keyboard exists; never file it as steam-routed. It reads focus first and writes ONLY to the element the gamepad ring (gpfocus, not document.activeElement) is on, and only when that element is an <input> of a text type, a <textarea> or a contenteditable host, inside the plugin's panel (the panel root selector when known -- rootSelector, else panelRootSelector in .decky/preview.json -- otherwise Decky's plugin pane on the Quick Access page). Anything else is refused with what was found instead: a wrapper that merely contains an input, a checkbox, a Steam page's own field (not ours to fill by injection), or an unowned ring (it presses nothing and never places the ring: use deck_walkTo first). It calls DOM focus() on that element only because the ring already sits there; it never moves the ring. clear:true first empties the field through the native value setter plus an input event (the way React notices a change; a contenteditable host is cleared by select-all and execCommand delete) and refuses to type if the field did not empty; cleared.method says which ran. The result reads the field back: valueBefore, expected, valueAfter and matched (false if a maxlength, a controlled field or newlines in a one-line input changed the text), and ok is true only when it matched. submit:true then dispatches Enter as a DOM key event (Input.dispatchKeyEvent keyDown + keyUp) and reports it in `submit`, with the field's value afterwards in valueAfterSubmit; it never presses A, and it is not sent when the text did not read back or the field lost DOM focus. Driving tool: takes the machine's lease and obeys the killswitch. Default deadline 60 s, not the 10 minutes other driving tools get. Not yet measured on a Deck.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        text: {
+          type: "string",
+          description: "What to type. May be empty when clear or submit is the point. Inserted at the end of the field's current text unless clear is set.",
+        },
+        submit: {
+          type: "boolean",
+          default: false,
+          description: "After the text reads back as expected, send Enter with Input.dispatchKeyEvent (keyDown + keyUp). Never presses A.",
+        },
+        clear: {
+          type: "boolean",
+          default: false,
+          description: "Empty the field first instead of appending. Stops before typing if the field would not clear.",
+        },
+        rootSelector: {
+          type: "string",
+          description:
+            "CSS selector for the plugin's own panel root, which decides what counts as the plugin's page. Defaults to panelRootSelector in .decky/preview.json; without either, Decky's plugin pane (quickaccess_content_999) on the Quick Access page.",
+        },
+        cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_runSequence",
     description:
       "Run a list of button presses on the Deck unattended, asserting where focus lands at each one, over a single SSH tunnel. Use this instead of calling deck_assertFocusMove in a loop: it is much faster (one tunnel, not one per press), it writes an evidence file, and it detects cycles — a focus ring that returns to somewhere it has already been. That last one matters because a focus graph can trap the ring in a region with no way out while every individual press still reports moved:true and matched:true; no per-step assertion can see it, because the defect is a property of the path rather than of any one edge. The cycle report is a measurement, not a verdict — a tab bar that wraps is a legitimate cycle.",

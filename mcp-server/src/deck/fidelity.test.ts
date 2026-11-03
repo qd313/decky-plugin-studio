@@ -62,3 +62,18 @@ test("confirmedFidelity: presses with nothing confirmed report the floor", () =>
   // Exactly the path that used to answer "steam-routed" off `presses > 0`.
   assert.equal(confirmedFidelity(20, false), "wire-sent");
 });
+
+test("injected is the floor: below wire-sent, which is below steam-routed", () => {
+  // deck_typeText never touches the controller, so it cannot claim even that a
+  // press was sent. In a run that mixes both, the injection is what the run
+  // is entitled to claim.
+  assert.equal(weakestFidelity(["wire-sent", "injected"]), "injected");
+  assert.equal(weakestFidelity(["injected", "wire-sent"]), "injected");
+  assert.equal(weakestFidelity(["steam-routed", "injected", "steam-routed"]), "injected");
+  assert.equal(weakestFidelity(["injected"]), "injected");
+});
+
+test("injected is not null: an injection that happened is a claim, just a small one", () => {
+  assert.equal(weakestFidelity([null, "injected", null]), "injected");
+  assert.equal(weakestFidelity([null, "injected", "steam-routed"]), "injected");
+});

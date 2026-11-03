@@ -21,12 +21,21 @@
  * The ordering is a floor, not a verdict. `"wire-sent"` does not mean the
  * press failed to route -- a handler may well have run and moved nothing --
  * it means nothing here is entitled to say that it did.
+ *
+ * `"injected"` (plan 12, lane D) sits BELOW `"wire-sent"`. `deck_typeText`
+ * puts text into a field with CDP `Input.insertText`, which never touches the
+ * controller, the bridge or Steam's on-screen keyboard. A press that was only
+ * sent still travelled the real path and merely was not seen arriving; an
+ * injection did not travel it at all. So it proves nothing about that path --
+ * a field that took injected text says the field works, not that a person
+ * could have filled it with a controller -- and in a run that mixes both it
+ * drags the whole run down to `"injected"`.
  */
 
 /** null = no press was delivered, so there is nothing to claim either way. */
-export type Fidelity = "wire-sent" | "steam-routed" | null;
+export type Fidelity = "injected" | "wire-sent" | "steam-routed" | null;
 
-const RANK: Record<string, number> = { "wire-sent": 1, "steam-routed": 2 };
+const RANK: Record<string, number> = { injected: 0, "wire-sent": 1, "steam-routed": 2 };
 
 /**
  * The weakest claim any press in a run earned -- the only claim the run as a

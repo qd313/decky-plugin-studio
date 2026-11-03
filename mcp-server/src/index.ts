@@ -45,6 +45,7 @@ import { assertFocusMove } from "./deck/assertFocusMove.js";
 import { runSequence, SequenceStep } from "./deck/runSequence.js";
 import { openPluginWithRetry } from "./deck/openPluginRetry.js";
 import { walkTo, WalkDirection } from "./deck/walkTo.js";
+import { typeText } from "./deck/typeText.js";
 import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
 import { closeSharedCdpTunnel, openCdpTunnel, padEndpointIfOpen } from "./deck/cdpTunnel.js";
@@ -105,6 +106,7 @@ const DRIVING_TOOLS: ReadonlySet<string> = new Set([
   "deck_pressButton",
   "deck_pressChord",
   "deck_walkTo",
+  "deck_typeText",
   "deck_runSequence",
   "deck_sweep",
   "deck_openPlugin",
@@ -121,6 +123,14 @@ const DRIVING_TOOLS: ReadonlySet<string> = new Set([
   "deck_captureScreenshot",
   "deck_installCaptureHelper",
 ]);
+
+/**
+ * Driving tools whose work is one short exchange, not a walk: they get a
+ * shorter default than the 10 minutes a class gives. `deadlineMs` still wins.
+ */
+const TOOL_DEFAULT_DEADLINE_MS: Readonly<Record<string, number>> = {
+  deck_typeText: 60_000,
+};
 
 /**
  * Tools about the registry or the killswitch. They take a machine NAME, not
@@ -152,7 +162,11 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
   // driving call waits its turn on its machine (callDeadline.ts, callQueue.ts).
   // The switch in dispatch() is untouched; this only wraps it.
   const cls = callClassOf(tool);
-  const { deadlineMs, source, rest: args } = takeDeadlineArg(params, cls);
+  const taken = takeDeadlineArg(params, cls);
+  const { source, rest: args } = taken;
+  // A call that asked for its own limit keeps it; otherwise a tool with a
+  // shorter default than its class gets that one (deck_typeText: 60 s).
+  const deadlineMs = source === "default" ? (TOOL_DEFAULT_DEADLINE_MS[tool] ?? taken.deadlineMs) : taken.deadlineMs;
   // Plan 12 lane B: a bad outDir refuses here, before the queue or a press, not
   // after a sweep whose evidence write then fails quietly.
   if (args.outDir != null) {
@@ -477,6 +491,16 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         stallLimit: params.stallLimit != null ? Number(params.stallLimit) : undefined,
         acquireFocus: params.acquireFocus != null ? Boolean(params.acquireFocus) : undefined,
         port: params.port != null ? String(params.port) : undefined,
+        cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+      });
+
+    case "tools/deck_typeText":
+      return typeText({
+        text: params.text as string,
+        submit: params.submit != null ? Boolean(params.submit) : undefined,
+        clear: params.clear != null ? Boolean(params.clear) : undefined,
+        // The workspace's own selector is the default; an explicit argument wins.
+        rootSelector: params.rootSelector != null ? String(params.rootSelector) : loadPluginConfig().panelRootSelector,
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
       });
 
