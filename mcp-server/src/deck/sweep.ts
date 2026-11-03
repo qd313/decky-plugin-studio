@@ -77,6 +77,8 @@ export interface SweepOptions {
   runName?: string;
   /** Set false to skip writing an evidence file. Default true. */
   writeEvidence?: boolean;
+  /** Folder for the evidence file: absolute, or relative to the workspace. Default `<workspace>/runs`. */
+  outDir?: string;
   /** Test-only seam, as in runSequence: substitutes the press that places an unowned ring. */
   acquirePressFn?: typeof pressButton;
 }
@@ -301,7 +303,7 @@ export async function sweep(opts: SweepOptions = {}): Promise<SweepResult> {
     };
     if (opts.writeEvidence !== false && stops.length > 0) {
       try {
-        const dir = getWorkspaceArtifactsDir("runs");
+        const dir = getWorkspaceArtifactsDir("runs", opts.outDir);
         const name = (opts.runName ?? `sweep_${timestamp()}`).replace(/[^A-Za-z0-9._-]/g, "_");
         const file = path.join(dir, `${name}.json`);
         // The report, not the result: durationMs and the file's own path would

@@ -198,8 +198,16 @@ export async function saveCheck(opts: SaveCheckOptions): Promise<SaveCheckResult
 export interface ReplayChecksOptions {
   checksDir: string;
   pluginRoot: string;
-  /** Replay only checks with these saved names (not filenames). Default: every check file in checksDir. */
+  /**
+   * Replay only checks with these saved names (not filenames); the MCP tool
+   * calls it `names`. With none, every check file in checksDir runs -- unless
+   * there are more than `maxChecks`, in which case it refuses (see `all`).
+   */
   only?: string[];
+  /** Run every check even when there are more than `maxChecks`. */
+  all?: boolean;
+  /** Most checks an unnamed replay will run without `all: true`. Default 10 (DEFAULT_MAX_CHECKS). */
+  maxChecks?: number;
   /** Passed through to every sweep/runSequence call this replay makes. */
   port?: string;
   cdpUrl?: string;
@@ -208,8 +216,20 @@ export interface ReplayChecksOptions {
   runRunSequence?: typeof runSequence;
 }
 
+/**
+ * bonsAI called deck_replayChecks with no names on 2026-10-24: all 100 saved
+ * walks ran, 25 minutes of presses on a Deck in a random state, and a setting
+ * changed. A replay that big is a decision, not a default.
+ */
+export const DEFAULT_MAX_CHECKS = 10;
+
 export interface ReplayChecksResult {
+  /** Empty when the replay was refused (nothing was pressed and no hash was computed). */
   currentBuildHash: string;
+  /** Set when the replay refused before running anything: how many check files the directory holds. */
+  refusedForCount?: number;
+  /** Set with refusedForCount: the limit that was exceeded. */
+  maxChecks?: number;
   checked: ReplayOutcome[];
   /** Check files that could not even be read -- malformed or truncated. Never crashes the loop. */
   errors: Array<{ file: string; message: string }>;
@@ -226,9 +246,26 @@ export interface ReplayChecksResult {
 export async function replayChecks(opts: ReplayChecksOptions): Promise<ReplayChecksResult> {
   const doSweep = opts.runSweep ?? sweep;
   const doRunSequence = opts.runRunSequence ?? runSequence;
-  const buildHash = computeBuildHash(opts.pluginRoot);
 
   const files = listCheckFiles(opts.checksDir);
+
+  // The size guard. Checked before the build hash and before anything runs:
+  // no names + more than maxChecks files + no `all` = refuse and press nothing.
+  const maxChecks = opts.maxChecks ?? DEFAULT_MAX_CHECKS;
+  if (!Number.isInteger(maxChecks) || maxChecks < 1) {
+    throw new Error(`maxChecks must be a whole number of at least 1; got ${JSON.stringify(opts.maxChecks)}.`);
+  }
+  const named = opts.only != null && opts.only.length > 0;
+  if (!named && !opts.all && files.length > maxChecks) {
+    const summary =
+      `refused: ${opts.checksDir} holds ${files.length} check files, more than maxChecks (${maxChecks}), ` +
+      "and no names were given. Each check is a walk of real presses on the machine, so nothing was run. " +
+      "Pass `names` (the saved names of the checks to replay) to run some, or `all: true` to run all " +
+      `${files.length}.`;
+    return { currentBuildHash: "", refusedForCount: files.length, maxChecks, checked: [], errors: [], ok: false, summary };
+  }
+
+  const buildHash = computeBuildHash(opts.pluginRoot);
   const checked: ReplayOutcome[] = [];
   const errors: Array<{ file: string; message: string }> = [];
 
@@ -240,7 +277,7 @@ export async function replayChecks(opts: ReplayChecksOptions): Promise<ReplayChe
       errors.push({ file, message: (err as Error).message });
       continue;
     }
-    if (opts.only && !opts.only.includes(check.name)) continue;
+    if (named && !opts.only!.includes(check.name)) continue;
 
     if (check.tool === "deck_sweep") {
       const result = await doSweep({

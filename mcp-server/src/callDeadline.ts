@@ -16,6 +16,9 @@
  *     tool the pad is released through the same release path
  *     deck_stopAutomation uses -- WITHOUT setting the stop latch, because a
  *     timeout is not a stop.
+ *   - A press from a call past its deadline is refused (plan 12, lane B):
+ *     pressDeadlineRefusal() below, checked by pressButton, pressChord and the
+ *     pad client on the last line before the wire.
  *   - One driving call at a time per machine (callQueue.ts), waited for in
  *     line and counted against the waiting call's own deadline.
  *   - Process-level handlers so a stray rejection or exception is logged with
@@ -77,6 +80,11 @@ export interface CallContext {
   tool: string;
   machine: string | null;
   startedAt: number;
+  /** Wall-clock time (ms since the epoch) the call's deadline passes, queue wait included. */
+  deadlineAt: number;
+  deadlineMs: number;
+  /** Set the moment the deadline timer fires; a press checks it as well as the clock. */
+  expired: boolean;
   /** The last stage the tool reported through reportCallStage(), if any. */
   stage: string | null;
   /** Child processes this call spawned that are still running. */
@@ -95,6 +103,51 @@ const inFlight = new Set<CallContext>();
 export function reportCallStage(stage: string): void {
   const ctx = callContext.getStore();
   if (ctx) ctx.stage = stage;
+}
+
+/**
+ * Plan 12, lane B. The refusal a press must return when the call it belongs
+ * to has run out of time, or null when it may go ahead (or when there is no
+ * guarded call at all: a test, a direct call, the release path after a
+ * timeout, which is deliberately outside any call's context).
+ *
+ * Lane D abandoned a timed-out call's promise instead of stopping it, so a
+ * walk that was sitting in a slow read at the deadline woke up later and
+ * pressed beside the next call. The AsyncLocalStorage that carries the call
+ * follows the abandoned promise chain, so the press seam can ask: is MY call
+ * still inside its deadline? Both the flag and the clock are read, because
+ * the timer cannot fire while the event loop is busy and a press that is the
+ * first thing to run after a stall must still refuse.
+ *
+ * `what` names the press ("press DOWN", "chord GUIDE+A", "pad write"); the
+ * last stage the tool reported is named too.
+ */
+export function pressDeadlineRefusal(what: string): string | null {
+  return refusalFor(callContext.getStore(), what);
+}
+
+/**
+ * The same check, bound to the call that is running NOW. A caller that will
+ * write later from an event handler (the pad client's socket) takes this up
+ * front instead of trusting the async context to follow the callback.
+ */
+export function pressDeadlineGuard(): (what: string) => string | null {
+  const ctx = callContext.getStore();
+  return (what) => refusalFor(ctx, what);
+}
+
+function refusalFor(ctx: CallContext | undefined, what: string): string | null {
+  if (!ctx) return null;
+  const now = Date.now();
+  if (!ctx.expired && now < ctx.deadlineAt) return null;
+  const late = Math.max(0, now - ctx.deadlineAt);
+  return (
+    `Nothing was pressed: ${ctx.tool}'s deadline of ${ctx.deadlineMs} ms passed ${late} ms ago, ` +
+    `so this call was already abandoned when it reached "${what}"` +
+    (ctx.stage ? ` (the last stage it reported was "${ctx.stage}")` : " (it reported no stage)") +
+    ". A press from an abandoned call could land beside the next one, so it is refused here. " +
+    "Read the machine's state before driving it again."
+  );
 }
 
 /** The tools in flight right now, for a crash log line. */
@@ -212,7 +265,9 @@ export class CallDeadlineError extends Error {
         ? `The last stage it reported was "${lastStage}".`
         : "It reports no stages, so there is no last stage to name.",
       "The call was abandoned, not cancelled: whatever it was waiting on may still finish " +
-        "inside this server, and its result will be thrown away.",
+        "inside this server, and its result will be thrown away. Any press it still tries to " +
+        "make is refused (the deadline reaches pressButton, pressChord and the pad client), so " +
+        "it cannot press beside the next call.",
       killedChildren.length
         ? `Child processes it had started were killed: ${killedChildren.join(", ")}.`
         : "It had no child process still running.",
@@ -274,7 +329,16 @@ export async function guardCall<T>(spec: GuardSpec<T>): Promise<T> {
   const log = spec.log ?? stderrLog;
   const t0 = Date.now();
   const deadlineAt = t0 + spec.deadlineMs;
-  const ctx: CallContext = { tool: spec.tool, machine: spec.machine, startedAt: t0, stage: null, children: new Set() };
+  const ctx: CallContext = {
+    tool: spec.tool,
+    machine: spec.machine,
+    startedAt: t0,
+    deadlineAt,
+    deadlineMs: spec.deadlineMs,
+    expired: false,
+    stage: null,
+    children: new Set(),
+  };
   inFlight.add(ctx);
   let slot: QueueSlot | null = null;
   try {
@@ -293,6 +357,7 @@ export async function guardCall<T>(spec: GuardSpec<T>): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         const timer = setTimeout(() => {
           timedOut = true;
+          ctx.expired = true;
           reject(new DeadlineReached());
         }, Math.max(0, deadlineAt - Date.now()));
         work.then(
@@ -341,8 +406,10 @@ export async function guardCall<T>(spec: GuardSpec<T>): Promise<T> {
     return result;
   } finally {
     // Freed on a timeout too. A promise that never settles would otherwise
-    // hold the machine forever; the price is that an abandoned call which
-    // wakes up later can press alongside the next one (see the lane D report).
+    // hold the machine forever. An abandoned call that wakes up later can no
+    // longer press alongside the next one: pressButton, pressChord and the pad
+    // client refuse once the call's deadline has passed (pressDeadlineRefusal,
+    // plan 12 lane B). It can still READ; only presses are fenced.
     slot?.release();
     inFlight.delete(ctx);
   }

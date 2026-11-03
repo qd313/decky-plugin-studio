@@ -180,13 +180,14 @@ function refuseCaptureOnWindows(m: Machine, tool: string): void {
 
 export async function captureScreenshot(
   mode: string,
-  allowNonPluginUi = false
+  allowNonPluginUi = false,
+  outDir?: string,
 ): Promise<{ path: string; bytes: number; mode: string; method: string; quickAccessPagePresent?: boolean }> {
   const m = currentMachine();
   if (m.os === "windows") {
     // A Windows stand-in has no gamescope or Wayland compositor: take the picture over
     // Steam's CEF debugger instead, falling back to a PowerShell window grab.
-    const outPath = path.join(getWorkspaceArtifactsDir("screenshots"), `DeckCapture_${timestamp()}_bigpicture.png`);
+    const outPath = path.join(getWorkspaceArtifactsDir("screenshots", outDir), `DeckCapture_${timestamp()}_bigpicture.png`);
     const shot = await captureStandinWindows(
       { outPath },
       () => path.join(getScriptsDir(), "standin", "windows", "grab-window.ps1"),
@@ -205,7 +206,7 @@ export async function captureScreenshot(
   const host = m.host;
   const user = m.user ?? DEFAULT_SSH_USER;
   const ts = timestamp();
-  const outPath = path.join(getWorkspaceArtifactsDir("screenshots"), `DeckCapture_${ts}_${mode}.png`);
+  const outPath = path.join(getWorkspaceArtifactsDir("screenshots", outDir), `DeckCapture_${ts}_${mode}.png`);
 
   const remoteFile = "/tmp/deck_ui_capture.png";
   const remoteDiag = "/tmp/studio-capture.diag";
@@ -281,7 +282,8 @@ export async function recordDeck(
   seconds: string,
   mode: string,
   quality = "compressed",
-  allowNonPluginUi = false
+  allowNonPluginUi = false,
+  outDir?: string,
 ): Promise<{ path: string; bytes: number; mode: string; method: string; seconds: number }> {
   const m = currentMachine();
   refuseCaptureOnWindows(m, "deck_record");
@@ -292,7 +294,7 @@ export async function recordDeck(
   const ts = timestamp();
   const suffixMode = mode === "auto" ? "auto" : mode;
   const outPath = path.join(
-    getWorkspaceArtifactsDir("recordings"),
+    getWorkspaceArtifactsDir("recordings", outDir),
     `DeckRecord_${ts}_${suffixMode}.mkv`
   );
 

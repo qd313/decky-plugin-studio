@@ -25,6 +25,8 @@
  */
 import net from "net";
 
+import { pressDeadlineGuard } from "../callDeadline.js";
+
 export interface PadEndpoint {
   host: string;
   port: number;
@@ -56,7 +58,18 @@ export const proc = {
  */
 export function padRequest(ep: PadEndpoint, cmd: Record<string, unknown>, timeoutMs = 5_000): Promise<PadExchange> {
   const want = String(cmd.t ?? "");
+  // Plan 12 lane B: a press or chord from a call whose deadline has passed is
+  // never written (before connecting, and again on the connect event, which is
+  // the line before the socket write). Release and status are NOT fenced: the
+  // release after a timeout must still get through, and neither presses.
+  const fenced = want === "press" || want === "chord";
+  const lateRefusal = fenced ? pressDeadlineGuard() : () => null;
   return new Promise((resolve) => {
+    const early = lateRefusal(`pad ${want} to ${ep.host}:${ep.port}`);
+    if (early) {
+      resolve({ ack: null, lines: [], failure: early });
+      return;
+    }
     const lines: string[] = [];
     let buf = "";
     let done = false;
@@ -87,6 +100,11 @@ export function padRequest(ep: PadEndpoint, cmd: Record<string, unknown>, timeou
     sock.on("error", (e) => finish({ ack: null, lines, failure: `vpad at ${ep.host}:${ep.port}: ${e.message}` }));
     sock.on("close", () => finish({ ack: null, lines, failure: `vpad at ${ep.host}:${ep.port} closed the connection before acknowledging "${want}"` }));
     sock.on("connect", () => {
+      const late = lateRefusal(`pad ${want} write to ${ep.host}:${ep.port}`);
+      if (late) {
+        finish({ ack: null, lines, failure: late });
+        return;
+      }
       sock.write(JSON.stringify(cmd) + "\n");
     });
     sock.on("data", (d: string) => {

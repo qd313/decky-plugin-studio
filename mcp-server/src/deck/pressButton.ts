@@ -38,6 +38,7 @@
 import { spawn } from "child_process";
 
 import { findBridgeTool, findPadTool, parseStatusFirmware } from "./bridgeTools.js";
+import { pressDeadlineRefusal, reportCallStage } from "../callDeadline.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { openCdpTunnel, openPadEndpoint } from "./cdpTunnel.js";
 import { readFocusAt } from "./readFocus.js";
@@ -241,6 +242,11 @@ async function deliverVirtualPress(m: Machine, buttons: string[], holdMs: number
     return { ...base, reason: `${vpadRefusal(m)} (${(err as Error).message})` };
   }
   const x = await padPress(ep, buttons, holdMs);
+  if (!x.ack) {
+    // The pad client refuses a write from an abandoned call; say that, not "the pad is not available".
+    const late = pressDeadlineRefusal(`pad press ${buttons.join("+")}`);
+    if (late) return { ...base, reason: late };
+  }
   if (!x.ack) return { ...base, reason: `${vpadRefusal(m)} (${x.failure ?? "no acknowledgement"})` };
   if (!x.ack.ok) return { ...base, reason: `${vpadRefusal(m)} (daemon refused: ${ackLine(x)})` };
   return { ...base, ok: true, fidelity: "wire-sent", ack: ackLine(x) };
@@ -324,6 +330,8 @@ async function deliverPress(opts: PressOptions): Promise<PressResult> {
   // error whether or not a board is attached; only the spawn touches hardware.
   const disabled = bridgeDisabled();
   if (disabled) return { ...base, reason: disabled };
+  const late = pressDeadlineRefusal(`press ${buttons.join("+")}`);
+  if (late) return { ...base, reason: late };
 
   // Which way does this machine take a press? Resolved once at the seam
   // (machines.ts); read here, never guessed from the host.
@@ -415,6 +423,8 @@ async function deliverPress(opts: PressOptions): Promise<PressResult> {
   await new Promise((r) => setTimeout(r, 350));
   const stoppedMeanwhile = bridgeDisabled();
   if (stoppedMeanwhile) return { ...base, reason: stoppedMeanwhile };
+  const lateMeanwhile = pressDeadlineRefusal(`press ${buttons.join("+")} (retry)`);
+  if (lateMeanwhile) return { ...base, reason: lateMeanwhile };
   const second = await attempt();
   const { detail: _detail2, ...result } = second;
   return second.ok
@@ -435,6 +445,24 @@ async function deliverPress(opts: PressOptions): Promise<PressResult> {
  */
 export async function pressButton(opts: PressOptions): Promise<PressResult> {
   const send = opts.sendRaw ?? deliverPress;
+  const stage = `press ${opts.buttons.map((b) => b.trim().toUpperCase()).join("+")}`;
+  reportCallStage(stage);
+  // Plan 12 lane B: the deadline fence, at the seam every walk, sweep and
+  // sequence step presses through. It sits ahead of `send` so a substituted
+  // delivery is fenced as well; deliverPress and the pad client check again
+  // on the last line before the wire.
+  const lateAtEntry = pressDeadlineRefusal(stage);
+  if (lateAtEntry) {
+    return {
+      ok: false,
+      fidelity: null,
+      method: methodFor(currentMachineIfAny()),
+      buttons: opts.buttons.map((b) => b.trim().toUpperCase()),
+      holdMs: opts.holdMs ?? 80,
+      reason: lateAtEntry,
+      ...(opts.verify ? { verified: false } : {}),
+    };
+  }
   if (!opts.verify) return send(opts);
 
   const holdMs = opts.holdMs ?? 80;
@@ -491,6 +519,10 @@ export async function pressButton(opts: PressOptions): Promise<PressResult> {
           `be confirmed: ${before.reason}`,
       };
     }
+
+    // The focus read above can be slow; the deadline may have passed in it.
+    const lateAfterRead = pressDeadlineRefusal(stage);
+    if (lateAfterRead) return { ...base, reason: lateAfterRead };
 
     const pressed = await send(opts);
     if (!pressed.ok) return { ...pressed, verified: false };
@@ -564,6 +596,10 @@ export async function pressChord(
 
   const chordDisabled = bridgeDisabled();
   if (chordDisabled) return { ...base, reason: chordDisabled };
+  const chordStage = `chord ${H}+${T}`;
+  reportCallStage(chordStage);
+  const chordLate = pressDeadlineRefusal(chordStage);
+  if (chordLate) return { ...base, reason: chordLate };
 
   const which = machineOrReason();
   if (!which.ok) return { ...base, reason: which.reason };
@@ -580,6 +616,10 @@ export async function pressChord(
       return { ...base, reason: `${vpadRefusal(m)} (${(err as Error).message})` };
     }
     const x = await padChord(ep, H, T, opts.timeoutMs ?? 8_000);
+    if (!x.ack) {
+      const late = pressDeadlineRefusal(chordStage);
+      if (late) return { ...base, reason: late };
+    }
     if (!x.ack) return { ...base, reason: `${vpadRefusal(m)} (${x.failure ?? "no acknowledgement"})` };
     if (!x.ack.ok) return { ...base, reason: `${vpadRefusal(m)} (daemon refused: ${ackLine(x)})` };
     return { ...base, ok: true, fidelity: "wire-sent", ack: ackLine(x) };

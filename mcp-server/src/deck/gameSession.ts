@@ -201,6 +201,8 @@ export interface GameSessionOptions {
   runName?: string;
   /** Set false to skip the evidence file. Default true. */
   writeEvidence?: boolean;
+  /** Folder for the evidence file: absolute, or relative to the workspace. Default `<workspace>/runs`. */
+  outDir?: string;
   /**
    * Test-only seams, the same justification as openPlugin's pressFn: the
    * suite's hardware guard refuses real presses, so without them every
@@ -1098,7 +1100,7 @@ async function runSession(
 
   if (opts.writeEvidence !== false) {
     try {
-      const dir = getWorkspaceArtifactsDir("runs");
+      const dir = getWorkspaceArtifactsDir("runs", opts.outDir);
       const name = (opts.runName ?? `${tool}_${timestamp()}`).replace(/[^A-Za-z0-9._-]/g, "_");
       const file = path.join(dir, `${name}.json`);
       // Stages, what was seen, the RunningApps reads before and after, and the

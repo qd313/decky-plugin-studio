@@ -410,3 +410,103 @@ test("a rebuild does not throw away the landing comparison the replay already pa
     cleanup(pluginRoot, checksDir);
   }
 });
+
+// ---------------------------------------------------------------------------
+// replayChecks: a replay of the whole directory is a decision, not a default
+// (plan 12 lane B; bonsAI ran 100 saved walks for 25 minutes by accident on
+// 2026-10-24 and a setting changed)
+// ---------------------------------------------------------------------------
+
+/** Write `n` minimal sweep check files straight into `checksDir`, without running anything. */
+async function seedChecks(checksDir: string, pluginRoot: string, n: number): Promise<string[]> {
+  const names: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const name = `walk-${String(i).padStart(3, "0")}`;
+    names.push(name);
+    await saveCheck({
+      name,
+      tool: "deck_sweep",
+      checksDir,
+      pluginRoot,
+      runSweep: async () => sweepResultFixture(sweepStops()),
+    });
+  }
+  return names;
+}
+
+test("replayChecks with no names refuses a directory over maxChecks, runs nothing, and names the count", async () => {
+  const pluginRoot = makePluginRoot();
+  const checksDir = makeChecksDir();
+  try {
+    await seedChecks(checksDir, pluginRoot, 11);
+    let runs = 0;
+    const replay = await replayChecks({
+      checksDir,
+      pluginRoot,
+      runSweep: async () => {
+        runs++;
+        return sweepResultFixture(sweepStops());
+      },
+    });
+    assert.equal(runs, 0, "not one walk was started");
+    assert.equal(replay.ok, false);
+    assert.equal(replay.checked.length, 0);
+    assert.equal(replay.refusedForCount, 11);
+    assert.equal(replay.maxChecks, 10);
+    assert.match(replay.summary, /holds 11 check files, more than maxChecks \(10\)/);
+    assert.match(replay.summary, /`names`/);
+    assert.match(replay.summary, /`all: true`/);
+  } finally {
+    cleanup(pluginRoot, checksDir);
+  }
+});
+
+test("replayChecks: exactly maxChecks files still runs; names or all:true or a raised maxChecks lift the refusal", async () => {
+  const pluginRoot = makePluginRoot();
+  const checksDir = makeChecksDir();
+  try {
+    const names = await seedChecks(checksDir, pluginRoot, 11);
+    const run = async () => sweepResultFixture(sweepStops());
+
+    // Ten of eleven, by name: runs those ten.
+    const some = await replayChecks({ checksDir, pluginRoot, only: names.slice(0, 10), runSweep: run });
+    assert.equal(some.refusedForCount, undefined);
+    assert.equal(some.checked.length, 10);
+
+    // all:true runs all eleven.
+    const all = await replayChecks({ checksDir, pluginRoot, all: true, runSweep: run });
+    assert.equal(all.checked.length, 11);
+    assert.equal(all.ok, true);
+
+    // A raised maxChecks is the same decision made another way.
+    const raised = await replayChecks({ checksDir, pluginRoot, maxChecks: 11, runSweep: run });
+    assert.equal(raised.checked.length, 11);
+
+    // Exactly maxChecks is not "more than".
+    const tenDir = makeChecksDir();
+    try {
+      await seedChecks(tenDir, pluginRoot, 10);
+      const ten = await replayChecks({ checksDir: tenDir, pluginRoot, runSweep: run });
+      assert.equal(ten.checked.length, 10);
+      assert.equal(ten.refusedForCount, undefined);
+    } finally {
+      cleanup(tenDir);
+    }
+  } finally {
+    cleanup(pluginRoot, checksDir);
+  }
+});
+
+test("replayChecks: an empty names list is 'no names', not 'replay nothing'; a bad maxChecks throws", async () => {
+  const pluginRoot = makePluginRoot();
+  const checksDir = makeChecksDir();
+  try {
+    await seedChecks(checksDir, pluginRoot, 12);
+    const refused = await replayChecks({ checksDir, pluginRoot, only: [], runSweep: async () => sweepResultFixture(sweepStops()) });
+    assert.equal(refused.refusedForCount, 12);
+    await assert.rejects(replayChecks({ checksDir, pluginRoot, maxChecks: 0 }), /maxChecks must be a whole number/);
+    await assert.rejects(replayChecks({ checksDir, pluginRoot, maxChecks: 2.5 }), /maxChecks must be a whole number/);
+  } finally {
+    cleanup(pluginRoot, checksDir);
+  }
+});

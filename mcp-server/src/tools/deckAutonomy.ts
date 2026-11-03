@@ -13,6 +13,7 @@ import {
 import { sshRestartLoader, waitForLoaderReady, LoaderReadiness } from "../deploy/deployHelpers.js";
 import { detectPlugin } from "./plugin.js";
 import { getTunnelState, pingDeck } from "./deck.js";
+import { defaultArtifactsDirs } from "./captureOrchestrator.js";
 import { bridgeDisabled, findPadTool } from "../deck/pressButton.js";
 import {
   currentMachine,
@@ -301,6 +302,11 @@ export async function getEnv(): Promise<Record<string, unknown>> {
 
   const base: Record<string, unknown> = {
     workspaceRoot: workspace,
+    // Where run files land when a call names no `outDir` (plan 12 lane B).
+    // deck_sweep, deck_runSequence, deck_launchGame and deck_exitGame write
+    // under runs; deck_captureScreenshot under screenshots; deck_record under
+    // recordings. Each takes `outDir`, absolute or relative to workspaceRoot.
+    artifactDirs: defaultArtifactsDirs(),
     // The machine this call is about (plan 10). `deckEnv` below is the raw
     // file, kept for anyone reading it; `machine` is what the tools use.
     machine: {

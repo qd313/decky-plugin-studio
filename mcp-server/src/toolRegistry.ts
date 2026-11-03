@@ -34,6 +34,22 @@ const DEPLOY_MODE = {
     "'local' targets a Decky Loader on this machine, 'remote' SSHes to the configured Deck IP, 'auto' picks based on configuration.",
 };
 
+/**
+ * The optional `outDir` of every tool that writes run files (plan 12 lane B).
+ * Absolute, or relative to the workspace root; created if missing. An empty
+ * string, a filesystem root, or a path that is an existing file is refused
+ * before the call does anything. deck_getEnv reports the defaults as `artifactDirs`.
+ */
+function outDirArg(subdir: "runs" | "screenshots" | "recordings"): Record<string, unknown> {
+  return {
+    type: "string",
+    description:
+      `Folder to write this call's files to instead of '<workspace>/${subdir}': an absolute path, or one relative to the workspace root. ` +
+      "Created if missing. Refused up front (nothing is pressed) when empty, a filesystem root, or an existing file. " +
+      "deck_getEnv reports the defaults under artifactDirs.",
+  };
+}
+
 const CAPTURE_MODE = {
   type: "string",
   enum: ["auto", "game", "desktop"],
@@ -142,7 +158,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_getEnv",
     description:
-      "Read back the currently configured Deck environment (IP, user, paths) without modifying it.",
+      "Read back the currently configured Deck environment (IP, user, paths) without modifying it. `artifactDirs` is where run files land when a call names no outDir: runs (deck_sweep, deck_runSequence, deck_launchGame, deck_exitGame evidence), screenshots (deck_captureScreenshot) and recordings (deck_record), each under the workspace root.",
     inputSchema: noArgs,
   },
 
@@ -220,7 +236,7 @@ export const TOOLS: ToolDef[] = [
       "Take a composited screenshot on the real Deck (QAM and Decky overlays included in game mode) and save it to the workspace screenshots directory. On a Windows stand-in it captures the Big Picture page over Steam's CEF debugger (Page.captureScreenshot, method \"cdp\"), falling back to a PowerShell window grab (method \"window-grab\"); the Quick Access menu is not composited in.",
     inputSchema: {
       type: "object",
-      properties: { mode: CAPTURE_MODE, allowNonPluginUi: ALLOW_NON_PLUGIN_UI },
+      properties: { mode: CAPTURE_MODE, allowNonPluginUi: ALLOW_NON_PLUGIN_UI, outDir: outDirArg("screenshots") },
       additionalProperties: false,
     },
   },
@@ -240,6 +256,7 @@ export const TOOLS: ToolDef[] = [
           description: "'compressed' is VP8 at roughly 2.5 Mbps; 'full' is high-bitrate MJPEG/H.264.",
         },
         allowNonPluginUi: ALLOW_NON_PLUGIN_UI,
+        outDir: outDirArg("recordings"),
       },
       additionalProperties: false,
     },
@@ -475,6 +492,7 @@ export const TOOLS: ToolDef[] = [
             "Labels that must show up somewhere during the run, matched case-insensitively against each visited control's accessible name (own aria-label, then its text, then a labelled ancestor's). The cheap way to express 'Retry must stay reachable'.",
         },
         runName: { type: "string", description: "Name for the evidence file under runs/. Naming a run is what makes it write one." },
+        outDir: outDirArg("runs"),
         writeEvidence: {
           type: "boolean",
           description:
@@ -535,6 +553,7 @@ export const TOOLS: ToolDef[] = [
         },
         runName: { type: "string", description: "Name for the evidence file under runs/. Defaults to sweep_<timestamp>." },
         writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        outDir: outDirArg("runs"),
         port: { type: "string", description: "Serial port of the bridge's COM side." },
         cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
       },
@@ -615,7 +634,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "deck_replayChecks",
     description:
-      "Rerun every saved check under checksDir (default '<workspace>/checks') against the CURRENT build and diff each against what it recorded when it passed -- the loop a person used to do by hand after every build. For each check, first compares a fresh hash of the plugin bundle (the same files deck_deploy would ship, from pluginRoot) against the hash recorded when the check was saved: a mismatch is reported as 'this check has never been verified against what is running now' -- distinct from a landing diff, and no landing comparison is even attempted in that case, because comparing across two different builds would not prove anything either way. When the build matches, a differing landing is named specifically -- which stop or step, which field, expected versus actual -- never just a pass/fail count. A malformed or truncated check file is reported by name under `errors` rather than crashing the rest of the replay. Pass `only` to replay a subset by name.",
+      "Rerun every saved check under checksDir (default '<workspace>/checks') against the CURRENT build and diff each against what it recorded when it passed -- the loop a person used to do by hand after every build. For each check, first compares a fresh hash of the plugin bundle (the same files deck_deploy would ship, from pluginRoot) against the hash recorded when the check was saved: a mismatch is reported as 'this check has never been verified against what is running now' -- distinct from a landing diff, and no landing comparison is even attempted in that case, because comparing across two different builds would not prove anything either way. When the build matches, a differing landing is named specifically -- which stop or step, which field, expected versus actual -- never just a pass/fail count. A malformed or truncated check file is reported by name under `errors` rather than crashing the rest of the replay. Pass `names` (alias `only`) to replay a subset by saved name. With NO names, a directory holding more than maxChecks files (default 10) is REFUSED before anything runs, naming the count: each check is a walk of real presses, and a replay of 100 saved walks ran for 25 minutes on a Deck in a random state and changed a setting (bonsAI, 2026-10-24). Pass `all: true` to run them all on purpose.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -624,10 +643,26 @@ export const TOOLS: ToolDef[] = [
           type: "string",
           description: "Plugin directory the current build hash is computed from. Defaults to the workspace root.",
         },
+        names: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Replay only checks with these saved names (not filenames). With none, every check file in checksDir runs -- unless there are more than maxChecks, which is refused.",
+        },
         only: {
           type: "array",
           items: { type: "string" },
-          description: "Replay only checks with these saved names. Default: every check file in checksDir.",
+          description: "The older spelling of `names`; `names` wins when both are given.",
+        },
+        all: {
+          type: "boolean",
+          default: false,
+          description: "Run every check even when the directory holds more than maxChecks. Each check is a walk of real presses on the machine.",
+        },
+        maxChecks: {
+          type: "number",
+          default: 10,
+          description: "Most checks an unnamed replay runs without all:true; more files than this is refused, naming the count.",
         },
         port: { type: "string", description: "Serial port of the bridge's COM side, for any deck_runSequence checks." },
         cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel per check." },
@@ -706,6 +741,7 @@ export const TOOLS: ToolDef[] = [
         },
         runName: { type: "string", description: "Name for the evidence file under runs/. Defaults to launch-game_<timestamp>." },
         writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        outDir: outDirArg("runs"),
         port: { type: "string", description: "Serial port of the bridge's COM side." },
         cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
       },
@@ -722,6 +758,7 @@ export const TOOLS: ToolDef[] = [
         waitMs: { type: "number", default: 60000, description: "How long to poll RunningApps for the app id to leave after A on Confirm." },
         runName: { type: "string", description: "Name for the evidence file under runs/. Defaults to exit-game_<timestamp>." },
         writeEvidence: { type: "boolean", default: true, description: "Set false to skip the evidence file." },
+        outDir: outDirArg("runs"),
         port: { type: "string", description: "Serial port of the bridge's COM side." },
         cdpUrl: { type: "string", description: "Existing CDP endpoint; omit to open a temporary tunnel." },
       },

@@ -417,8 +417,61 @@ export function installCaptureHelperOnDeck(
   }
 }
 
-export function getWorkspaceArtifactsDir(subdir: "recordings" | "screenshots" | "runs"): string {
-  const dir = path.join(getWorkspaceRoot(), subdir);
+export type ArtifactsSubdir = "recordings" | "screenshots" | "runs";
+
+/**
+ * Plan 12 lane B. Is this `outDir` something a run file may be written to?
+ * Null when it is, else the reason. Pure: it touches the disk only to ask
+ * whether the path is already a FILE, and creates nothing, so the seam can
+ * call it before a call that will press for minutes -- a bad path must refuse
+ * at step zero, not after the sweep when the evidence write fails quietly.
+ *
+ * Refused: not a string, empty or blank, a NUL byte, a filesystem root
+ * (nothing sensible writes run files to `C:\`), and a path that exists but is
+ * not a directory. Everything else is the caller's to choose: absolute, or
+ * relative to the workspace, and outside the workspace too -- that is the
+ * point of the argument.
+ */
+export function checkOutDir(outDir: unknown): string | null {
+  if (typeof outDir !== "string") return `outDir must be a string path; got ${JSON.stringify(outDir)}.`;
+  if (outDir.trim() === "") return "outDir is empty. Omit it for the default folder, or give a path (absolute, or relative to the workspace).";
+  if (outDir.includes("\0")) return "outDir contains a NUL byte.";
+  const resolved = path.resolve(getWorkspaceRoot(), outDir);
+  if (path.parse(resolved).root === resolved) return `outDir resolves to a filesystem root (${resolved}); give a folder.`;
+  try {
+    if (fs.existsSync(resolved) && !fs.statSync(resolved).isDirectory()) {
+      return `outDir resolves to ${resolved}, which exists and is not a directory.`;
+    }
+  } catch (err) {
+    return `outDir (${resolved}) could not be inspected: ${(err as Error).message}`;
+  }
+  return null;
+}
+
+/** Where each kind of run file lands when the caller names no `outDir`. */
+export function defaultArtifactsDirs(): Record<ArtifactsSubdir, string> {
+  const root = getWorkspaceRoot();
+  return {
+    runs: path.join(root, "runs"),
+    screenshots: path.join(root, "screenshots"),
+    recordings: path.join(root, "recordings"),
+  };
+}
+
+/**
+ * The folder run files go to, created if missing: `outDir` when the caller
+ * gave one (absolute, or relative to the workspace), else `<workspace>/<subdir>`.
+ * Throws on an `outDir` checkOutDir refuses.
+ */
+export function getWorkspaceArtifactsDir(subdir: ArtifactsSubdir, outDir?: string | null): string {
+  let dir: string;
+  if (outDir == null) {
+    dir = path.join(getWorkspaceRoot(), subdir);
+  } else {
+    const problem = checkOutDir(outDir);
+    if (problem) throw new Error(problem);
+    dir = path.resolve(getWorkspaceRoot(), outDir);
+  }
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

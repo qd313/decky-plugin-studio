@@ -140,6 +140,8 @@ export interface RunSequenceOptions {
    * committed to a plugin repo this way). true forces a write, false skips it.
    */
   writeEvidence?: boolean;
+  /** Folder for the evidence file: absolute, or relative to the workspace. Default `<workspace>/runs`. */
+  outDir?: string;
   /**
    * When nothing owns the ring, spend one press placing it before the run
    * starts, exactly like deck_walkTo's option of the same name -- both tools
@@ -628,7 +630,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
   const wantEvidence = opts.writeEvidence ?? Boolean(opts.runName);
   if (wantEvidence) {
     try {
-      const dir = getWorkspaceArtifactsDir("runs");
+      const dir = getWorkspaceArtifactsDir("runs", opts.outDir);
       const name = (opts.runName ?? `run_${timestamp()}`).replace(/[^A-Za-z0-9._-]/g, "_");
       const file = path.join(dir, `${name}.json`);
       fs.writeFileSync(file, JSON.stringify(result, null, 2), "utf8");

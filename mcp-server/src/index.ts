@@ -48,7 +48,7 @@ import { walkTo, WalkDirection } from "./deck/walkTo.js";
 import { sweep, LaneButton } from "./deck/sweep.js";
 import { readPage, waitFor } from "./deck/readPage.js";
 import { closeSharedCdpTunnel, openCdpTunnel, padEndpointIfOpen } from "./deck/cdpTunnel.js";
-import { getScriptsDir } from "./tools/captureOrchestrator.js";
+import { checkOutDir, getScriptsDir } from "./tools/captureOrchestrator.js";
 import { saveCheck, replayChecks } from "./checks/checkRunner.js";
 import { checkDeckReady, DeclaredState } from "./deck/checkReady.js";
 import { bigPictureStatus, focusBigPicture, defaultRestoreWindow } from "./deck/foreground.js";
@@ -153,6 +153,12 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
   // The switch in dispatch() is untouched; this only wraps it.
   const cls = callClassOf(tool);
   const { deadlineMs, source, rest: args } = takeDeadlineArg(params, cls);
+  // Plan 12 lane B: a bad outDir refuses here, before the queue or a press, not
+  // after a sweep whose evidence write then fails quietly.
+  if (args.outDir != null) {
+    const bad = checkOutDir(args.outDir);
+    if (bad) throw new Error(`${tool}: ${bad}`);
+  }
   if (!tool.startsWith("deck_") || REGISTRY_TOOLS.has(tool)) {
     return guardCall({ tool, machine: null, cls, deadlineMs, deadlineSource: source, run: () => dispatch(method, args) });
   }
@@ -404,7 +410,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
     case "tools/deck_captureScreenshot":
       return deck.captureScreenshot(
         String(params.mode ?? "auto"),
-        Boolean(params.allowNonPluginUi)
+        Boolean(params.allowNonPluginUi),
+        params.outDir != null ? String(params.outDir) : undefined,
       );
 
     case "tools/deck_installCaptureHelper":
@@ -482,6 +489,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
+        outDir: params.outDir != null ? String(params.outDir) : undefined,
         acquireFocus: params.acquireFocus != null ? Boolean(params.acquireFocus) : undefined,
         requireVisible: params.requireVisible != null ? Boolean(params.requireVisible) : undefined,
       });
@@ -505,6 +513,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
+        outDir: params.outDir != null ? String(params.outDir) : undefined,
       });
 
     case "tools/deck_saveCheck": {
@@ -558,7 +567,10 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       return replayChecks({
         checksDir: params.checksDir != null ? String(params.checksDir) : path.join(getWorkspaceRoot(), "checks"),
         pluginRoot: params.pluginRoot != null ? String(params.pluginRoot) : getWorkspaceRoot(),
-        only: (params.only as string[]) ?? undefined,
+        // `names` is the word the refusal asks for; `only` is the older spelling of the same argument.
+        only: (params.names as string[]) ?? (params.only as string[]) ?? undefined,
+        all: params.all != null ? Boolean(params.all) : undefined,
+        maxChecks: params.maxChecks != null ? Number(params.maxChecks) : undefined,
         port: params.port != null ? String(params.port) : undefined,
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
       });
@@ -587,6 +599,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
+        outDir: params.outDir != null ? String(params.outDir) : undefined,
       });
 
     case "tools/deck_exitGame":
@@ -596,6 +609,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
+        outDir: params.outDir != null ? String(params.outDir) : undefined,
       });
 
     case "tools/deck_listGames":
@@ -741,7 +755,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         String(params.seconds ?? "10"),
         String(params.mode ?? "auto"),
         String(params.quality ?? "compressed"),
-        Boolean(params.allowNonPluginUi)
+        Boolean(params.allowNonPluginUi),
+        params.outDir != null ? String(params.outDir) : undefined,
       );
 
     case "shutdown":
