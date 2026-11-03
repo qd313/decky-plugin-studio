@@ -757,14 +757,28 @@ export const TOOLS: ToolDef[] = [
         name: {
           type: "string",
           description:
-            "Library display name. An exact (case-insensitive) match wins; otherwise a unique contains; more than one hit is refused. Give exactly one of name / appid.",
+            "Library display name. An exact (case-insensitive) match wins; otherwise a unique contains; more than one hit is refused. A non-Steam shortcut (nonSteam: true in deck_listGames) is then matched on the shelf by this name, because its tile's image carries no app id; it is not looked for in the Library grid, and two apps sharing its exact name are refused (pass shelfIndex). Give exactly one of name / appid / title / shelfIndex.",
         },
-        appid: { type: "number", description: "Steam app id, as listed in RunningApps and the library. Give exactly one of name / appid." },
+        appid: {
+          type: "number",
+          description:
+            "Steam app id, as listed in RunningApps and the library (a shortcut's id is matched by its library name, as for name). Give exactly one of name / appid / title / shelfIndex.",
+        },
+        title: {
+          type: "string",
+          description:
+            "A Recent Games shelf tile's own text or aria-label, for a tile the library name does not reach (a non-Steam shortcut, or a label you read off the shelf). Exact (case-insensitive) first, stopping at the first tile that is exactly it; otherwise the walk reads the whole shelf and takes the one tile that contains it, walking back to it -- two or more is refused. When the title is one library app's whole name, only that app's tile counts. Shelf only: the Library grid is not searched by title. The A on the tile follows a read that names it; the app page must still read exactly 'Play'. Device-unverified: what a shortcut's tile reads was seen in a walk's `seen` list once (2026-10-25), never asserted. Give exactly one of name / appid / title / shelfIndex.",
+        },
+        shelfIndex: {
+          type: "number",
+          description:
+            "0-based position on the Recent Games shelf, counted in RIGHT presses from the first tile, where A on Home puts the ring (measured). A position at or past 'View more in your Library' is refused, as is a stop that names nothing, and so is any position on the Home-screen route (the ring starts wherever it was left there). Shelf only. The result's shelfTile says which tile it was. Give exactly one of name / appid / title / shelfIndex.",
+        },
         budget: {
           type: "number",
           default: 40,
           description:
-            "Max D-pad presses for each search walk before refusing: the Recent Games shelf (RIGHT, then LEFT on the Home-screen route), and separately the Library grid (any direction).",
+            "Max D-pad presses for each search walk before refusing, every press counted: the Recent Games shelf (RIGHT, then LEFT on the Home-screen route, and the walk back to a title found by a unique contains), and separately the Library grid (any direction, including the stalled-DOWN fallback: when DOWN does not move the ring and the page shows a row below, one RIGHT then DOWN, then one LEFT then DOWN, each after a read -- device-unverified). Every grid stop's tile layout (rows by y, the focused tile, the grid's scroll container, the route) is written to the run file's gridStops.",
         },
         waitMs: {
           type: "number",

@@ -80,6 +80,33 @@
  * route makes (TILES_EXPR) is the shelf's rule applied to a page nobody has
  * looked at, and the route is device-unverified until a Deck pass confirms it.
  *
+ * What the Deck said on 2026-10-25 (plan 11 phase 2, bonsAI
+ * runs/p11-phase2-laneF-launch.json): the Library opened on the grid with real
+ * tiles, app ids from the tile images, ring on "ARC Raiders"; five presses
+ * moved the ring and the sixth, a DOWN, did not, with the target read as "on a
+ * row below". Nothing recorded WHY. So since plan 12 lane E every grid stop is
+ * evidence: the run file's `gridStops` holds, per stop, every tile's app id and
+ * box grouped into rows by y, the focused tile and its row, the scroll offsets
+ * of the nearest scrolling ancestor of the grid, the page's route, and each
+ * press made from that stop and whether the ring moved. A refusal names the row
+ * count and the ring's row. And a DOWN that does not move, with a row below on
+ * the page, gets one read-gated try each way (RIGHT then DOWN, LEFT then DOWN)
+ * before the walk refuses -- unmeasured, see stalledDownFallback.
+ *
+ * BY TITLE AND BY POSITION (plan 12 lane E). A non-Steam shortcut's shelf tile
+ * has no app id in its image (bonsAI 2026-10-24: Doom 64: Retribution, Pikmin 2
+ * and Super Mario 64 sat on the shelf and the walk went past all three to "View
+ * more in your Library"). Their tiles DID read their names: the 2026-10-25 run
+ * file's `seen` lists all three by the ring's label. So a shelf tile can also
+ * be chosen by `title` (its own label, aria-label or text: an exact match
+ * first, then a contains that only one stop on the whole shelf satisfies) or by
+ * `shelfIndex` (its 0-based position, counted from the first tile, where A on
+ * Home puts the ring). A shortcut asked for by name or appid is matched on the
+ * shelf by its library name the same way. The A on the tile still follows a
+ * read that names it, and the app page's button must still read exactly
+ * "Play". Titles and positions are shelf-only: the grid walk steers by image
+ * app ids, which a shortcut does not have.
+ *
  * exitGame also asks the machine's process list (checkGameProcesses) before it
  * believes an empty RunningApps (bonsAI 2026-09-19: Black Mesa alive at full
  * CPU 32 minutes after RunningApps read empty). It never kills anything.
@@ -161,6 +188,12 @@ export interface GameSessionResult {
    */
   launchRoute?: LaunchRoute;
   /**
+   * launchGame only: the shelf tile chosen for A, and what identified it.
+   * Present whenever a shelf tile was chosen, including a run that then
+   * refused on the app page.
+   */
+  shelfTile?: ShelfTilePick;
+  /**
    * exitGame only, when RunningApps read empty: true when the machine's process
    * list still shows a game (a Steam `reaper ... SteamLaunch AppId=<id>` line),
    * false when it was asked and showed none, null when it could not be asked
@@ -187,6 +220,27 @@ export interface GameSessionResult {
 
 export type GameRoute = "steam-menu" | "home-screen" | "steam-close-call";
 export type LaunchRoute = "shelf" | "library" | "home";
+
+/**
+ * What identified a shelf tile: the app id in its own image (a Steam game),
+ * a label equal to the title asked for, a label containing the title where no
+ * other stop on the shelf does, or its position counted from the first tile.
+ */
+export type ShelfMatch = "image-appid" | "title-exact" | "title-contains" | "position";
+
+export interface ShelfTilePick {
+  /**
+   * 0-based position on the shelf. Counted from the first tile on the
+   * steam-menu route (where A on Home puts the ring, measured); null on the
+   * Home-screen route, where the walk starts wherever the ring was left.
+   */
+  index: number | null;
+  /** The tile's name as the run reports it: the library name for its app id, else its own label. */
+  label: string;
+  /** From the tile's own image; null for a tile whose image carries none (a non-Steam shortcut). */
+  appid: number | null;
+  matchedBy: ShelfMatch;
+}
 
 export type ReadFocusFn = (base: string, timeoutMs?: number) => Promise<ReadFocusResult>;
 export type ReadPageFn = (opts: ReadPageOptions) => Promise<ReadPageResult<unknown>>;
@@ -227,12 +281,22 @@ export interface GameSessionOptions {
 export interface LaunchGameOptions extends GameSessionOptions {
   /** Library display name; exact (case-insensitive) first, then a unique contains. */
   name?: string;
-  /** Steam app id. Exactly one of name / appid is required. */
+  /** Steam app id. Exactly one of name / appid / title / shelfIndex is required. */
   appid?: number;
   /**
+   * A Recent Games shelf tile's own label, aria-label or text: exact
+   * (case-insensitive) first, then a contains that only one stop on the whole
+   * shelf satisfies. Shelf only -- the Library grid is not searched by title.
+   */
+  title?: string;
+  /** 0-based position on the Recent Games shelf, counted from its first tile. Shelf only. */
+  shelfIndex?: number;
+  /**
    * Max D-pad presses for EACH search walk: the Recent Games shelf (RIGHT, and
-   * on the Home-screen route LEFT after it), and then, if the game is not on
-   * the shelf, the Library grid (any direction). Default 40.
+   * on the Home-screen route LEFT after it, and the walk back to a title found
+   * by a unique contains), and then, if the game is not on the shelf, the
+   * Library grid (any direction, the stalled-DOWN fallback included). Every
+   * press counts. Default 40.
    */
   budget?: number;
 }
@@ -378,6 +442,16 @@ const TILE_EXPR =
  * NONE OF THIS WAS MEASURED ON THE LIBRARY PAGE. That its tiles carry the app
  * id in an <img src> like the shelf's, that rows are laid out by y and columns
  * by x, that off-screen rows are absent rather than present -- all assumed.
+ * (2026-10-25 confirmed the first: the grid's tiles named app ids.)
+ *
+ * Recorded, not steered by (plan 12 lane E, so a stalled walk says why):
+ * `ringBox`, the .gpfocus element's own box whether or not it is a tile;
+ * `scroll`, the nearest ancestor of the focused tile (or, with the ring off
+ * the tiles, of the first laid-out tile) that can scroll -- overflow auto,
+ * scroll or overlay with more content than room -- and its offsets;
+ * `docScroll`, the document's own; `viewport`, the window's size. Whether
+ * Steam's grid scrolls such a container, scrolls the document, or pages, is
+ * exactly what these are for.
  */
 const TILES_EXPR =
   "(() => { try { var RX = " + APPID_RX_JS + "; var el = document.querySelector('.gpfocus'); " +
@@ -386,9 +460,9 @@ const TILES_EXPR =
   "if (!m) continue; if (ids.indexOf(m[1]) < 0) { ids.push(m[1]); if (first === null) first = imgs[i]; } } " +
   "return { ids: ids, first: first }; }; " +
   "var box = function (e) { var r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }; " +
-  "var focused = null; var row = null; var text = el ? (el.textContent || '').trim().slice(0, 80) : ''; " +
+  "var focused = null; var row = null; var anchor = null; var text = el ? (el.textContent || '').trim().slice(0, 80) : ''; " +
   "if (el) { var n = el; for (var depth = 0; depth <= 8 && n; depth++) { var got = idsOf(n); " +
-  "if (got.ids.length === 1) { var b = box(got.first); focused = { appid: Number(got.ids[0]), depth: depth, x: b.x, y: b.y, w: b.w, h: b.h, " +
+  "if (got.ids.length === 1) { var b = box(got.first); anchor = n; focused = { appid: Number(got.ids[0]), depth: depth, x: b.x, y: b.y, w: b.w, h: b.h, " +
   "src: (got.first.getAttribute('src') || '').slice(0, 160) }; " +
   "var p = n.parentElement; for (var k = 0; k <= 8 && p; k++) { var up = idsOf(p); " +
   "if (up.ids.length > 1) { row = up.ids.slice(0, 100).map(Number); break; } p = p.parentElement; } break; } " +
@@ -396,8 +470,19 @@ const TILES_EXPR =
   "var gridTiles = []; var seen = {}; var all = document.querySelectorAll('img'); " +
   "for (var j = 0; j < all.length && gridTiles.length < 300; j++) { var s2 = all[j].getAttribute('src') || all[j].src || ''; " +
   "var m2 = RX.exec(s2); if (!m2 || seen[m2[1]]) continue; var b2 = box(all[j]); if (b2.w <= 0 || b2.h <= 0) continue; " +
-  "seen[m2[1]] = 1; gridTiles.push({ appid: Number(m2[1]), x: b2.x, y: b2.y, w: b2.w, h: b2.h }); } " +
-  "return { ok: true, hasRing: !!el, text: text, focused: focused, row: row, tiles: gridTiles }; " +
+  "seen[m2[1]] = 1; if (!anchor) anchor = all[j]; gridTiles.push({ appid: Number(m2[1]), x: b2.x, y: b2.y, w: b2.w, h: b2.h }); } " +
+  "var scroll = null; var sc = anchor ? anchor.parentElement : null; " +
+  "for (var d = 1; d <= 40 && sc && sc.nodeType === 1; d++) { var cs = window.getComputedStyle(sc); " +
+  "var canY = /(auto|scroll|overlay)/.test(cs.overflowY) && sc.scrollHeight > sc.clientHeight + 1; " +
+  "var canX = /(auto|scroll|overlay)/.test(cs.overflowX) && sc.scrollWidth > sc.clientWidth + 1; " +
+  "if (canY || canX) { scroll = { depth: d, tag: sc.tagName, cls: String(sc.className || '').slice(0, 120), " +
+  "overflowY: cs.overflowY, overflowX: cs.overflowX, scrollTop: sc.scrollTop, scrollLeft: sc.scrollLeft, " +
+  "scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight, scrollWidth: sc.scrollWidth, clientWidth: sc.clientWidth }; break; } " +
+  "sc = sc.parentElement; } " +
+  "var se = document.scrollingElement; " +
+  "var docScroll = se ? { scrollTop: se.scrollTop, scrollHeight: se.scrollHeight, clientHeight: se.clientHeight } : null; " +
+  "return { ok: true, hasRing: !!el, text: text, focused: focused, row: row, tiles: gridTiles, " +
+  "ringBox: el ? box(el) : null, scroll: scroll, docScroll: docScroll, viewport: { w: window.innerWidth, h: window.innerHeight } }; " +
   "} catch (e) { return { ok: false, reason: String(e) }; } })()";
 
 /**
@@ -565,7 +650,72 @@ export interface TilesRead {
   /** App ids of the nearest ancestor above the focused tile holding more than one app, in DOM order. */
   row: number[] | null;
   tiles: GridTile[];
+  /** The .gpfocus element's own box, tile or not. Recorded only. */
+  ringBox?: Box | null;
+  /** The nearest scrolling ancestor of the focused (or first) tile. Recorded only; null when none was found. */
+  scroll?: GridScroll | null;
+  /** document.scrollingElement's offsets. Recorded only. */
+  docScroll?: { scrollTop: number; scrollHeight: number; clientHeight: number } | null;
+  viewport?: { w: number; h: number } | null;
   reason?: string;
+}
+
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A scrolling container as TILES_EXPR found it: how far up from the tile, what it is, where it is scrolled to. */
+export interface GridScroll {
+  /** Parents up from the tile element. */
+  depth: number;
+  tag: string;
+  cls: string;
+  overflowY: string;
+  overflowX: string;
+  scrollTop: number;
+  scrollLeft: number;
+  scrollHeight: number;
+  clientHeight: number;
+  scrollWidth: number;
+  clientWidth: number;
+}
+
+function asBox(v: unknown): Box | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const b = { x: Number(o.x), y: Number(o.y), w: Number(o.w), h: Number(o.h) };
+  return [b.x, b.y, b.w, b.h].every(Number.isFinite) ? b : null;
+}
+
+function asNumbers<K extends string>(v: unknown, keys: readonly K[]): Record<K, number> | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const out = {} as Record<K, number>;
+  for (const k of keys) {
+    const n = Number(o[k]);
+    if (!Number.isFinite(n)) return null;
+    out[k] = n;
+  }
+  return out;
+}
+
+function asScroll(v: unknown): GridScroll | null {
+  const n = asNumbers(v, [
+    "depth",
+    "scrollTop",
+    "scrollLeft",
+    "scrollHeight",
+    "clientHeight",
+    "scrollWidth",
+    "clientWidth",
+  ] as const);
+  if (!n) return null;
+  const o = v as Record<string, unknown>;
+  const s = (k: string): string => (typeof o[k] === "string" ? (o[k] as string) : "");
+  return { ...n, tag: s("tag"), cls: s("cls"), overflowY: s("overflowY"), overflowX: s("overflowX") };
 }
 
 function asTile(v: unknown): GridTile | null {
@@ -592,6 +742,151 @@ export async function readTiles(cdpBase: string, readPageFn: ReadPageFn = readPa
     focused: f ? { ...f, depth: Number(fo?.depth ?? 0), src: typeof fo?.src === "string" ? fo.src : "" } : null,
     row: Array.isArray(v.row) ? v.row.map(Number).filter(Number.isFinite) : null,
     tiles: Array.isArray(v.tiles) ? v.tiles.map(asTile).filter((t): t is GridTile => t !== null) : [],
+    ringBox: asBox(v.ringBox),
+    scroll: asScroll(v.scroll),
+    docScroll: asNumbers(v.docScroll, ["scrollTop", "scrollHeight", "clientHeight"] as const),
+    viewport: asNumbers(v.viewport, ["w", "h"] as const),
+  };
+}
+
+/** One row of the grid as the layout groups it: tiles whose top edges sit within the tolerance, left to right. */
+export interface GridRow {
+  /** The top edge of the row's highest tile. */
+  y: number;
+  h: number;
+  tiles: GridTile[];
+}
+
+export interface GridLayout {
+  /** How far apart two top edges may be and still be one row: half the median tile height, at least 2 px. */
+  tolerance: number;
+  /** Top to bottom. */
+  rows: GridRow[];
+  /** 0-based row and column of the focused tile, by its own box; null when the ring is not on a tile in any row. */
+  focusedRow: number | null;
+  focusedCol: number | null;
+}
+
+/**
+ * Group tiles into rows by their top edge. Pure; recorded at every grid stop
+ * and used to decide whether a row exists below a stalled DOWN.
+ *
+ * NOT MEASURED: that Steam's grid lays a row's tiles out with equal tops. Any
+ * other image that names an app (a hero banner, a section's art) lands in a
+ * row of its own here, which is why the rows are evidence first.
+ */
+export function gridLayout(tiles: GridTile[], focused: Box | null, tolerance?: number): GridLayout {
+  const hs = tiles.map((t) => t.h).sort((a, b) => a - b);
+  const median = hs.length ? hs[Math.floor(hs.length / 2)] : 0;
+  const tol = tolerance ?? Math.max(2, median / 2);
+  const rows: GridRow[] = [];
+  for (const t of [...tiles].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const last = rows[rows.length - 1];
+    if (last && Math.abs(t.y - last.y) <= tol) {
+      last.tiles.push(t);
+      last.h = Math.max(last.h, t.h);
+    } else {
+      rows.push({ y: t.y, h: t.h, tiles: [t] });
+    }
+  }
+  for (const r of rows) r.tiles.sort((a, b) => a.x - b.x);
+  let focusedRow: number | null = null;
+  let focusedCol: number | null = null;
+  if (focused) {
+    const i = rows.findIndex((r) => Math.abs(focused.y - r.y) <= tol);
+    if (i >= 0) {
+      focusedRow = i;
+      const cx = focused.x + focused.w / 2;
+      let best = 0;
+      rows[i].tiles.forEach((t, k) => {
+        const b = rows[i].tiles[best];
+        if (Math.abs(t.x + t.w / 2 - cx) < Math.abs(b.x + b.w / 2 - cx)) best = k;
+      });
+      focusedCol = best;
+    }
+  }
+  return { tolerance: tol, rows, focusedRow, focusedCol };
+}
+
+/** "6 row(s) of tiles, the ring on row 5 (tile 1 of 5)", for a refusal. Pure. */
+export function describeLayout(rows: { tiles: unknown[] }[], focusedRow: number | null, focusedCol: number | null): string {
+  const n = `${rows.length} row(s) of tiles`;
+  if (focusedRow === null || !rows[focusedRow]) return `${n}, the ring on no tile in any of them`;
+  return `${n}, the ring on row ${focusedRow + 1} (tile ${(focusedCol ?? 0) + 1} of ${rows[focusedRow].tiles.length})`;
+}
+
+/**
+ * Does a shelf stop's text name the title asked for? Exact (case-insensitive,
+ * trimmed) against any one label wins over a contains. Pure.
+ */
+export function titleMatch(title: string, labels: string[]): "title-exact" | "title-contains" | null {
+  const want = title.trim().toLowerCase();
+  if (!want) return null;
+  const ls = labels.map((l) => l.trim().toLowerCase()).filter(Boolean);
+  if (ls.some((l) => l === want)) return "title-exact";
+  if (ls.some((l) => l.includes(want))) return "title-contains";
+  return null;
+}
+
+/** One stop of the grid walk, as the run file records it (plan 12 lane E). */
+export interface GridStop {
+  /** 0-based, in the order the reads were taken. */
+  stop: number;
+  /** D-pad presses the grid walk had made before this read. */
+  pressesBefore: number;
+  /** The main window's route at this read. */
+  route: string | null;
+  ring: { label: string; box: Box | null };
+  focused: (Box & { appid: number; name: string | null; row: number | null; col: number | null }) | null;
+  tolerance: number;
+  rows: GridRow[];
+  scroll: GridScroll | null;
+  docScroll: { scrollTop: number; scrollHeight: number; clientHeight: number } | null;
+  viewport: { w: number; h: number } | null;
+  /** Every press made from this stop, in order, and whether the focus read after it showed the ring elsewhere. */
+  pressesFrom: { dir: Direction; why: string; moved: boolean }[];
+}
+
+const r1 = (n: number): number => Math.round(n * 10) / 10;
+const roundBox = <T extends Box>(b: T): T => ({ ...b, x: r1(b.x), y: r1(b.y), w: r1(b.w), h: r1(b.h) });
+
+/** A GridStop from one tiles read, rounded to 0.1 px. Pure. */
+export function gridStopOf(
+  stop: number,
+  pressesBefore: number,
+  route: string | null,
+  ringLabel: string,
+  t: TilesRead,
+  nameOf: (appid: number) => string | null,
+): { stop: GridStop; layout: GridLayout } {
+  const layout = gridLayout(t.tiles, t.focused);
+  const f = t.focused;
+  return {
+    layout,
+    stop: {
+      stop,
+      pressesBefore,
+      route,
+      ring: { label: ringLabel, box: t.ringBox ? roundBox(t.ringBox) : null },
+      focused: f
+        ? roundBox({
+            appid: f.appid,
+            name: nameOf(f.appid),
+            x: f.x,
+            y: f.y,
+            w: f.w,
+            h: f.h,
+            row: layout.focusedRow,
+            col: layout.focusedCol,
+          })
+        : null,
+      tolerance: r1(layout.tolerance),
+      rows: layout.rows.map((r) => ({ y: r1(r.y), h: r1(r.h), tiles: r.tiles.map(roundBox) })),
+      scroll: t.scroll ?? null,
+      docScroll: t.docScroll ?? null,
+      viewport: t.viewport ?? null,
+      pressesFrom: [],
+    },
   };
 }
 
@@ -822,6 +1117,8 @@ class Rig {
   presses = 0;
   runningBefore: RunningApp[] | null = null;
   runningAfter: RunningApp[] | null = null;
+  /** Every Library grid stop, for the run file (plan 12 lane E). Empty when the grid was not walked. */
+  readonly gridStops: GridStop[] = [];
 
   constructor(
     private readonly base: string,
@@ -988,6 +1285,7 @@ interface Outcome {
   route: string | null;
   via?: GameRoute;
   launchRoute?: LaunchRoute;
+  shelfTile?: ShelfTilePick;
   processAlive?: boolean | null;
   pid?: number;
   processCheck?: string;
@@ -1123,6 +1421,7 @@ async function runSession(
         route: result.route,
         via: result.via ?? null,
         launchRoute: result.launchRoute ?? null,
+        shelfTile: result.shelfTile ?? null,
         processAlive: result.processAlive ?? null,
         processCheck: result.processCheck ?? null,
         stages: result.stages,
@@ -1131,6 +1430,9 @@ async function runSession(
         fidelity: result.fidelity,
         runningBefore: rig.runningBefore,
         runningAfter: rig.runningAfter,
+        // The Library grid's layout at every stop, so a walk that stalls is a
+        // measurement of the grid whatever it ends in. Null when no grid walk.
+        gridStops: rig.gridStops.length ? rig.gridStops : null,
         durationMs: Date.now() - started,
         summary: result.summary,
       };
@@ -1150,44 +1452,88 @@ async function runSession(
 // deck.launchGame
 // ---------------------------------------------------------------------------
 
+/** What the caller named: a library app (name or appid), a shelf tile's title, or a shelf position. */
+type LaunchWant =
+  | { kind: "app"; name: string; appid: number | null }
+  | { kind: "title"; title: string }
+  | { kind: "index"; index: number };
+
+/** One stop of the shelf walk, kept so a title found by a unique contains can be walked back to. */
+interface ShelfStop {
+  /** Relative to where the walk started; on the steam-menu route, the shelf's first tile is 0. */
+  pos: number;
+  /** focusKey of the ring at this stop. */
+  key: string;
+  appid: number | null;
+  label: string;
+  /** Every name the read gave this stop: its own label, its aria-label, its text, the library name for its app id. */
+  labels: string[];
+  match: ShelfMatch | null;
+}
+
 export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionResult> {
   const wantName = (opts.name ?? "").trim();
   const wantAppid = opts.appid != null && Number.isFinite(Number(opts.appid)) ? Number(opts.appid) : null;
+  const wantTitle = (opts.title ?? "").trim();
+  const wantIndex = opts.shelfIndex != null && Number.isFinite(Number(opts.shelfIndex)) ? Number(opts.shelfIndex) : null;
   const budget = Math.max(0, opts.budget ?? 40);
   const waitMs = opts.waitMs ?? 60_000;
-  const asked = wantName || (wantAppid !== null ? `appid ${wantAppid}` : null);
+  const asked =
+    wantName ||
+    wantTitle ||
+    (wantAppid !== null ? `appid ${wantAppid}` : null) ||
+    (wantIndex !== null ? `shelf tile ${wantIndex}` : null);
+  const given = [wantName !== "", wantAppid !== null, wantTitle !== "", wantIndex !== null].filter(Boolean).length;
 
-  // Exactly one of the two. There is deliberately no "launch whatever is
+  const early = (reason: string, summary: string): GameSessionResult => ({
+    ok: false,
+    tool: "launch-game",
+    appid: wantAppid,
+    name: wantName || wantTitle || null,
+    running: null,
+    route: null,
+    stages: [],
+    seen: [],
+    presses: 0,
+    fidelity: null,
+    stopped: false,
+    reason,
+    checklist: LAUNCH_CHECKLIST(asked ?? "the game"),
+    evidenceFile: null,
+    summary,
+  });
+
+  // Exactly one of the four. There is deliberately no "launch whatever is
   // first" -- a verb that presses A on Steam's own UI must be told what for.
-  if ((wantName && wantAppid !== null) || (!wantName && wantAppid === null)) {
-    return {
-      ok: false,
-      tool: "launch-game",
-      appid: wantAppid,
-      name: wantName || null,
-      running: null,
-      route: null,
-      stages: [],
-      seen: [],
-      presses: 0,
-      fidelity: null,
-      stopped: false,
-      reason:
-        "exactly one of name or appid is required - there is deliberately no \"launch whatever is first\", " +
-        "and both at once would need the rig to decide which wins",
-      checklist: LAUNCH_CHECKLIST(asked ?? "the game"),
-      evidenceFile: null,
-      summary: "refused: nothing identified the game, so nothing was pressed",
-    };
+  if (given !== 1) {
+    return early(
+      "exactly one of name, appid, title or shelfIndex is required - there is deliberately no \"launch whatever is " +
+        "first\", and two at once would need the rig to decide which wins",
+      "refused: nothing identified the game, so nothing was pressed",
+    );
   }
+  if (wantIndex !== null && (!Number.isInteger(wantIndex) || wantIndex < 0)) {
+    return early(
+      `shelfIndex must be a whole number from 0 (the shelf's first tile); got ${String(opts.shelfIndex)}`,
+      "refused: the shelf position is not a position, so nothing was pressed",
+    );
+  }
+  const want: LaunchWant = wantTitle
+    ? { kind: "title", title: wantTitle }
+    : wantIndex !== null
+      ? { kind: "index", index: wantIndex }
+      : { kind: "app", name: wantName, appid: wantAppid };
+  const askedName = wantName || wantTitle;
 
   return runSession("launch-game", opts, (n) => LAUNCH_CHECKLIST(n ?? asked ?? "the game"), asked, async (rig) => {
+    let shelfPick: ShelfTilePick | undefined;
     const refuse = (reason: string, summary: string, appid: number | null, name: string | null): Outcome => ({
       ok: false,
       appid,
       name,
       running: null,
       route: null,
+      ...(shelfPick ? { shelfTile: shelfPick } : {}),
       reason,
       summary,
     });
@@ -1201,13 +1547,16 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
         `could not read window.SteamUIStore.RunningApps in ${SHARED_JS_CONTEXT}: ${before.reason}`,
         "could not read Steam's running-app list, so nothing was pressed",
         wantAppid,
-        wantName || null,
+        askedName || null,
       );
     }
 
-    const runningTarget = before.apps.find((a) =>
-      wantAppid !== null ? a.appid === wantAppid : sameName(a.display_name, wantName),
-    );
+    // A shelf position names no game until the ring is on it, so it can never
+    // be "already running"; RULE 3 below still refuses anything that is.
+    const runningTarget =
+      want.kind === "index"
+        ? undefined
+        : before.apps.find((a) => (wantAppid !== null ? a.appid === wantAppid : sameName(a.display_name, askedName)));
     if (runningTarget) {
       rig.stage("read-running", true, `${nameOf(runningTarget)} is already in RunningApps`, 0);
       rig.runningAfter = before.apps;
@@ -1226,17 +1575,17 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
     if (before.apps.length > 0) {
       const names = before.apps.map(nameOf).join(", ");
       const looksLikeIt =
-        wantName && before.apps.find((a) => a.display_name.toLowerCase().includes(wantName.toLowerCase()));
+        askedName && before.apps.find((a) => a.display_name.toLowerCase().includes(askedName.toLowerCase()));
       rig.stage("read-running", false, `${names} already running`, 0);
       return refuse(
         `${names} is already running, and deck_launchGame never launches a second game (rule 3). ` +
           "Exit it first with deck_exitGame." +
           (looksLikeIt
-            ? ` "${wantName}" is not an exact match for it; pass appid ${looksLikeIt.appid} if that is the game you mean.`
+            ? ` "${askedName}" is not an exact match for it; pass appid ${looksLikeIt.appid} if that is the game you mean.`
             : ""),
         `refused: ${names} is running - nothing was pressed`,
         wantAppid,
-        wantName || null,
+        askedName || null,
       );
     }
     rig.stage("read-running", true, "RunningApps is empty", 0);
@@ -1249,28 +1598,96 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
         `could not read the library in ${SHARED_JS_CONTEXT}: ${lib.reason}`,
         "could not read Steam's app list, so nothing was pressed",
         wantAppid,
-        wantName || null,
+        askedName || null,
       );
     }
-    const resolved = resolveApp(lib.apps, wantName, wantAppid);
-    if ("reason" in resolved) {
-      rig.stage("resolve-app", false, resolved.reason, 0);
-      return refuse(resolved.reason, "refused: could not identify one installed game - nothing was pressed", wantAppid, wantName || null);
-    }
-    const target = resolved.app;
-    const name = target.display_name;
-    if (!target.installed) {
-      rig.stage("resolve-app", false, `${nameOf(target)} is not installed`, 0);
-      return refuse(
-        `${nameOf(target)} is not installed. Pressing Play on it would start an install, which spends disk (rule 2); ` +
-          "install it by hand first",
-        "refused: the game is not installed - nothing was pressed",
-        target.appid,
-        name,
-      );
-    }
-    rig.stage("resolve-app", true, `${nameOf(target)} is in the library and installed`, 0);
     const libraryNames = new Map(lib.apps.map((a) => [a.appid, a.display_name]));
+    const listApps = (hits: LibraryApp[]): string => hits.map((a) => `${a.display_name} (${a.appid})`).join(", ");
+    const notInstalled = (app: LibraryApp, presses: string): Outcome =>
+      refuse(
+        `${nameOf(app)} is not installed. Pressing Play on it would start an install, which spends disk (rule 2); ` +
+          "install it by hand first",
+        `refused: the game is not installed - ${presses}`,
+        app.appid,
+        app.display_name,
+      );
+
+    /** The library app the run is for, once it is known: from the start for name/appid, from the tile for the rest. */
+    let target: LibraryApp | null = null;
+    /** The title is one library app's whole name: then only that app's tile will do, never a contains. */
+    let exactTitle = false;
+    if (want.kind === "app") {
+      const resolved = resolveApp(lib.apps, wantName, wantAppid);
+      if ("reason" in resolved) {
+        rig.stage("resolve-app", false, resolved.reason, 0);
+        return refuse(resolved.reason, "refused: could not identify one installed game - nothing was pressed", wantAppid, wantName || null);
+      }
+      const app = resolved.app;
+      if (!app.installed) {
+        rig.stage("resolve-app", false, `${nameOf(app)} is not installed`, 0);
+        return notInstalled(app, "nothing was pressed");
+      }
+      if (app.nonSteam) {
+        // Its tile has no app id in its image (bonsAI 2026-10-24), so the shelf
+        // match is by name -- and a name two apps share is not a match.
+        const twins = lib.apps.filter((a) => sameName(a.display_name, app.display_name));
+        if (twins.length > 1) {
+          const why =
+            `${nameOf(app)} is a non-Steam shortcut, and ${twins.length} library apps are called "${app.display_name}" ` +
+            `exactly (${listApps(twins)}). A shortcut's shelf tile carries no app id in its image, so the rig would be ` +
+            "choosing between them by name alone; pass shelfIndex instead (deck_listGames shows the shelf)";
+          rig.stage("resolve-app", false, why, 0);
+          return refuse(why, "refused: two apps share the shortcut's name - nothing was pressed", app.appid, app.display_name);
+        }
+      }
+      target = app;
+      rig.stage(
+        "resolve-app",
+        true,
+        `${nameOf(app)} is in the library and installed` +
+          (app.nonSteam ? "; a non-Steam shortcut, so its shelf tile is matched by that name (its image carries no app id)" : ""),
+        0,
+      );
+    } else if (want.kind === "title") {
+      const exact = lib.apps.filter((a) => sameName(a.display_name, want.title));
+      if (exact.length > 1) {
+        const why =
+          `"${want.title}" is the whole name of ${exact.length} library apps (${listApps(exact)}); the shelf would show ` +
+          "more than one tile with that label, and the rig does not choose between them - pass shelfIndex, or appid " +
+          "for a Steam game";
+        rig.stage("resolve-app", false, why, 0);
+        return refuse(why, "refused: the title names more than one app - nothing was pressed", null, want.title);
+      }
+      if (exact.length === 1) {
+        if (!exact[0].installed) {
+          rig.stage("resolve-app", false, `"${want.title}" is ${nameOf(exact[0])}, which is not installed`, 0);
+          return notInstalled(exact[0], "nothing was pressed");
+        }
+        target = exact[0];
+        exactTitle = true;
+      }
+      rig.stage(
+        "resolve-app",
+        true,
+        target
+          ? `"${want.title}" is ${nameOf(target)} in the library, installed; its shelf tile is matched by its image's ` +
+              "app id or by that whole name, never by a contains"
+          : `"${want.title}" is no library app's whole name, so it is matched on the shelf alone: a stop whose label is ` +
+              "exactly it, else the one stop on the whole shelf whose label contains it",
+        0,
+      );
+    } else {
+      rig.stage(
+        "resolve-app",
+        true,
+        `shelf position ${want.index}: the game is whatever tile the ring reaches there, named by the read on it`,
+        0,
+      );
+    }
+    let targetAppid: number | null = target?.appid ?? null;
+    let name: string = target?.display_name ?? (want.kind === "title" ? want.title : `shelf tile ${wantIndex}`);
+    const whatAsked = want.kind === "title" ? `the shelf tile titled "${want.title}"` : `shelf tile ${wantIndex}`;
+    const what = (): string => (target ? nameOf(target) : whatAsked);
 
     // ---- open-main-menu: 1 GUIDE ---------------------------------------------
     //
@@ -1332,7 +1749,7 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
               `${noMenu}, and the Quick Access Menu did not close with the chord (pane ` +
                 `${focus.visibleQuickAccessTab} still on screen)`,
               "neither Steam's menu nor the Home screen could be reached - A was not pressed",
-              target.appid,
+              targetAppid,
               name,
             );
           }
@@ -1357,7 +1774,7 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
               "menu the rig cannot get to Home: that would take B, which it never presses. Go to Home by hand " +
               "and call again",
             "Steam's menu did not open and the Deck is not on Home - A was not pressed",
-            target.appid,
+            targetAppid,
             name,
           );
         }
@@ -1366,7 +1783,17 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
             `${noMenu}; the Deck is on the Home screen but the ring is on ${describe(focus)}, not on a Recent ` +
               "Games tile, and the rig does not search the rest of the page",
             "Steam's menu did not open and the ring is off the Recent Games row - A was not pressed",
-            target.appid,
+            targetAppid,
+            name,
+          );
+        }
+        if (want.kind === "index") {
+          return refuse(
+            `${noMenu}, so the shelf was reached by closing the QAM over Home, and the ring is wherever it was left ` +
+              `on the shelf (${describe(focus)}): position ${want.index} cannot be counted from a known start. Pass ` +
+              "name, appid or title, or open Steam's menu by hand and call again",
+            "Steam's menu did not open, so a shelf position could not be counted - A was not pressed",
+            null,
             name,
           );
         }
@@ -1386,7 +1813,7 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
           return refuse(
             `could not find "Home" in the main menu (${w.ended}); saw ${rig.seen.join(", ") || "nothing labelled"}`,
             "walked the main menu without finding Home - A was not pressed",
-            target.appid,
+            targetAppid,
             name,
           );
         }
@@ -1411,7 +1838,7 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
         return refuse(
           `A on "Home" did not land on /library/home (route ${route ?? "unreadable"})`,
           "the Home screen could not be confirmed by its route - nothing else was pressed",
-          target.appid,
+          targetAppid,
           name,
         );
       }
@@ -1426,10 +1853,42 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
     // first tile, so RIGHT alone covers the shelf. On the Home-screen route it
     // starts wherever it was left, so a RIGHT walk that reaches the end without
     // the game is followed by a LEFT walk, inside the same budget.
+    //
+    // By title (plan 12 lane E): a stop whose own label, aria-label, text or
+    // library name IS the title ends the walk there. One that only CONTAINS it
+    // is noted and the walk goes on, because "unique" can only be known once
+    // the whole shelf has been read; if exactly one stop contained it, the walk
+    // goes back to it, a read after every press, and A waits for a read that
+    // names it again. By position: the walk counts RIGHT presses that moved the
+    // ring from the first tile. Neither trusts text for a Steam game whose image
+    // names another app.
     let shelfPresses = 0;
     let tile: TileRead = { ok: false, appid: null, depth: null, src: null, text: "" };
+    let pos = 0;
+    /** False once the ring jumped to a stop it had already been on: positions no longer add up. */
+    let posTrusted = true;
+    let picked: ShelfStop | null = null;
+    const candidates: ShelfStop[] = [];
+    const titleWanted = want.kind === "title" ? want.title : target?.nonSteam ? target.display_name : null;
+    const labelsAt = (appid: number | null): string[] =>
+      [ownLabelOf(focus), focus.gpfocus?.ariaLabel ?? "", tile.text, appid !== null ? (libraryNames.get(appid) ?? "") : ""]
+        .map((s) => s.trim())
+        .filter((s, i, all) => s !== "" && all.indexOf(s) === i);
+    const classify = (appid: number | null, labels: string[], isEnd: boolean): ShelfMatch | null => {
+      if (isEnd) return null;
+      if (want.kind === "index") return pos === want.index && (appid !== null || labels.length > 0) ? "position" : null;
+      if (targetAppid !== null && appid === targetAppid) return "image-appid";
+      if (titleWanted === null) return null;
+      // A tile whose own image names a different app is that app, whatever its
+      // text says -- when the run already knows which app it wants.
+      if (targetAppid !== null && appid !== null && appid !== targetAppid) return null;
+      const m = titleMatch(titleWanted, labels);
+      if (exactTitle && m === "title-contains") return null;
+      return m;
+    };
     const walkShelf = async (dir: "RIGHT" | "LEFT"): Promise<{ found: boolean; ended: string; atEnd: boolean }> => {
-      const keys = new Set<string>([focusKey(focus) ?? ""]);
+      let key = focusKey(focus) ?? "";
+      const keys = new Set<string>([key]);
       for (;;) {
         tile = await rig.readTile();
         if (!tile.ok) {
@@ -1439,54 +1898,237 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
             ended: `the ${BIG_PICTURE_TARGET} page could not name the focused tile (${tile.reason ?? "no reason"})`,
           };
         }
+        const own = ownLabelOf(focus);
         rig.record(
           tile.appid !== null
             ? `${libraryNames.get(tile.appid) ?? tile.text ?? "unnamed tile"} (${tile.appid})`
-            : ownLabelOf(focus) || tile.text,
+            : own || tile.text,
         );
-        if (tile.appid === target.appid) return { found: true, atEnd: false, ended: "found" };
-        if (dir === "RIGHT" && ownLabelOf(focus) === SHELF_END_LABEL) {
-          return { found: false, atEnd: true, ended: `reached "${SHELF_END_LABEL}", the end of the shelf` };
+        const isEnd = own === SHELF_END_LABEL;
+        const labels = labelsAt(tile.appid);
+        const match = classify(tile.appid, labels, isEnd);
+        const stop: ShelfStop = {
+          pos,
+          key,
+          appid: tile.appid,
+          label: (tile.appid !== null ? libraryNames.get(tile.appid) : undefined) ?? (own || tile.text || "unnamed tile"),
+          labels,
+          match,
+        };
+        if (match !== null && match !== "title-contains") {
+          picked = stop;
+          return { found: true, atEnd: false, ended: "found" };
+        }
+        if (want.kind === "index" && pos === want.index && !isEnd) {
+          // The position is reached but the read names nothing there: no app
+          // id in an image, no label. A on an unnamed control is never pressed.
+          return {
+            found: false,
+            atEnd: false,
+            ended: `the ring at position ${pos} is on ${describe(focus)}, which names no tile (no app id in its image, no label)`,
+          };
+        }
+        if (match === "title-contains" && !candidates.some((c) => c.key === stop.key)) candidates.push(stop);
+        if (dir === "RIGHT" && isEnd) {
+          return {
+            found: false,
+            atEnd: true,
+            ended:
+              want.kind === "index"
+                ? `reached "${SHELF_END_LABEL}" at position ${pos}, so the shelf has ${pos} tile(s) and position ` +
+                  `${want.index} is past its end`
+                : `reached "${SHELF_END_LABEL}", the end of the shelf`,
+          };
         }
         if (shelfPresses >= budget) return { found: false, atEnd: false, ended: `budget of ${budget} D-pad presses spent` };
         focus = await rig.nudge(dir, "find-tile");
         shelfPresses++;
         if (!focus.ok) return { found: false, atEnd: false, ended: "the ring became unreadable" };
         const k = focusKey(focus) ?? "";
-        if (keys.has(k)) return { found: false, atEnd: true, ended: `the ring stopped moving ${dir} - an end of the shelf` };
+        if (keys.has(k)) {
+          if (k !== key) posTrusted = false;
+          return { found: false, atEnd: true, ended: `the ring stopped moving ${dir} - an end of the shelf` };
+        }
         keys.add(k);
+        key = k;
+        pos += dir === "RIGHT" ? 1 : -1;
       }
     };
     let walked = await walkShelf("RIGHT");
     let directions = "RIGHT";
+    const rightReachedEnd = walked.atEnd;
     if (!walked.found && walked.atEnd && via === "home-screen") {
       walked = await walkShelf("LEFT");
       directions = "RIGHT then LEFT";
     }
-    const found = walked.found;
-    const ended = walked.ended;
+    let found = walked.found;
+    let ended = walked.ended;
+    /** Every stop of the shelf was read: through the menu the walk starts on the first tile; on Home it must hit both ends. */
+    const covered = via === "home-screen" ? rightReachedEnd && walked.atEnd : walked.atEnd;
+
+    if (!found && candidates.length > 0 && titleWanted !== null) {
+      const list = candidates.map((c) => `"${c.label}"${via === "steam-menu" ? ` at position ${c.pos}` : ""}`).join(", ");
+      let why = "";
+      if (candidates.length > 1) {
+        why =
+          `"${titleWanted}" is not the whole label of any shelf tile, and ${candidates.length} tiles contain it: ` +
+          `${list}. The rig does not choose between them; pass the full title` +
+          (via === "steam-menu" ? ", or shelfIndex" : "");
+      } else if (!covered || !posTrusted) {
+        why =
+          `"${titleWanted}" is contained in ${list}, but the walk ended before the whole shelf was read (${ended}), ` +
+          "so the rig cannot say that no other tile contains it; pass the full title, or a larger budget";
+      } else {
+        // ---- back to the one stop that contains the title --------------------
+        const c = candidates[0];
+        const dir: "LEFT" | "RIGHT" = c.pos < pos ? "LEFT" : "RIGHT";
+        let back = 0;
+        let backEnded = "";
+        while (pos !== c.pos) {
+          if (shelfPresses >= budget) {
+            backEnded = `the budget of ${budget} D-pad presses ran out on the way back`;
+            break;
+          }
+          const prev = focusKey(focus) ?? "";
+          focus = await rig.nudge(dir, "find-tile");
+          shelfPresses++;
+          back++;
+          if (!focus.ok) {
+            backEnded = "the ring became unreadable on the way back";
+            break;
+          }
+          if ((focusKey(focus) ?? "") === prev) {
+            backEnded = `the ring stopped moving ${dir} on the way back`;
+            break;
+          }
+          pos += dir === "RIGHT" ? 1 : -1;
+        }
+        if (pos === c.pos && !backEnded) {
+          tile = await rig.readTile();
+          const own = ownLabelOf(focus);
+          rig.record(tile.appid !== null ? `${libraryNames.get(tile.appid) ?? tile.text} (${tile.appid})` : own || tile.text);
+          const again = tile.ok ? titleMatch(titleWanted, labelsAt(tile.appid)) : null;
+          if (tile.ok && (focusKey(focus) ?? "") === c.key && again !== null) {
+            picked = { ...c, match: "title-contains" };
+            found = true;
+            ended = "found";
+            directions += ` and ${back} ${dir} back`;
+          } else {
+            backEnded =
+              `the read on the way back, ring on ${describe(focus)}, did not name the tile read there before ` +
+              `("${c.label}")`;
+          }
+        }
+        if (!found) {
+          why = `"${titleWanted}" is contained in ${list} and no other shelf tile, but ${backEnded}`;
+        }
+      }
+      if (!found) {
+        rig.stage("find-tile", false, `walked ${shelfPresses} ${directions} press(es); ${why}`, shelfPresses);
+        return refuse(why, `the title matched no one shelf tile - A was not pressed`, targetAppid, name);
+      }
+    }
+
+    // Assigned inside walkShelf, so the compiler's narrowing of `picked` above
+    // is not to be trusted here; read it once, typed as declared.
+    const p = picked as ShelfStop | null;
+    if (found && p) {
+      // The tile decides which app this is, for a title or a position: its own
+      // image's app id, else one library app whose whole name it reads.
+      if (p.appid !== null) {
+        const app = lib.apps.find((a) => a.appid === p.appid);
+        if (app) target = app;
+      } else if (!target) {
+        const byName = lib.apps.filter((a) => p.labels.some((l) => sameName(a.display_name, l)));
+        if (byName.length === 1) target = byName[0];
+      }
+      targetAppid = target?.appid ?? p.appid;
+      name = target?.display_name ?? p.label;
+      shelfPick = { index: via === "steam-menu" ? p.pos : null, label: p.label, appid: p.appid, matchedBy: p.match ?? "position" };
+      if (target && !target.installed) {
+        rig.stage(
+          "find-tile",
+          false,
+          `the tile at ${via === "steam-menu" ? `position ${p.pos}` : "the ring"} is ${nameOf(target)}, which is not installed`,
+          shelfPresses,
+        );
+        return notInstalled(target, "A was not pressed");
+      }
+    }
+    const pickedAs = (): string => {
+      if (!p) return "";
+      if (p.match === "image-appid") {
+        return `appid ${targetAppid} in the focused tile's own image (${tile.src ?? "?"}, ${tile.depth ?? 0} level(s) up)`;
+      }
+      if (p.match === "position") {
+        return `position ${p.pos} on the shelf, a tile reading "${p.label}"${p.appid !== null ? ` (appid ${p.appid} in its image)` : " (no app id in its image)"}`;
+      }
+      return (
+        `a tile reading "${p.label}"${p.appid !== null ? ` (appid ${p.appid} in its image)` : " (no app id in its image)"}, ` +
+        (p.match === "title-exact"
+          ? `whose label is "${titleWanted}"`
+          : `the one stop on the shelf whose label contains "${titleWanted}"`)
+      );
+    };
     rig.stage(
       "find-tile",
       found,
       found
-        ? `appid ${target.appid} in the focused tile's own image (${tile.src ?? "?"}, ${tile.depth ?? 0} level(s) up) ` +
-          `after ${shelfPresses} ${directions} press(es)`
-        : `walked ${shelfPresses} ${directions} press(es) without a tile for appid ${target.appid}; ${ended}`,
+        ? `${pickedAs()} after ${shelfPresses} ${directions} press(es)`
+        : `walked ${shelfPresses} ${directions} press(es) without ${
+            want.kind === "index"
+              ? `reaching position ${want.index}`
+              : titleWanted !== null
+                ? `a tile reading "${titleWanted}"`
+                : `a tile for appid ${targetAppid}`
+          }; ${ended}`,
       shelfPresses,
     );
     let launchRoute: LaunchRoute = via === "home-screen" ? "home" : "shelf";
-    if (!found && via === "home-screen") {
+    if (!found && want.kind !== "app") {
+      const steamGame = target && !target.nonSteam ? target : null;
       return refuse(
-        `${nameOf(target)} is not on the Recent Games shelf (${ended}; saw ${rig.seen.join(", ") || "nothing"}), and ` +
-          "the Library grid cannot be reached on this route: Steam's main menu did not open for the Steam button, " +
-          "and the only other way to the Library is B, which the rig never presses. Play it once by hand so it " +
-          "appears on the shelf, or open the Library by hand and call again",
-        `walked the shelf ${shelfPresses} press(es) without finding "${name}", and the Library is out of reach without Steam's menu - A was not pressed`,
+        (want.kind === "index"
+          ? `the Recent Games shelf has no tile at position ${want.index} (${ended}; saw ${rig.seen.join(", ") || "nothing"})`
+          : `no tile on the Recent Games shelf reads "${want.title}" (${ended}; saw ${rig.seen.join(", ") || "nothing"})`) +
+          ". Titles and positions are matched on the shelf only" +
+          (steamGame
+            ? `; "${steamGame.display_name}" is a Steam game (appid ${steamGame.appid}), so name or appid would also ` +
+              "search the Library grid"
+            : ""),
+        `walked the shelf ${shelfPresses} press(es) without finding ${whatAsked} - A was not pressed`,
+        targetAppid,
+        name,
+      );
+    }
+    if (!found && target?.nonSteam) {
+      return refuse(
+        `${nameOf(target)} is a non-Steam shortcut and no Recent Games tile reads its name (${ended}; saw ` +
+          `${rig.seen.join(", ") || "nothing"}). The Library grid is not searched for it: the grid walk steers by ` +
+          "the app id in each tile's image, and a shortcut's tile carries none. Play it once by hand so it reaches " +
+          "the shelf, or pass title or shelfIndex if its tile reads differently",
+        `walked the shelf ${shelfPresses} press(es) without a tile reading "${target.display_name}" - A was not pressed`,
         target.appid,
         name,
       );
     }
+    if (!found && via === "home-screen") {
+      return refuse(
+        `${what()} is not on the Recent Games shelf (${ended}; saw ${rig.seen.join(", ") || "nothing"}), and ` +
+          "the Library grid cannot be reached on this route: Steam's main menu did not open for the Steam button, " +
+          "and the only other way to the Library is B, which the rig never presses. Play it once by hand so it " +
+          "appears on the shelf, or open the Library by hand and call again",
+        `walked the shelf ${shelfPresses} press(es) without finding "${name}", and the Library is out of reach without Steam's menu - A was not pressed`,
+        targetAppid,
+        name,
+      );
+    }
     if (!found) {
+      if (!target) {
+        // Unreachable: name/appid always resolve a target, and title/index refused above.
+        return refuse(`${whatAsked} was not found on the shelf`, "A was not pressed", null, name);
+      }
+      const libTarget: LibraryApp = target;
       // ---- open-library: 1 GUIDE, <= 8 D-pad, then 1 A --------------------------
       //
       // The game is installed (resolve-app said so) and not on the shelf
@@ -1502,10 +2144,10 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
       if (!inMainMenu(focus)) {
         rig.stage("open-library", false, `GUIDE from the Home screen left the ring on ${describe(focus)}, not in the main menu`, 1);
         return refuse(
-          `${nameOf(target)} is not on the Recent Games shelf (${ended}), and the second Steam-button press, ` +
+          `${nameOf(libTarget)} is not on the Recent Games shelf (${ended}), and the second Steam-button press, ` +
             `to reach the Library, did not open the main menu (ring on ${describe(focus)})`,
           `"${name}" is not on the shelf and Steam's menu did not open a second time - A was not pressed`,
-          target.appid,
+          libTarget.appid,
           name,
         );
       }
@@ -1532,10 +2174,10 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
           1 + menuWalk,
         );
         return refuse(
-          `${nameOf(target)} is not on the Recent Games shelf, and the main menu has no entry labelled exactly ` +
+          `${nameOf(libTarget)} is not on the Recent Games shelf, and the main menu has no entry labelled exactly ` +
             `"${LIBRARY_LABEL}" (${menuEnded}; saw ${rig.seen.join(", ") || "nothing labelled"})`,
           `"${name}" is not on the shelf and the Library entry was not found - A was not pressed`,
-          target.appid,
+          libTarget.appid,
           name,
         );
       }
@@ -1558,62 +2200,177 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
       // The grid is walked like the shelf, with the shelf's own proof: A only on
       // the tile whose OWN <img src> carries the app id. The steering (gridStep)
       // compares on-screen boxes. A focus read follows every press (nudge), then
-      // a tile read; a press that leaves the ring where it was ends the walk.
+      // a tile read; a press that leaves the ring where it was ends the walk --
+      // except a DOWN with a row below it on the page, which gets the fallback.
+      //
+      // Every tiles read is recorded as a grid stop (rig.gridStops, the run
+      // file's `gridStops`): the rows, the focused tile and its row, the scroll
+      // container, the route, and the presses made from it. The 2026-10-25 Deck
+      // run stalled here and said only "the ring did not move DOWN"; the next
+      // one says what the grid looked like at every stop, whatever it ends in.
+      const goal = libTarget.appid;
       let gridPresses = 0;
       let lastTile = "no tile";
       let gridFound = false;
       let gridEnded = "";
-      for (;;) {
+      const notes: string[] = [];
+      const readStop = async (): Promise<{ t: TilesRead; layout: GridLayout | null }> => {
         const t = await rig.readTiles();
+        if (!t.ok) return { t, layout: null };
+        const { stop, layout } = gridStopOf(
+          rig.gridStops.length,
+          gridPresses,
+          await rig.readRoute(),
+          ownLabelOf(focus),
+          t,
+          (id) => libraryNames.get(id) ?? null,
+        );
+        rig.gridStops.push(stop);
+        if (t.focused) {
+          lastTile = `${libraryNames.get(t.focused.appid) ?? (t.text || "unnamed tile")} (${t.focused.appid})`;
+          rig.record(lastTile);
+        } else {
+          rig.record(ownLabelOf(focus) || t.text);
+        }
+        return { t, layout };
+      };
+      /** One counted D-pad press and the focus read after it, noted on the stop it was made from. */
+      const gridPress = async (dir: Direction, why: string): Promise<"moved" | "stayed" | "unreadable" | "budget"> => {
+        if (gridPresses >= budget) return "budget";
+        const fromStop = rig.gridStops[rig.gridStops.length - 1];
+        const beforeKey = focusKey(focus) ?? "";
+        focus = await rig.nudge(dir, "find-grid-tile");
+        gridPresses++;
+        const moved = focus.ok && (focusKey(focus) ?? "") !== beforeKey;
+        fromStop?.pressesFrom.push({ dir, why, moved });
+        if (!focus.ok) return "unreadable";
+        return moved ? "moved" : "stayed";
+      };
+      const spent = (r: "unreadable" | "budget"): string =>
+        r === "budget" ? `the budget of ${budget} D-pad presses ran out` : "the ring became unreadable";
+
+      /**
+       * DOWN did not move the ring, and the layout read just before it shows a
+       * row below the ring's own. UNMEASURED, like gridStep's assumptions: on
+       * 2026-10-25 a DOWN stalled with the target read as "on a row below", and
+       * nothing says why. The guess built here is that the tile directly below
+       * is missing or not focusable, so a neighbour's DOWN might go through. One
+       * RIGHT (toward the row's end), a tiles read, DOWN; then back over the
+       * stall tile if RIGHT moved (the focus read must show the ring on it
+       * again), one LEFT, a tiles read, DOWN. Every press is counted against the
+       * same budget and followed by a focus read, and every DOWN comes after a
+       * tiles read on the tile it starts from. A or anything but the D-pad is
+       * never pressed here. Whatever it does is in the run file's grid stops.
+       */
+      const stalledDownFallback = async (
+        stallKey: string,
+      ): Promise<{ moved: boolean; detail: string; landed?: { t: TilesRead; layout: GridLayout | null } }> => {
+        let offset = 0;
+        const right = await gridPress("RIGHT", "fallback: DOWN did not move; one RIGHT, toward the row's end");
+        if (right === "budget" || right === "unreadable") return { moved: false, detail: `fallback: ${spent(right)} at RIGHT` };
+        if (right === "moved") {
+          offset = 1;
+          const s = await readStop();
+          if (!s.t.ok) return { moved: false, detail: `fallback: after RIGHT the page could not be read for tiles (${s.t.reason ?? "no reason"})` };
+          if (s.t.focused?.appid === goal) return { moved: true, detail: "fallback: RIGHT landed on the target", landed: s };
+          const down = await gridPress("DOWN", "fallback: DOWN from one tile right of where DOWN stalled");
+          if (down === "moved") return { moved: true, detail: "fallback: RIGHT then DOWN moved the ring" };
+          if (down !== "stayed") return { moved: false, detail: `fallback: RIGHT moved, then ${spent(down)}` };
+        }
+        const rightSaid = right === "moved" ? "RIGHT moved but DOWN from there did not" : "RIGHT did not move (the row's end)";
+        for (let i = 0; i <= offset; i++) {
+          const goingBack = offset - i === 1;
+          const left = await gridPress(
+            "LEFT",
+            goingBack ? "fallback: LEFT, back to the tile where DOWN stalled" : "fallback: one LEFT of the tile where DOWN stalled",
+          );
+          if (left === "stayed") {
+            return {
+              moved: false,
+              detail: `fallback: ${rightSaid}; LEFT did not move (${goingBack ? "the ring did not come back" : "the row's start"})`,
+            };
+          }
+          if (left !== "moved") return { moved: false, detail: `fallback: ${rightSaid}; then ${spent(left)} at LEFT` };
+          if (goingBack && (focusKey(focus) ?? "") !== stallKey) {
+            return {
+              moved: false,
+              detail: `fallback: ${rightSaid}; LEFT did not bring the ring back to the tile where DOWN stalled (ring on ${describe(focus)})`,
+            };
+          }
+        }
+        const s = await readStop();
+        if (!s.t.ok) return { moved: false, detail: `fallback: after LEFT the page could not be read for tiles (${s.t.reason ?? "no reason"})` };
+        if (s.t.focused?.appid === goal) return { moved: true, detail: "fallback: LEFT landed on the target", landed: s };
+        const down = await gridPress("DOWN", "fallback: DOWN from one tile left of where DOWN stalled");
+        if (down === "moved") return { moved: true, detail: `fallback: ${rightSaid}; LEFT then DOWN moved the ring` };
+        if (down !== "stayed") return { moved: false, detail: `fallback: ${rightSaid}; LEFT moved, then ${spent(down)}` };
+        return { moved: false, detail: `fallback: ${rightSaid}; LEFT then DOWN did not move it either` };
+      };
+
+      let pending: { t: TilesRead; layout: GridLayout | null } | null = null;
+      for (;;) {
+        const { t, layout } = pending ?? (await readStop());
+        pending = null;
         if (!t.ok) {
           gridEnded = `the ${BIG_PICTURE_TARGET} page could not be read for tiles (${t.reason ?? "no reason"})`;
           break;
         }
-        if (t.focused) {
-          lastTile = `${libraryNames.get(t.focused.appid) ?? (t.text || "unnamed tile")} (${t.focused.appid})`;
-          rig.record(lastTile);
-          if (t.focused.appid === target.appid) {
-            gridFound = true;
-            tile = { ok: true, appid: t.focused.appid, depth: t.focused.depth, src: t.focused.src, text: t.text };
-            break;
-          }
-        } else {
-          rig.record(ownLabelOf(focus) || t.text);
+        if (t.focused && t.focused.appid === goal) {
+          gridFound = true;
+          tile = { ok: true, appid: t.focused.appid, depth: t.focused.depth, src: t.focused.src, text: t.text };
+          break;
         }
         if (gridPresses >= budget) {
           gridEnded = `budget of ${budget} D-pad presses spent`;
           break;
         }
-        const step = gridStep(t.focused, t.tiles, target.appid);
-        const beforeKey = focusKey(focus) ?? "";
-        focus = await rig.nudge(step.dir, "find-grid-tile");
-        gridPresses++;
-        if (!focus.ok) {
-          gridEnded = "the ring became unreadable";
+        const step = gridStep(t.focused, t.tiles, goal);
+        const stallKey = focusKey(focus) ?? "";
+        const r = await gridPress(step.dir, step.why);
+        if (r === "moved") continue;
+        if (r === "unreadable" || r === "budget") {
+          gridEnded = spent(r);
           break;
         }
-        if ((focusKey(focus) ?? "") === beforeKey) {
-          gridEnded = `the ring did not move ${step.dir} (${step.why}) - an edge of the grid`;
+        const rowsBelow = layout && layout.focusedRow !== null ? layout.rows.length - 1 - layout.focusedRow : 0;
+        if (step.dir === "DOWN" && rowsBelow > 0) {
+          const fb = await stalledDownFallback(stallKey);
+          notes.push(fb.detail);
+          if (fb.moved) {
+            pending = fb.landed ?? null;
+            continue;
+          }
+          gridEnded =
+            `the ring did not move DOWN (${step.why}) though the page shows ${rowsBelow} row(s) of tiles below its ` +
+            `own; ${fb.detail}`;
           break;
         }
+        gridEnded = `the ring did not move ${step.dir} (${step.why}) - an edge of the grid`;
+        break;
       }
+      const lastStop = rig.gridStops[rig.gridStops.length - 1];
+      const layoutLine = lastStop
+        ? `at the last tiles read the page showed ${describeLayout(lastStop.rows, lastStop.focused?.row ?? null, lastStop.focused?.col ?? null)}`
+        : "the grid's layout was never read";
       rig.stage(
         "find-grid-tile",
         gridFound,
         gridFound
-          ? `appid ${target.appid} in the focused tile's own image (${tile.src || "?"}, ${tile.depth ?? 0} level(s) up) ` +
-            `after ${gridPresses} D-pad press(es) on the Library grid`
-          : `walked ${gridPresses} D-pad press(es) on the Library grid without a tile for appid ${target.appid}; ` +
-            `${gridEnded}; last tile seen: ${lastTile}`,
+          ? `appid ${goal} in the focused tile's own image (${tile.src || "?"}, ${tile.depth ?? 0} level(s) up) ` +
+            `after ${gridPresses} D-pad press(es) on the Library grid` +
+            (notes.length ? `; ${notes.join("; ")}` : "")
+          : `walked ${gridPresses} D-pad press(es) on the Library grid without a tile for appid ${goal}; ` +
+            `${gridEnded}; last tile seen: ${lastTile}; ${layoutLine}`,
         gridPresses,
       );
       if (!gridFound) {
         return refuse(
-          `${nameOf(target)} is on neither the Recent Games shelf nor the part of the Library grid the rig walked ` +
-            `(${gridEnded}; last tile seen: ${lastTile}). The Library may have opened on a tab that does not ` +
-            "list it (non-Steam shortcuts have their own); open it by hand, or play it once so it reaches the shelf",
+          `${nameOf(libTarget)} is on neither the Recent Games shelf nor the part of the Library grid the rig walked ` +
+            `(${gridEnded}; last tile seen: ${lastTile}; ${layoutLine}). The Library may have opened on a tab that ` +
+            "does not list it (non-Steam shortcuts have their own); open it by hand, or play it once so it reaches " +
+            "the shelf. The run file's gridStops holds the grid's layout at every stop",
           `walked the Library grid ${gridPresses} press(es) without finding "${name}" (last tile: ${lastTile}) - A was not pressed`,
-          target.appid,
+          libTarget.appid,
           name,
         );
       }
@@ -1623,9 +2380,11 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
     // ---- open-app-page: 1 A, then <= 10 DOWN ---------------------------------
     //
     // The read that authorises this A is the tile read above: the app id in the
-    // focused element's own <img src>. Measured: the ring lands directly on a
-    // <DIV> labelled "Play", ~1.6 s. The app page's route was not measured, so
-    // it is reported here and not gated on.
+    // focused element's own <img src>, or (plan 12 lane E) the tile's own label
+    // naming the title, or the position the walk counted -- the read on that
+    // tile is the last thing before this press either way. Measured: the ring
+    // lands directly on a <DIV> labelled "Play", ~1.6 s. The app page's route
+    // was not measured, so it is reported here and not gated on.
     await rig.press("A", "open-app-page");
     await rig.sleep(PAGE_SETTLE_MS);
     focus = await rig.readFocus();
@@ -1649,11 +2408,11 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
         1 + playWalk,
       );
       return refuse(
-        `${nameOf(target)}'s page shows "${label}" instead of "Play": pressing it would ${
+        `${what()}'s page shows "${label}" instead of "Play": pressing it would ${
           refused.toLowerCase() === "update" ? "start an update" : "install or buy the game"
         }, which the rig never does (rule 2). Do that by hand, then call again`,
         `the app page offered "${label}", not Play - A was not pressed`,
-        target.appid,
+        targetAppid,
         name,
       );
     }
@@ -1663,7 +2422,7 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
         `A on the tile did not lead to a control labelled exactly "Play" (ring on ${describe(focus)}; ` +
           `saw ${rig.seen.join(", ") || "nothing labelled"})`,
         "the Play button was not found on the app page - A was not pressed",
-        target.appid,
+        targetAppid,
         name,
       );
     }
@@ -1681,43 +2440,70 @@ export async function launchGame(opts: LaunchGameOptions): Promise<GameSessionRe
     // RunningApps under a second, the route becomes /apprunning, and the game's
     // own window is still loading -- RunningApps is the launch signal, not the
     // game being playable.
+    //
+    // Which app id to wait for: the tile's own image's, or a Steam game's from
+    // the library. A tile with no app id in its image (a non-Steam shortcut, or
+    // a title or position whose tile named none) waits for ANY app to appear
+    // instead: RunningApps read empty before the first press (rule 3), so the
+    // first app in it is the one this A started. That a shortcut is listed in
+    // RunningApps under its allApps app id has not been measured, which is why
+    // the wait does not depend on it.
+    const confirmedAppid = shelfPick ? shelfPick.appid : target && !target.nonSteam ? target.appid : null;
     await rig.press("A", "press-play");
-    const wait = await rig.waitForRunning((apps) => apps.some((a) => a.appid === target.appid), waitMs);
+    const wait = await rig.waitForRunning(
+      (apps) => (confirmedAppid !== null ? apps.some((a) => a.appid === confirmedAppid) : apps.length > 0),
+      waitMs,
+    );
     rig.runningAfter = wait.apps;
     route = await rig.readRoute();
-    const runningNow = wait.apps?.find((a) => a.appid === target.appid) ?? null;
+    const runningNow =
+      (confirmedAppid !== null ? wait.apps?.find((a) => a.appid === confirmedAppid) : wait.apps?.[0]) ?? null;
+    const waitedFor = confirmedAppid !== null ? `appid ${confirmedAppid}` : "an app (the tile's image named none)";
     rig.stage(
       "press-play",
       wait.satisfied,
       wait.satisfied
-        ? `appid ${target.appid} appeared in RunningApps after ${wait.waitedMs}ms (${wait.polls} poll(s)); route ${route ?? "unreadable"}`
-        : `RunningApps did not list appid ${target.appid} within ${waitMs}ms (${wait.polls} poll(s)` +
+        ? `${runningNow && confirmedAppid === null ? `${nameOf(runningNow)}, ` : ""}${waitedFor} appeared in RunningApps ` +
+          `after ${wait.waitedMs}ms (${wait.polls} poll(s)); route ${route ?? "unreadable"}` +
+          (runningNow && confirmedAppid === null && targetAppid !== null && runningNow.appid !== targetAppid
+            ? `; the library had named it appid ${targetAppid}`
+            : "")
+        : `RunningApps did not list ${waitedFor} within ${waitMs}ms (${wait.polls} poll(s)` +
           `${wait.reason ? `, last read failed: ${wait.reason}` : ""}); route ${route ?? "unreadable"}`,
       1,
     );
     if (!wait.satisfied || !runningNow) {
       return {
         ok: false,
-        appid: target.appid,
+        appid: targetAppid,
         name,
         running: null,
         route,
+        ...(shelfPick ? { shelfTile: shelfPick } : {}),
         reason:
-          `A was pressed on "Play" but RunningApps never listed appid ${target.appid} within ${waitMs}ms; ` +
+          `A was pressed on "Play" but RunningApps never listed ${waitedFor} within ${waitMs}ms; ` +
           "the game may still be starting, or a launcher or controller-layout prompt may be up (plan 07 § 7)",
         summary: `pressed Play for "${name}" but could not confirm the launch within ${waitMs}ms`,
       };
     }
+    const launched: RunningApp = { appid: runningNow.appid, display_name: runningNow.display_name || name };
+    const byTile =
+      shelfPick && shelfPick.matchedBy !== "image-appid"
+        ? ` (shelf tile "${shelfPick.label}"${shelfPick.index !== null ? ` at position ${shelfPick.index}` : ""}, chosen by ${
+            shelfPick.matchedBy === "position" ? "its position" : "its title"
+          })`
+        : "";
     return {
       ok: true,
-      appid: target.appid,
-      name: runningNow.display_name || name,
-      running: { appid: runningNow.appid, name: runningNow.display_name || name },
+      appid: launched.appid,
+      name: launched.display_name,
+      running: { appid: launched.appid, name: launched.display_name },
       route,
       via,
       launchRoute,
+      ...(shelfPick ? { shelfTile: shelfPick } : {}),
       summary:
-        `launched ${nameOf(target)} ` +
+        `launched ${nameOf(launched)}${byTile} ` +
         (via === "home-screen"
           ? "by the Home-screen route (Steam's main menu did not open for the Steam button, so the QAM was " +
             "closed with the chord and the game started from its Recent Games tile)"

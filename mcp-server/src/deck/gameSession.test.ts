@@ -38,6 +38,7 @@ process.env.HOME = tempHome;
 
 const { launchGame, exitGame, listGames, gridStep, checkGameProcesses, parseGameProcesses, resolveApp, refusalLabel, inMainMenu, ownLabelOf } =
   await import("./gameSession.js");
+const { gridLayout, describeLayout, titleMatch } = await import("./gameSession.js");
 const { getLatchPath } = await import("./killswitch.js");
 
 function assertSandboxed(): void {
@@ -75,6 +76,28 @@ const LIBRARY: LibraryApp[] = [
   // Two non-Steam shortcuts with the same name, exactly as allApps listed them.
   { appid: 4000000001, display_name: "007 - GoldenEye", installed: true },
   { appid: 4000000002, display_name: "007 - GoldenEye", installed: true },
+];
+
+/** The control after the shelf's last tile, as the Deck labelled it on 2026-10-25. */
+const SHELF_END = "View more in your Library";
+
+/**
+ * Three non-Steam shortcuts, named as bonsAI's 2026-10-24 finding and the
+ * 2026-10-25 run file's `seen` list read them off the shelf. The app ids are
+ * invented: shortcut ids with the top bit set, as parseLibrary assumes.
+ */
+const DOOM64R: LibraryApp = { appid: 3000000101, display_name: "Doom 64: Retribution", installed: true };
+const PIKMIN2: LibraryApp = { appid: 3000000102, display_name: "Pikmin 2", installed: true };
+const SM64: LibraryApp = { appid: 3000000103, display_name: "Super Mario 64", installed: true };
+const SHORTCUT_LIBRARY: LibraryApp[] = [...LIBRARY, DOOM64R, PIKMIN2, SM64];
+/** The bonsAI shelf's shape: Steam tiles, three shortcuts with no app id in their images, Steam tiles, the end. */
+const MIXED_SHELF: (number | string)[] = [
+  DRG.appid,
+  HL2.appid,
+  DOOM64R.display_name,
+  PIKMIN2.display_name,
+  SM64.display_name,
+  BROTATO.appid,
 ];
 
 const PANEL_ROWS = [
@@ -216,8 +239,15 @@ type Screen = "qam" | "game" | "main-menu" | "game-panel" | "modal" | "home" | "
 interface DeckSpec {
   running?: RunningApp[];
   library?: LibraryApp[];
-  /** App ids on the Recent Games shelf, in order. */
-  shelf?: number[];
+  /**
+   * The Recent Games shelf, in order. A number is a Steam game's tile, its
+   * app id in its own image (measured, plan 07 § 2). A string is a non-Steam
+   * shortcut's tile: that label, and NO app id in its image (bonsAI
+   * 2026-10-24); A on it opens the library app of that exact name.
+   */
+  shelf?: (number | string)[];
+  /** The shelf ends in "View more in your Library", as on the Deck (2026-10-25). Default false: it just stops. */
+  shelfEnd?: boolean;
   screen?: Screen;
   focus?: ReadFocusResult;
   /** What the app page's primary control reads. Default "Play". */
@@ -249,6 +279,16 @@ interface DeckSpec {
   /** The Library opens with the ring on its tab bar, one DOWN above the grid. */
   libraryStartsOnTab?: boolean;
   /**
+   * Grid indices from which DOWN does not move the ring, though a row exists
+   * below -- the shape of the 2026-10-25 stall, with the cause invented: the
+   * real cause is unknown, which is why the walk now records the layout.
+   */
+  gridStallDown?: number[];
+  /** The tiles read reports a scrolling container whose scrollTop follows the ring's row. Default false (none found). */
+  gridScrolls?: boolean;
+  /** Grid index the ring lands on when the Library opens. Default 0. */
+  gridStart?: number;
+  /**
    * What the machine's process list shows when exitGame asks. Default: asked,
    * nothing alive. null: the check could not be made.
    */
@@ -259,15 +299,29 @@ interface DeckSpec {
 function fakeDeck(spec: DeckSpec = {}) {
   const running: RunningApp[] = [...(spec.running ?? [])];
   const library = spec.library ?? LIBRARY;
-  const shelf = spec.shelf ?? [DRG.appid, HL2.appid, BROTATO.appid];
+  const shelf: (number | string)[] = [
+    ...(spec.shelf ?? [DRG.appid, HL2.appid, BROTATO.appid]),
+    ...(spec.shelfEnd ? [SHELF_END] : []),
+  ];
   const nameOf = (id: number): string => library.find((a) => a.appid === id)?.display_name ?? `app ${id}`;
+  /** The app id in a shelf tile's image: a Steam tile's own, none for a shortcut or the end control. */
+  const shelfAppid = (i: number): number | null => (typeof shelf[i] === "number" ? (shelf[i] as number) : null);
+  const shelfLabel = (i: number): string => {
+    const e = shelf[i];
+    return typeof e === "number" ? nameOf(e) : e;
+  };
+  /** What A on a shelf tile opens: a shortcut's app is the library entry with its exact name. */
+  const shelfOpens = (i: number): number => {
+    const e = shelf[i];
+    return typeof e === "number" ? e : (library.find((a) => a.display_name === e)?.appid ?? 0);
+  };
   const grid = spec.grid ?? [];
   const cols = spec.gridCols ?? 4;
   const gridTileAt = (i: number): ReadFocusResult =>
     ring(nameOf(grid[i]), { selector: `#LibraryGrid > div.Panel.Focusable:nth-child(${i + 1})` });
   const LIBRARY_TAB = ring("Great on Deck", { selector: "#LibraryTabs > div.Panel.Focusable:nth-child(1)" });
   const tileAt = (i: number): ReadFocusResult =>
-    ring(nameOf(shelf[i]), {
+    ring(shelfLabel(i), {
       selector: `div.Panel.Focusable:nth-child(1) > div:nth-child(2) > div.Panel.Focusable:nth-child(${i + 1})`,
     });
 
@@ -327,8 +381,8 @@ function fakeDeck(spec: DeckSpec = {}) {
           st.screen = "library";
           st.route = "/library";
           const onTab = spec.libraryStartsOnTab || grid.length === 0;
-          st.gridIndex = onTab ? -1 : 0;
-          st.focus = onTab ? LIBRARY_TAB : gridTileAt(0);
+          st.gridIndex = onTab ? -1 : (spec.gridStart ?? 0);
+          st.focus = onTab ? LIBRARY_TAB : gridTileAt(st.gridIndex);
         } else if (b === "RIGHT") {
           if (running.length && label() === running[0].display_name) {
             st.screen = "game-panel";
@@ -375,7 +429,7 @@ function fakeDeck(spec: DeckSpec = {}) {
           if (b === "DOWN" && grid.length) next = 0;
         } else if (b === "RIGHT" && i % cols < cols - 1 && i + 1 < grid.length) next = i + 1;
         else if (b === "LEFT" && i % cols > 0) next = i - 1;
-        else if (b === "DOWN" && i + cols < grid.length) next = i + cols;
+        else if (b === "DOWN" && i + cols < grid.length && !(spec.gridStallDown ?? []).includes(i)) next = i + cols;
         else if (b === "UP" && i - cols >= 0) next = i - cols;
         if (next !== i) {
           st.gridIndex = next;
@@ -403,8 +457,13 @@ function fakeDeck(spec: DeckSpec = {}) {
           st.shelfIndex = Math.max(st.shelfIndex - 1, 0);
           st.focus = tileAt(st.shelfIndex);
         } else if (b === "A") {
+          if (shelf[st.shelfIndex] === SHELF_END) {
+            // Would open the Library's own page; no test may get here.
+            st.spent = true;
+            break;
+          }
           st.screen = "app-page";
-          st.appPage = shelf[st.shelfIndex];
+          st.appPage = shelfOpens(st.shelfIndex);
           st.route = `/library/app/${st.appPage}`;
           st.focus = control(spec.appPageLabel ?? "Play");
         }
@@ -503,15 +562,16 @@ function fakeDeck(spec: DeckSpec = {}) {
       const H = 150;
       const boxAt = (appid: number, row: number, col: number) => ({ appid, x: col * (W + 10), y: row * (H + 10), w: W, h: H });
       if (st.screen === "home") {
-        const id = shelf[st.shelfIndex];
+        const id = shelfAppid(st.shelfIndex);
         events.push({ type: "read-tile", appid: id });
+        const steamTiles = shelf.flatMap((a, i) => (typeof a === "number" ? [boxAt(a, 0, i)] : []));
         return ok({
           ok: true,
           hasRing: true,
-          text: nameOf(id),
-          focused: { ...boxAt(id, 0, st.shelfIndex), depth: 0, src: `/assets/${id}/library_600x900.jpg` },
-          row: [...shelf],
-          tiles: shelf.map((a, i) => boxAt(a, 0, i)),
+          text: shelfLabel(st.shelfIndex),
+          focused: id !== null ? { ...boxAt(id, 0, st.shelfIndex), depth: 0, src: `/assets/${id}/library_600x900.jpg` } : null,
+          row: steamTiles.map((t) => t.appid),
+          tiles: steamTiles,
         });
       }
       if (st.screen === "library") {
@@ -534,6 +594,26 @@ function fakeDeck(spec: DeckSpec = {}) {
               : null,
           row: null,
           tiles,
+          ringBox: at >= 0 ? boxAt(grid[at], ringRow, at % cols) : { x: 0, y: -60, w: 200, h: 40 },
+          ...(spec.gridScrolls
+            ? {
+                scroll: {
+                  depth: 3,
+                  tag: "DIV",
+                  cls: "LibraryGridScroll",
+                  overflowY: "scroll",
+                  overflowX: "hidden",
+                  scrollTop: ringRow * (H + 10),
+                  scrollLeft: 0,
+                  scrollHeight: Math.ceil(grid.length / cols) * (H + 10),
+                  clientHeight: 800,
+                  scrollWidth: 1280,
+                  clientWidth: 1280,
+                },
+              }
+            : { scroll: null }),
+          docScroll: { scrollTop: 0, scrollHeight: 800, clientHeight: 800 },
+          viewport: { w: 1280, h: 800 },
         });
       }
       events.push({ type: "read-tile", appid: null });
@@ -541,7 +621,7 @@ function fakeDeck(spec: DeckSpec = {}) {
     }
     if (o.expression.includes("gpfocus")) {
       assert.equal(o.target, "Steam Big Picture Mode");
-      const appid = st.screen === "home" ? shelf[st.shelfIndex] : null;
+      const appid = st.screen === "home" ? shelfAppid(st.shelfIndex) : null;
       events.push({ type: "read-tile", appid });
       return ok(
         appid !== null
@@ -552,7 +632,7 @@ function fakeDeck(spec: DeckSpec = {}) {
               src: `/assets/${appid}/library_600x900.jpg`,
               text: `${nameOf(appid)}${nameOf(appid)}Last two weeks: 1.0 hrs`,
             }
-          : { ok: true, appid: null, text: "" },
+          : { ok: true, appid: null, text: st.screen === "home" ? shelfLabel(st.shelfIndex) : "" },
       );
     }
     return {
@@ -623,7 +703,7 @@ test("launchGame refuses without a name or an appid, and with both, before readi
   for (const args of [{}, { name: "Half-Life 2", appid: 220 }, { name: "   " }]) {
     const r = await launchGame({ ...deck.seams, ...args });
     assert.equal(r.ok, false);
-    assert.match(r.reason ?? "", /exactly one of name or appid/);
+    assert.match(r.reason ?? "", /exactly one of name, appid, title or shelfIndex/);
     assert.equal(r.presses, 0);
     assert.equal(r.evidenceFile, null);
     assert.ok(r.checklist?.length, "a refusal hands back the manual steps");
@@ -969,6 +1049,352 @@ test("gridStep: off a tile goes DOWN; rows before columns; an unseen target goes
   assert.equal(gridStep(at(1, 0, 0), tiles, 4).dir, "DOWN", "a row below wins over the column");
   assert.equal(gridStep(at(4, 1, 3), tiles, 2).dir, "UP");
   assert.equal(gridStep(at(1, 0, 0), tiles, 99).dir, "DOWN");
+});
+
+// --------------------------------------------------------------------------
+// The grid as evidence, and the stalled-DOWN fallback (plan 12 lane E). The
+// stall is MODELLED (gridStallDown): what really stopped the ring on
+// 2026-10-25 is unknown, and these tests prove only that the walk records the
+// layout, gates every fallback press on a read, and counts it.
+// --------------------------------------------------------------------------
+
+/** `n` installed filler titles from `base`, and a library holding them. */
+function fillerLibrary(base: number, n: number): { ids: number[]; lib: LibraryApp[] } {
+  const ids = Array.from({ length: n }, (_, i) => base + i);
+  return { ids, lib: [...BIG_LIBRARY, ...ids.map((a) => ({ appid: a, display_name: `Filler ${a}`, installed: true }))] };
+}
+
+/** The D-pad presses made after A on "Library": the grid walk's, in order. */
+function gridPressesOf(deck: ReturnType<typeof fakeDeck>): string[] {
+  const at = deck.events.findIndex((e) => e.type === "read-focus" && e.label === "Library");
+  const libraryA = deck.events.findIndex((e, i) => i > at && e.type === "press" && e.button === "A");
+  return deck.events
+    .slice(libraryA + 1)
+    .filter((e): e is { type: "press"; button: string } => e.type === "press" && e.button !== "A")
+    .map((e) => e.button);
+}
+
+test("gridLayout groups tiles into rows by their top edge, within half a tile's height, and finds the ring's row", () => {
+  const t = (appid: number, x: number, y: number, h = 150) => ({ appid, x, y, w: 100, h });
+  const tiles = [t(1, 0, 0), t(2, 110, 1.5), t(3, 0, 160), t(4, 110, 161), t(9, 0, -500, 400)];
+  const l = gridLayout(tiles, { x: 110, y: 160.5, w: 100, h: 150 });
+  assert.equal(l.tolerance, 75, "half the median height");
+  assert.deepEqual(
+    l.rows.map((r) => r.tiles.map((x) => x.appid)),
+    [[9], [1, 2], [3, 4]],
+    "a banner-sized image is a row of its own: the rows are evidence, not a model",
+  );
+  assert.equal(l.focusedRow, 2);
+  assert.equal(l.focusedCol, 1);
+  assert.equal(describeLayout(l.rows, l.focusedRow, l.focusedCol), "3 row(s) of tiles, the ring on row 3 (tile 2 of 2)");
+  assert.equal(gridLayout(tiles, null).focusedRow, null);
+  assert.match(describeLayout(l.rows, null, null), /the ring on no tile/);
+  assert.deepEqual(gridLayout([], null).rows, []);
+});
+
+test("titleMatch: a whole label beats a contains, case-insensitive; an empty title matches nothing", () => {
+  assert.equal(titleMatch("pikmin 2", ["Pikmin 2"]), "title-exact");
+  assert.equal(titleMatch("Mario", ["Super Mario 64"]), "title-contains");
+  assert.equal(titleMatch("Half-Life", ["Half-Life 2Half-Life 2Last two weeks: 1.0 hrs", "Half-Life"]), "title-exact");
+  assert.equal(titleMatch("Zelda", ["Super Mario 64"]), null);
+  assert.equal(titleMatch("  ", ["anything"]), null);
+});
+
+test("every grid stop is in the run file: rows by y, the focused tile and its row, the scroll container, the route, each press", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dps-gamesession-grid-"));
+  const previous = process.env.DECKY_STUDIO_WORKSPACE;
+  process.env.DECKY_STUDIO_WORKSPACE = workspace;
+  try {
+    const deck = fakeDeck({ library: BIG_LIBRARY, shelf: [DRG.appid, BROTATO.appid], grid: GRID, gridScrolls: true });
+    const r = await launchGame({ ...deck.seams, writeEvidence: true, runName: "GRID-EVIDENCE", name: "Half-Life 2" });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.launchRoute, "library");
+    const written = JSON.parse(fs.readFileSync(r.evidenceFile!, "utf8"));
+    const stops = written.gridStops as {
+      stop: number;
+      pressesBefore: number;
+      route: string;
+      focused: { appid: number; name: string; row: number; col: number };
+      rows: { y: number; tiles: { appid: number; x: number; y: number; w: number; h: number }[] }[];
+      scroll: { scrollTop: number; cls: string } | null;
+      viewport: { w: number; h: number } | null;
+      ring: { label: string; box: unknown };
+      pressesFrom: { dir: string; why: string; moved: boolean }[];
+    }[];
+    // DOWN, RIGHT, RIGHT: four reads, the last on the target.
+    assert.equal(stops.length, 4);
+    assert.deepEqual(stops.map((s) => s.stop), [0, 1, 2, 3]);
+    assert.deepEqual(stops.map((s) => s.pressesBefore), [0, 1, 2, 3]);
+    assert.ok(stops.every((s) => s.route === "/library"), "the page's route at every stop");
+    assert.deepEqual(stops[0].rows.map((row) => row.tiles.map((t) => t.appid)), [GRID.slice(0, 4), GRID.slice(4, 8)]);
+    assert.deepEqual(stops[0].rows[0].tiles[1], { appid: BMS.appid, x: 110, y: 0, w: 100, h: 150 }, "every tile's box");
+    assert.deepEqual(
+      stops.map((s) => [s.focused.appid, s.focused.row, s.focused.col]),
+      [[70, 0, 0], [DOOM64.appid, 1, 0], [GOW.appid, 1, 1], [HL2.appid, 1, 2]],
+    );
+    assert.equal(stops[1].focused.name, "DOOM 64");
+    assert.deepEqual(stops.map((s) => s.scroll?.scrollTop), [0, 160, 160, 160], "the grid container's scroll offset");
+    assert.equal(stops[0].scroll?.cls, "LibraryGridScroll");
+    assert.deepEqual(stops[0].viewport, { w: 1280, h: 800 });
+    assert.equal(stops[0].ring.label, "Half-Life");
+    assert.deepEqual(stops[0].pressesFrom.map((p) => [p.dir, p.moved]), [["DOWN", true]]);
+    assert.match(stops[0].pressesFrom[0].why, /row below/);
+    assert.deepEqual(stops[3].pressesFrom, [], "no press from the stop the target was read on");
+    assert.equal(written.shelfTile, null, "found in the grid, not on the shelf");
+  } finally {
+    if (previous === undefined) delete process.env.DECKY_STUDIO_WORKSPACE;
+    else process.env.DECKY_STUDIO_WORKSPACE = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("a DOWN that does not move with a row below: one RIGHT, a read, DOWN -- and the walk goes on to the tile", async () => {
+  const { ids, lib } = fillerLibrary(800000, 12);
+  const deck = fakeDeck({ library: lib, shelf: [DRG.appid], grid: ids, gridStallDown: [0] });
+  const r = await launchGame({ ...deck.seams, appid: ids[9] });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.launchRoute, "library");
+  assert.deepEqual(gridPressesOf(deck), ["DOWN", "RIGHT", "DOWN", "DOWN"], "stalled DOWN, RIGHT, DOWN, then DOWN to row 3");
+  const grid = r.stages.find((s) => s.stage === "find-grid-tile");
+  assert.equal(grid?.presses, 4, "every fallback press is counted");
+  assert.match(grid?.detail ?? "", /fallback: RIGHT then DOWN moved the ring/);
+  assert.deepEqual(authorisingReads(deck.events).slice(-2), [`tile:${ids[9]}`, "focus:Play"]);
+  // Every grid press is followed by a focus read, and every DOWN by... a read
+  // before it: the press before each DOWN is never another press.
+  const ev = deck.events;
+  ev.forEach((e, i) => {
+    if (e.type !== "press" || e.button === "A" || e.button === "GUIDE") return;
+    assert.equal(ev[i + 1]?.type, "read-focus", `press ${i} (${e.button}) was not followed by a focus read`);
+    assert.notEqual(ev[i - 1]?.type, "press", `press ${i} (${e.button}) came straight after another press`);
+  });
+  assert.deepEqual(deck.running.map((a) => a.appid), [ids[9]]);
+});
+
+test("the fallback's LEFT side: back over the stall tile (read to be it), one more LEFT, a read, DOWN", async () => {
+  const { ids, lib } = fillerLibrary(810000, 16);
+  const deck = fakeDeck({ library: lib, shelf: [DRG.appid], grid: ids, gridStart: 2, gridStallDown: [2, 3] });
+  const r = await launchGame({ ...deck.seams, appid: ids[10] });
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(gridPressesOf(deck), ["DOWN", "RIGHT", "DOWN", "LEFT", "LEFT", "DOWN", "DOWN", "RIGHT"]);
+  const grid = r.stages.find((s) => s.stage === "find-grid-tile");
+  assert.equal(grid?.presses, 8);
+  assert.match(grid?.detail ?? "", /RIGHT moved but DOWN from there did not; LEFT then DOWN moved the ring/);
+  assert.deepEqual(deck.running.map((a) => a.appid), [ids[10]]);
+});
+
+test("a fallback that cannot get past the row is a refusal naming the row count and the ring's row; A is never pressed on a tile", async () => {
+  const { ids, lib } = fillerLibrary(820000, 12);
+  const deck = fakeDeck({ library: lib, shelf: [DRG.appid], grid: ids, gridStallDown: [4, 5] });
+  const r = await launchGame({ ...deck.seams, appid: ids[10] });
+  assert.equal(r.ok, false);
+  // DOWN to row 2, the stall, RIGHT, its DOWN stalls too, LEFT back, LEFT against the row's start.
+  assert.deepEqual(gridPressesOf(deck), ["DOWN", "DOWN", "RIGHT", "DOWN", "LEFT", "LEFT"]);
+  const grid = r.stages.find((s) => s.stage === "find-grid-tile");
+  assert.equal(grid?.ok, false);
+  assert.equal(grid?.presses, 6);
+  assert.match(r.reason ?? "", /did not move DOWN .* though the page shows 1 row\(s\) of tiles below its own/);
+  assert.match(r.reason ?? "", /LEFT did not move \(the row's start\)/);
+  assert.match(r.reason ?? "", /3 row\(s\) of tiles, the ring on row 2 \(tile 2 of 4\)/);
+  assert.match(r.reason ?? "", /gridStops/);
+  assert.equal(deck.presses.filter((b) => b === "A").length, 2, "A on Home and A on Library -- never on a tile");
+  assert.deepEqual(deck.running, []);
+});
+
+test("the fallback spends the same budget: it stops when the budget runs out, mid-fallback", async () => {
+  const { ids, lib } = fillerLibrary(830000, 12);
+  const deck = fakeDeck({ library: lib, shelf: [DRG.appid], grid: ids, gridStallDown: [0] });
+  const r = await launchGame({ ...deck.seams, appid: ids[9], budget: 2 });
+  assert.equal(r.ok, false);
+  assert.deepEqual(gridPressesOf(deck), ["DOWN", "RIGHT"]);
+  const grid = r.stages.find((s) => s.stage === "find-grid-tile");
+  assert.equal(grid?.presses, 2);
+  assert.match(grid?.detail ?? "", /RIGHT moved, then the budget of 2 D-pad presses ran out/);
+});
+
+// --------------------------------------------------------------------------
+// Shelf tiles by title and by position (plan 12 lane E). The shortcut tiles
+// are MODELLED on the 2026-10-25 run file's `seen` list (their labels) and
+// bonsAI's 2026-10-24 finding (no app id in their images).
+// --------------------------------------------------------------------------
+
+/** Every read between the press before the nth A and that A: what authorised it. */
+function readsBeforeA(events: Event[], n: number): string[] {
+  const aAt = events.map((e, i) => (e.type === "press" && e.button === "A" ? i : -1)).filter((i) => i >= 0)[n];
+  const out: string[] = [];
+  for (let j = aAt - 1; j >= 0 && events[j].type !== "press"; j--) {
+    const e = events[j];
+    if (e.type === "read-focus") out.unshift(`focus:${e.label}`);
+    if (e.type === "read-tile") out.unshift(`tile:${e.appid}`);
+  }
+  return out;
+}
+
+test("launchGame refuses a title with a name, a shelfIndex with a title, and a shelfIndex that is not a position, before reading anything", async () => {
+  const deck = fakeDeck();
+  for (const args of [
+    { title: "Pikmin 2", name: "Pikmin 2" },
+    { title: "Pikmin 2", shelfIndex: 1 },
+    { appid: 220, shelfIndex: 0 },
+  ]) {
+    const r = await launchGame({ ...deck.seams, ...args });
+    assert.match(r.reason ?? "", /exactly one of name, appid, title or shelfIndex/);
+    assert.equal(r.presses, 0);
+  }
+  for (const shelfIndex of [-1, 1.5]) {
+    const r = await launchGame({ ...deck.seams, shelfIndex });
+    assert.equal(r.ok, false);
+    assert.match(r.reason ?? "", /shelfIndex must be a whole number from 0/);
+  }
+  assert.equal(deck.events.length, 0, "no read, no press");
+});
+
+test("a non-Steam shortcut by name is matched on the shelf by its label, though its tile's image names no app", async () => {
+  // The 2026-10-24 shape: before lane E this walk went past all three
+  // shortcuts to "View more in your Library".
+  const deck = fakeDeck({ library: SHORTCUT_LIBRARY, shelf: MIXED_SHELF, shelfEnd: true });
+  const r = await launchGame({ ...deck.seams, name: "Doom 64: Retribution" });
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(deck.presses, ["GUIDE", "A", "RIGHT", "RIGHT", "A", "A"]);
+  assert.ok(
+    readsBeforeA(deck.events, 1).includes("focus:Doom 64: Retribution"),
+    `the A on the tile followed a read naming it: ${readsBeforeA(deck.events, 1).join(", ")}`,
+  );
+  assert.deepEqual(readsBeforeA(deck.events, 2), ["focus:Play"]);
+  assert.deepEqual(r.shelfTile, { index: 2, label: "Doom 64: Retribution", appid: null, matchedBy: "title-exact" });
+  assert.equal(r.launchRoute, "shelf");
+  assert.deepEqual(r.running, { appid: DOOM64R.appid, name: "Doom 64: Retribution" });
+  assert.match(r.stages.find((s) => s.stage === "resolve-app")?.detail ?? "", /non-Steam shortcut/);
+  assert.match(r.stages.find((s) => s.stage === "find-tile")?.detail ?? "", /no app id in its image/);
+  assert.ok(!r.seen.includes(SHELF_END), "the walk stopped at the shortcut");
+  assert.equal(deck.state.spent, false);
+});
+
+test("title: an exact label wins, case-insensitive, and the tile it lands on names the game", async () => {
+  const deck = fakeDeck({ library: SHORTCUT_LIBRARY, shelf: MIXED_SHELF, shelfEnd: true });
+  const r = await launchGame({ ...deck.seams, title: "pikmin 2" });
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(deck.presses, ["GUIDE", "A", "RIGHT", "RIGHT", "RIGHT", "A", "A"]);
+  assert.ok(readsBeforeA(deck.events, 1).includes("focus:Pikmin 2"));
+  assert.deepEqual(r.shelfTile, { index: 3, label: "Pikmin 2", appid: null, matchedBy: "title-exact" });
+  assert.equal(r.name, "Pikmin 2");
+  assert.match(r.summary, /chosen by its title/);
+});
+
+test("title: a contains is taken only after the whole shelf is read, and the walk goes back to the one tile that holds it", async () => {
+  const deck = fakeDeck({ library: SHORTCUT_LIBRARY, shelf: MIXED_SHELF, shelfEnd: true });
+  const r = await launchGame({ ...deck.seams, title: "mario" });
+  assert.equal(r.ok, true, r.reason);
+  // Six RIGHT to "View more in your Library", two LEFT back to Super Mario 64.
+  assert.deepEqual(deck.presses, ["GUIDE", "A", ...Array(6).fill("RIGHT"), "LEFT", "LEFT", "A", "A"]);
+  assert.ok(readsBeforeA(deck.events, 1).includes("focus:Super Mario 64"));
+  assert.deepEqual(r.shelfTile, { index: 4, label: "Super Mario 64", appid: null, matchedBy: "title-contains" });
+  const stage = r.stages.find((s) => s.stage === "find-tile");
+  assert.equal(stage?.presses, 8, "the walk back is counted with the walk out");
+  assert.match(stage?.detail ?? "", /and 2 LEFT back/);
+  assert.deepEqual(deck.running.map((a) => a.appid), [SM64.appid]);
+});
+
+test("title: two tiles containing it is a refusal that lists both, and A is not pressed on either", async () => {
+  const deck = fakeDeck({ library: SHORTCUT_LIBRARY, shelf: MIXED_SHELF, shelfEnd: true });
+  const r = await launchGame({ ...deck.seams, title: "64" });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /2 tiles contain it: "Doom 64: Retribution" at position 2, "Super Mario 64" at position 4/);
+  assert.match(r.reason ?? "", /shelfIndex/);
+  assert.equal(deck.presses.filter((b) => b === "A").length, 1, "A on Home only");
+  assert.deepEqual(deck.running, []);
+});
+
+test("title: a contains seen before the budget ran out is not 'unique' -- the rest of the shelf was never read", async () => {
+  const deck = fakeDeck({ library: SHORTCUT_LIBRARY, shelf: MIXED_SHELF, shelfEnd: true });
+  const r = await launchGame({ ...deck.seams, title: "pikmin", budget: 4 });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /before the whole shelf was read \(budget of 4 D-pad presses spent\)/);
+  assert.equal(deck.presses.filter((b) => b === "RIGHT").length, 4);
+  assert.equal(deck.presses.filter((b) => b === "A").length, 1);
+});
+
+test("shelfIndex: counted in RIGHT presses from the first tile; a shortcut there is named by its label, a Steam game by its image", async () => {
+  const deck = fakeDeck({ library: SHORTCUT_LIBRARY, shelf: MIXED_SHELF, shelfEnd: true });
+  const r = await launchGame({ ...deck.seams, shelfIndex: 3 });
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(deck.presses, ["GUIDE", "A", "RIGHT", "RIGHT", "RIGHT", "A", "A"]);
+  assert.deepEqual(r.shelfTile, { index: 3, label: "Pikmin 2", appid: null, matchedBy: "position" });
+  assert.equal(r.name, "Pikmin 2");
+  assert.match(r.summary, /at position 3, chosen by its position/);
+
+  const steam = fakeDeck({ library: SHORTCUT_LIBRARY, shelf: MIXED_SHELF });
+  const s = await launchGame({ ...steam.seams, shelfIndex: 1 });
+  assert.equal(s.ok, true, s.reason);
+  assert.deepEqual(s.shelfTile, { index: 1, label: "Half-Life 2", appid: 220, matchedBy: "position" });
+  assert.deepEqual(s.running, { appid: 220, name: "Half-Life 2" });
+  assert.match(s.stages.find((x) => x.stage === "press-play")?.detail ?? "", /appid 220 appeared/);
+});
+
+test("shelfIndex past 'View more in your Library' is a refusal, and A is not pressed on the end control", async () => {
+  const deck = fakeDeck({ shelf: [DRG.appid, HL2.appid], shelfEnd: true });
+  const r = await launchGame({ ...deck.seams, shelfIndex: 5 });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /no tile at position 5/);
+  assert.match(r.reason ?? "", /the shelf has 2 tile\(s\) and position 5 is past its end/);
+  assert.deepEqual(deck.presses, ["GUIDE", "A", "RIGHT", "RIGHT"]);
+  assert.equal(deck.state.spent, false);
+});
+
+test("shelfIndex on the Home-screen route is refused: the ring's start on the shelf is not known there", async () => {
+  const deck = fakeDeck({ guideOpensMenu: false, shelf: [DRG.appid, HL2.appid], homeShelfIndex: 1 });
+  const r = await launchGame({ ...deck.seams, shelfIndex: 0 });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /cannot be counted from a known start/);
+  assert.deepEqual(deck.presses, ["GUIDE", "GUIDE+A"]);
+});
+
+test("RULE 2 holds for a title: a page offering Install is refused, and A is not pressed there", async () => {
+  const deck = fakeDeck({ shelf: [DRG.appid, HL2.appid], appPageLabel: "Install" });
+  const r = await launchGame({ ...deck.seams, title: "Half-Life 2" });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /shows "Install" instead of "Play"/);
+  assert.equal(deck.presses.filter((b) => b === "A").length, 2, "A on Home and on the tile -- not on Install");
+  assert.equal(deck.state.spent, false);
+  assert.equal(r.shelfTile?.matchedBy, "image-appid", "a title that is one Steam game's name is matched by its image");
+});
+
+test("refused before any press: a shortcut whose name another app shares, a title naming two apps, a title naming an uninstalled one", async () => {
+  const deck = fakeDeck();
+  const twin = await launchGame({ ...deck.seams, appid: 4000000001 });
+  assert.equal(twin.ok, false);
+  assert.match(twin.reason ?? "", /non-Steam shortcut, and 2 library apps are called "007 - GoldenEye"/);
+  assert.match(twin.reason ?? "", /pass shelfIndex/);
+  const both = await launchGame({ ...deck.seams, title: "007 - goldeneye" });
+  assert.match(both.reason ?? "", /whole name of 2 library apps/);
+  const alyx = await launchGame({ ...deck.seams, title: "Half-Life: Alyx" });
+  assert.match(alyx.reason ?? "", /not installed/);
+  assert.deepEqual(deck.presses, [], "nothing was pressed");
+});
+
+test("a title already running is reported with zero presses; anything else running is RULE 3, for a title and for a position", async () => {
+  const same = fakeDeck({ running: [HL2] });
+  const r = await launchGame({ ...same.seams, title: "half-life 2" });
+  assert.equal(r.ok, true);
+  assert.equal(r.alreadyRunning, true);
+  assert.equal(r.presses, 0);
+
+  const other = fakeDeck({ running: [BROTATO], library: SHORTCUT_LIBRARY });
+  const t = await launchGame({ ...other.seams, title: "Pikmin 2" });
+  assert.equal(t.ok, false);
+  assert.match(t.reason ?? "", /never launches a second game/);
+  const i = await launchGame({ ...other.seams, shelfIndex: 0 });
+  assert.equal(i.ok, false);
+  assert.match(i.reason ?? "", /never launches a second game/);
+  assert.deepEqual(other.presses, []);
+});
+
+test("a shortcut not on the shelf is refused without the Library walk, which steers by image app ids it does not have", async () => {
+  const deck = fakeDeck({ library: SHORTCUT_LIBRARY, shelf: [DRG.appid, HL2.appid], shelfEnd: true, grid: [DRG.appid] });
+  const r = await launchGame({ ...deck.seams, name: "Super Mario 64" });
+  assert.equal(r.ok, false);
+  assert.match(r.reason ?? "", /non-Steam shortcut and no Recent Games tile reads its name/);
+  assert.match(r.reason ?? "", /Library grid is not searched for it/);
+  assert.deepEqual(deck.presses, ["GUIDE", "A", "RIGHT", "RIGHT"], "no second GUIDE: the Library was not opened");
 });
 
 // --------------------------------------------------------------------------
@@ -1428,6 +1854,8 @@ test("the evidence file holds the stages, what was seen, and RunningApps before 
     assert.deepEqual(written.seen, r.seen);
     // GUIDE, A on Home, A on the tile (already under the ring), A on Play.
     assert.equal(written.presses, 4);
+    assert.deepEqual(written.shelfTile, { index: 0, label: "Half-Life 2", appid: 220, matchedBy: "image-appid" });
+    assert.equal(written.gridStops, null, "no grid walk, no grid stops");
     assert.equal(typeof written.durationMs, "number");
     assert.equal("evidenceFile" in written, false, "the file does not name its own path");
     assert.ok(!JSON.stringify(written).match(/\d{4}-\d{2}-\d{2}T/), "no timestamps in the file");

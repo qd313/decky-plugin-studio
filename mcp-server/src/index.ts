@@ -691,6 +691,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       return launchGame({
         name: params.name != null ? String(params.name) : undefined,
         appid: params.appid != null ? Number(params.appid) : undefined,
+        title: params.title != null ? String(params.title) : undefined,
+        shelfIndex: params.shelfIndex != null ? Number(params.shelfIndex) : undefined,
         budget: params.budget != null ? Number(params.budget) : undefined,
         waitMs: params.waitMs != null ? Number(params.waitMs) : undefined,
         port: params.port != null ? String(params.port) : undefined,
