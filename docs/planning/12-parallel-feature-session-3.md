@@ -390,3 +390,40 @@ lane D's default deadline is 60 s through a per-tool table at the seam.
 
 **Open after the session, owed to phase 2** (the table at the top of this file): all of it.
 Nothing has run on a device. The push and the 0.3.12 bump wait for the pass, as the plan says.
+
+## Phase 2 outcome (2026-11-03)
+
+Run from the same session the next morning, after a usage cut-off overnight. The session's own
+MCP tools were the pre-merge server, so the pass drove the freshly built `mcp-server/dist` over
+stdio from a 90-line client (`drive.mjs`, one server process per invocation, `DRIVE_PARALLEL=1`
+to fire two calls into one process), with bonsAI as the workspace. The Deck was idle on its
+screensaver, bonsAI's panel shut, no lease held, the rig armed; bonsAI's own test runner was busy
+on the PC but did not touch the Deck.
+
+| # | Item | Verdict |
+|---|------|---------|
+| 1 | H | Not flashed (the maintainer's hand). The negative read passed on the real board: `bridgeFirmware: "unknown (pre-07)"`, and the doctor check says to flash. The stand-in's pad daemon answers `"vpad"`. |
+| 2 | B | Could not run on `this-pc`: `deck_focusBigPicture` switched Steam to Big Picture and asked for the front, the gate stayed hidden, `checkReady` failed, nothing pressed. Run on the Deck instead: a walk with `deadlineMs: 300` beside a press in one server returned the deadline error naming "press DOWN" with the pad release acked; the press waited 506 ms and ran steam-routed; a sweep with `outDir` and `saveAs` landed in the scratch folder. The late press's refusal is only on the server's stderr and was not captured. |
+| 3 | C, F | 9 of 9 doctor checks. Ledger lines per call, `deck_runReport {}` and `{ rowId }` across sessions. Dry-run bundle clean of addresses, user names and home paths; `gh` authenticated; nothing posted (the real post is the maintainer's call). |
+| 4 | A | Three probes: the window is about 7 s (old pages to 0.75 s, resets to 3 s, partial list to 6 s). Three rounds of no-wait reload then open from a new process: **3 of 3 first-try opens**. The second probe's restart hung for seven minutes; see below. |
+| 5 | D | Acceptance row passed: clear and type matched on the Ask `<input>` itself, an append matched, four D-pad presses to "Ask", A steam-routed, the field cleared, the reply arrived. |
+| 6 | E | Doom 64: Retribution launched by title from the shelf and exited with the game running. Vampire Survivors from the grid stalled at row 5 with the layout recorded (five tiles a row, a scrolling container, four rows below that DOWN would not enter; RIGHT moved and scrolled the container a row). |
+| 7 | G | Not run; waits for the maintainer to be present. |
+
+**Found and fixed during the pass.** `sshRestartLoader` ran its `ssh` through `execSync` with
+`stdio: "inherit"` and no timeout. Probe 2's restart child sat seven minutes with no TCP socket
+and nothing in the Deck's journal, and because `execSync` blocks the event loop the call's deadline
+never fired; the chain was killed by hand. The fix (`-n`, BatchMode, a 10 s connect timeout,
+captured output, a 60 s exec timeout) made the next three restarts take 0.6 s. The copy steps in
+the same file still use the old shape.
+
+**Also seen:** the first open from the screensaver fails on the chord and the retry inside the same
+call opens the panel; the grid refusal's reason text has mojibake where the run file does not;
+bonsAI's panel still had the Hollow Knight chat open, so the typed question was answered about
+Hollow Knight with "No game" running.
+
+**Left for the maintainer:** the `07_version` flash and its hand test; the first
+`deck_sleepAndWake { seconds: 90 }` with a thumb on the power button; one real
+`studio_reportIssue` post; an alt-tab to Big Picture on `this-pc` if the stand-in half of lane B is
+wanted; bonsAI's row P89-RIG-OPEN-AFTER-RELOAD from their own session; then the push and the
+0.3.12 bump.

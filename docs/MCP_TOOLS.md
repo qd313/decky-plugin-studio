@@ -90,8 +90,9 @@ over from the preview. Two keys are still read; any other key is ignored.
   **`bridgeFirmware`** (2026-11-02): the program the board says it runs (`"07_version"` once
   flashed), `"unknown (pre-07)"` when the board answered without a name, `"unknown (not
   probed)"` on a machine that presses through a virtual pad or whose port another session
-  leases. Never a guess from the resting axes. A virtual pad answers `"vpad"`. Not yet read from
-  a flashed board.
+  leases. Never a guess from the resting axes. A virtual pad answers `"vpad"`. On 2026-11-03 the
+  unflashed board read `"unknown (pre-07)"` and the stand-in's pad `"vpad"`; a flashed board has
+  not been read yet.
 - **deck.focusBigPicture** — `{ settleMs?: 700, timeoutMs?: 4000, modeSwitchWaitMs?: 20000 }`,
   **Windows stand-in only**. Puts Big Picture in front without a hand. If no Big Picture page is
   listed and Steam reports UI mode 7 (the desktop client), it switches Steam to Big Picture
@@ -121,8 +122,8 @@ over from the preview. Two keys are still read; any other key is ignored.
   port only when this machine presses through the board and no other session leases it (both
   checks 2026-11-02). Each check is `ok: true | false | "unknown"` with `saw` and `fix`. A check
   that could not run is `unknown`, never a pass. The extension's **Decky: Doctor** command runs
-  it. On the maintainer's PC 2026-10-25 from the bonsAI checkout: 7 ok, 0 failing, 0 unknown. The
-  extension command is compile-checked only; the two new checks are desk-verified only.
+  it. On the maintainer's PC 2026-10-25 from the bonsAI checkout: 7 ok, 0 failing, 0 unknown;
+  2026-11-03: 9 ok including both new checks. The extension command is compile-checked only.
 - **studio.reportIssue** — `{ title, body, surface?, source?, dryRun?: true, confirmToken?,
   extensionVersion?, workspace? }` (2026-11-02, desk-verified only). Renders a GitHub issue for
   `qd313/decky-plugin-studio` with a diagnostic bundle: versions, the `studio.doctor` report,
@@ -139,7 +140,9 @@ over from the preview. Two keys are still read; any other key is ignored.
   runs the dry run, opens the markdown in an untitled editor, then offers Post with gh / Open
   prefilled URL / Cancel. Issue templates: `.github/ISSUE_TEMPLATE/bug.yml`, `finding.yml`;
   labels `surface:deck|standin|extension|server`, `source:agent|human` (a maintainer creates
-  them once). The real `gh` post has never run.
+  them once). The real `gh` post has never run. The dry run was read on 2026-11-03 from the bonsAI
+  workspace: 7 redactions, no address, user name or home path survived; the repo, plugin and
+  serial port names pass through.
 
 ## Killswitch
 
@@ -212,10 +215,13 @@ The ingest port is `DEBUG_INGEST_PORT` in the server's environment (default 7682
     nothing more. Only `ModalDialogOverlay` has been measured; the other markers are marked
     `evidence: "unmeasured"`.
 
-  **On the Deck after a reload it is still not reliable**: on 2026-10-22 it opened the panel 3 of 3
-  on a first set and 1 of 3 on a stricter set (two failed 1 s after the reload with a debugger
-  connection reset). The 2026-11-02 wait is written against a fake CEF whose restart is a guess;
-  `deck.probeDebugger` is what measures the real shape.
+  **On the Deck 2026-11-03: 3 of 3 first-try opens after a reload**, each started 2 to 3 s after a
+  no-wait `deck.reloadPlugin` from a different server process, about 27 s each, the ring on bonsAI's
+  Ask field after each; Decky's tab was missing every time and one close-and-reopen brought it back
+  in 15 s. The history: 2026-10-22 read 3 of 3 on a first set and 1 of 3 on a stricter set (two
+  failed 1 s after the reload with a debugger connection reset). bonsAI's own row is still theirs to
+  flip. Also seen 2026-11-03: a first try from the screensaver fails (the chord goes over the
+  screensaver and no pane appears) and the second try inside the same call opens the panel.
 - **deck.probeDebugger** — `{ seconds?: 30, afterReload?: false }` (2026-11-02, desk-verified
   only). Every 250 ms it lists the CDP targets, opens `SharedJSContext` and the Quick Access page
   and runs a trivial evaluate, and records each outcome: `ok`, `ECONNRESET`, `socket hang up`,
@@ -226,8 +232,13 @@ The ingest port is `DEBUG_INGEST_PORT` in the server's environment (default 7682
   is the restart note when one is fresh, else the probe's start. With `afterReload: true` it
   issues the reload itself first (a driving call: lease, queue, 10-minute deadline) and samples
   from the moment the restart command returns (`reload.commandMs`). Without it the call is a
-  read, capped at 55 s. This is the measurement the roadmap's reload bug has waited for; three
-  runs on the Deck are the first item of plan 12's device pass.
+  read, capped at 55 s. **Measured on the Deck 2026-11-03, three runs:** the restart command
+  returns in 0.6 s (5.5 s the first time; once it hung, see the changelog); after the note the old
+  pages still answer for 0.5–0.75 s; the target list returns `ECONNRESET` from 0.75 to 3.0 s; the
+  list is back from about 2.7 s with only `SharedJSContext` and a service worker, then Big Picture,
+  the Quick Access page not listed; the Quick Access page is back at 5.2–6.5 s and stable from
+  about 7 s. No `timeout` or `http-error` in 354 samples. Decky's tab reads mounted only when the
+  menu is open.
 
 ## Focus rig (bridge board + CDP)
 
@@ -296,9 +307,11 @@ see it** (`visibility`).
   `input` event (`cleared.method` says which route ran); the value is read back as `valueBefore`,
   `expected`, `valueAfter`, `matched`, `ringStayed`. `submit: true` sends Enter as
   `Input.dispatchKeyEvent` and reports it; it never presses A for you. Refuses on Steam's own
-  text fields and on an unowned ring. Takes the lease; default deadline 60 s. Known risk: if
-  Decky's ring sits on a Focusable wrapper rather than the field, it refuses every time; the
-  first Deck read of bonsAI's Ask field decides whether that case needs handling.
+  text fields and on an unowned ring. Takes the lease; default deadline 60 s. **Proven on the Deck
+  2026-11-03:** the ring sits on bonsAI's Ask `<input>` itself (no wrapper), `clear: true` went
+  through the native setter, 29 characters matched with the ring unmoved, an append matched
+  `valueBefore + text`, and after a four-press D-pad walk to the Ask button and A through the
+  bridge the field cleared and the reply arrived. `submit: true` was not tried.
 
 ## Games
 
@@ -340,8 +353,13 @@ see it** (`visibility`).
   nearest scrolling ancestor, the route and what each press did, so the next Deck run is a
   measurement whatever happens; a refusal names the row count and the ring's row. When DOWN does
   not move the ring and a row below is on the page, a read-gated RIGHT then DOWN, then LEFT then
-  DOWN, runs before the refusal, every press counted against the budget. The fallback is
-  unmeasured; the stall's cause is still unknown.
+  DOWN, runs before the refusal, every press counted against the budget. **On the Deck
+  2026-11-03** the grid read five tiles a row inside a scrolling `_TabContentsScroll` container;
+  DOWN walked rows 0 to 5 with the container scrolling, then stopped at row 5 with four rows of
+  tiles below in the DOM; the fallback RIGHT moved (and scrolled the container a row) but DOWN from
+  there did not; refused with A never pressed. The stall's cause is still open (roadmap, Open bugs).
+  The same night `title: "Doom 64: Retribution"` launched that non-Steam shortcut from shelf
+  position 1 in 6 presses (`matchedBy: "title-exact"`).
 - **deck.exitGame** — `{ waitMs?, runName?, writeEvidence?, port?, cdpUrl? }`. Steam button,
   RIGHT, DOWN to "Exit game", A, then A on "Confirm" only when a read shows the ring on it. Done
   when the app id leaves `RunningApps`. An empty `RunningApps` is not believed alone: on
@@ -351,7 +369,7 @@ see it** (`visibility`).
   game underneath, it walks UP to the game's entry. When the Steam button opens no menu at all,
   it asks Steam to close the game (`SteamClient.Apps.TerminateApp`): `via: "steam-close-call"`,
   summary "closed without the Steam menu", fidelity stays `wire-sent`. The process check and the
-  walk UP are desk-verified only. Writes `runs/exit-game_<ts>.json`. On the Deck 2026-10-25 with nothing running: `processAlive: false` from the process list, zero presses.
+  walk UP are desk-verified only. Writes `runs/exit-game_<ts>.json`. On the Deck 2026-10-25 with nothing running: `processAlive: false` from the process list, zero presses. On the Deck 2026-11-03 with Doom 64 running: menu, Resume, six DOWN to Exit, Confirm, the app id gone from `RunningApps` in 1 s, 10 presses steam-routed.
 
 Both leave the ring where Steam puts it; `deck.openPlugin` gets the panel back, even over a
 running game.
@@ -406,7 +424,8 @@ running game.
   stand-in, a last-game line, a totals line and a count of unreadable lines. With no arguments:
   this server's session; with `rowId` or `since` (an ISO time, or `30m` / `2h` / `1d`): every
   session; `session: "all"` reads them all. A verdict means "the call returned ok", never "the
-  row passed".
+  row passed". Proven on the PC 2026-11-03 across a dozen server processes, including a `rowId`
+  found in another session's file.
 - **deck.holdAwake** — `{ ttlMinutes?: 30, note? }`. Holds a systemd-logind **block inhibitor**
   on sleep, so Steam's suspend is refused. Nothing on the Deck is changed. The lock is read back
   from `systemd-inhibit --list` and returned as `evidence`; if it is not there, the call says the
