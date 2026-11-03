@@ -91,10 +91,24 @@ export function execScpRecursive(
 export function sshRestartLoader(user: string, host: string): void {
   const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
   runWithRetry("plugin_loader restart", () => {
-    proc.execSync(`ssh ${user}@${host} "sudo systemctl restart plugin_loader.service"`, {
-      stdio: "inherit",
-      shell,
-    });
+    // 2026-11-03, plan 12 phase 2: with `stdio: "inherit"` this ssh took the
+    // server's own stdin (the MCP pipe) and stdout (the protocol stream), and
+    // on the second deck_probeDebugger of the night Git's ssh.exe sat seven
+    // minutes without ever opening a TCP socket while the Deck's journal saw
+    // nothing. execSync blocks the event loop, so the call's deadline could not
+    // fire either (plan 11 lane D's own caveat, now seen). `-n` gives ssh no
+    // stdin, BatchMode refuses any prompt, ConnectTimeout bounds the connect,
+    // stderr is captured for the error, and `timeout` turns a hang into a throw
+    // runWithRetry can retry once and then report.
+    proc.execSync(
+      `ssh -n -o BatchMode=yes -o ConnectTimeout=10 ${user}@${host} "sudo systemctl restart plugin_loader.service"`,
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell,
+        timeout: 60_000,
+        killSignal: "SIGKILL",
+      }
+    );
   });
 }
 
