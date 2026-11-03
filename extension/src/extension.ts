@@ -9,6 +9,7 @@ import {
 } from "./commands/deployToDeck";
 import { stopAutomation, armAutomation } from "./commands/stopAutomation";
 import { runDoctor } from "./commands/doctor";
+import { reportStudioIssue } from "./commands/reportIssue";
 import { DeckyTreeProvider } from "./ui/treeProvider";
 import { DeckyStatusBar } from "./ui/statusBar";
 import { AutomationStatusBar } from "./ui/automationStatusBar";
@@ -60,6 +61,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }),
     vscode.commands.registerCommand("decky.doctor", () => runDoctor(context)),
+    vscode.commands.registerCommand("decky.reportIssue", () => reportStudioIssue(context)),
     vscode.commands.registerCommand("decky.showMcpOutput",() => showMcpOutput()),
     vscode.commands.registerCommand("decky.refreshTree", () => {
       treeProvider.refresh();

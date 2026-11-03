@@ -75,6 +75,11 @@
         "command": "decky.doctor",
         "title": "Doctor",
         "category": "Decky"
+      },
+      {
+        "command": "decky.reportIssue",
+        "title": "Report Studio Issue",
+        "category": "Decky"
       }
     ],
     "viewsContainers": {

@@ -36,6 +36,7 @@ import * as plugin from "./tools/plugin.js";
 import * as deckAutonomy from "./tools/deckAutonomy.js";
 import { studioDoctor } from "./tools/doctor.js";
 import { FIRMWARE_NOT_PROBED } from "./deck/bridgeTools.js";
+import { reportIssue, setServerInfo, withCallRecord } from "./tools/reportIssue.js";
 import { diffRpc } from "./rpc/rpcDiff.js";
 import { lintFocus } from "./lint/index.js";
 import { readFocus } from "./deck/readFocus.js";
@@ -78,6 +79,7 @@ import { buildToolCallContent, buildToolErrorContent } from "./toolContent.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.11" };
+setServerInfo(SERVER_INFO);
 
 // Before anything else can fail: a stray rejection or exception is logged
 // with the tool in flight and the server stays up (callDeadline.ts). Only a
@@ -156,6 +158,12 @@ const REGISTRY_TOOLS: ReadonlySet<string> = new Set([
  */
 async function handle(method: string, params: Record<string, unknown>): Promise<unknown> {
   if (!method.startsWith("tools/")) return dispatch(method, params);
+  // Every tool call lands in a small ring (studio_reportIssue's bundle), and a
+  // call that throws carries a reportId in its error text (tools/reportIssue.ts).
+  return withCallRecord(method.slice("tools/".length), () => handleTool(method, params));
+}
+
+async function handleTool(method: string, params: Record<string, unknown>): Promise<unknown> {
   const tool = method.slice("tools/".length);
 
   // Plan 11 lane D: every tool call runs under a wall-clock deadline, and a
@@ -757,6 +765,18 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       return studioDoctor({
         workspace: params.workspace != null ? String(params.workspace) : undefined,
         extensionVersion: params.extensionVersion != null ? String(params.extensionVersion) : undefined,
+      });
+
+    case "tools/studio_reportIssue":
+      return reportIssue({
+        title: String(params.title ?? ""),
+        body: String(params.body ?? ""),
+        surface: params.surface != null ? String(params.surface) : undefined,
+        source: params.source != null ? String(params.source) : undefined,
+        dryRun: params.dryRun === false ? false : undefined,
+        confirmToken: params.confirmToken != null ? String(params.confirmToken) : undefined,
+        extensionVersion: params.extensionVersion != null ? String(params.extensionVersion) : undefined,
+        workspace: params.workspace != null ? String(params.workspace) : undefined,
       });
 
     case "tools/plugin_diffRpc":

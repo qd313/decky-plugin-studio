@@ -1064,6 +1064,43 @@ export const TOOLS: ToolDef[] = [
     },
   },
 
+  {
+    name: "studio_reportIssue",
+    description:
+      "File a Decky Plugin Studio issue (qd313/decky-plugin-studio) with a redacted diagnostic bundle, and never without showing you the text first. dryRun defaults to TRUE: nothing is posted, and you get back the exact markdown, its labels, a `confirmToken`, a prefilledUrl and whether `gh` is authenticated. Read the markdown. To post, call again with the same title, body and surface, dryRun: false and that confirmToken: it posts the text you were shown through `gh issue create` when gh is authenticated, else returns the prefilled new-issue link for a person to open and submit. A token this server did not issue, or one for different text, is refused. The bundle: versions (root, extension, server, SERVER_INFO), studio_doctor's result, the machine list as name, kind and os only, the last 20 lines of the newest runs/ledger/*.ndjson if one exists (else this server's own ring of its last 50 calls: tool, ok, duration, first error line), and the killswitch latch state. Redaction removes IPv4/IPv6 addresses, home and workspace paths, deck.env values (DECK_IP, DECK_USER), the OS user name, machine hosts from machines.json, email addresses and token shapes, from your prose as well as the bundle; it cannot catch what it was never told, so a person should read the markdown before approving a post. A failed tool call's error text carries a `[DPS report id: rXXXXXX]`; quote it in the body. Labels sent: surface:<surface> when given (deck, standin, extension, server) and source:agent or source:human; if the repo lacks a label the issue is posted without it and says so. Touches no Deck.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Issue title, up to 200 characters." },
+        body: {
+          type: "string",
+          description: "What happened, what you expected, what you did, and any reportId quoted from an error. Up to 20000 characters; the diagnostic bundle is added under it.",
+        },
+        surface: {
+          type: "string",
+          enum: ["deck", "standin", "extension", "server"],
+          description: "Where it went wrong: the real Deck, a stand-in, the editor extension, or this MCP server. Becomes the surface:* label. Omit if unsure.",
+        },
+        source: {
+          type: "string",
+          enum: ["agent", "human"],
+          default: "agent",
+          description: "Who is filing. Default agent. The editor command passes human.",
+        },
+        dryRun: {
+          type: "boolean",
+          default: true,
+          description: "true (the default) returns the rendered issue and a confirmToken and posts nothing. false posts, and needs confirmToken.",
+        },
+        confirmToken: { type: "string", description: "The confirmToken from a dry run of the same title, body, surface and source. Required when dryRun is false." },
+        extensionVersion: { type: "string", description: "The extension's version, when the caller knows it. Goes in the bundle." },
+        workspace: { type: "string", description: "Folder whose MCP config studio_doctor checks. Default: the server's workspace." },
+      },
+      required: ["title", "body"],
+      additionalProperties: false,
+    },
+  },
+
   // ---- Plugin: build & validation ---------------------------------------
   {
     name: "plugin_detect",

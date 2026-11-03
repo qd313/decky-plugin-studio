@@ -1,0 +1,20 @@
+# Issue forms for Decky Plugin Studio.
+#
+# Labels this repo uses to route an issue (apply them by hand from a form; the
+# studio_reportIssue tool and the "Decky: Report Studio Issue" command apply
+# them for you):
+#
+#   surface:deck        the real Steam Deck
+#   surface:standin     a stand-in Deck (a Bazzite VM, or a PC running Big Picture with Decky)
+#   surface:extension   the VS Code / Cursor extension
+#   surface:server      the MCP server and its tools
+#   source:agent        filed by an agent through studio_reportIssue
+#   source:human        filed by a person
+#
+# Create any that are missing before relying on them: GitHub silently ignores
+# a label a form names that does not exist, and `gh issue create` refuses one.
+blank_issues_enabled: true
+contact_links:
+  - name: What each tool does, and what has been verified on a Deck
+    url: https://github.com/qd313/decky-plugin-studio/blob/main/docs/MCP_TOOLS.md
+    about: Check here first whether the behaviour you saw is documented.

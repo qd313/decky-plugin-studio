@@ -1,0 +1,71 @@
+name: Finding
+description: An observation from a device night or a desk session that may not be a bug yet.
+labels: ["finding"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A finding is something you noticed and measured, whether or not it turns out to be a defect: a tool
+        that was slow, a result that looked odd, a behaviour the docs do not cover. File it here so it does not
+        live only in a log somewhere. Say what was measured and what was not.
+
+        **Labels** (a maintainer applies them from your answers below):
+        `surface:deck`, `surface:standin`, `surface:extension`, `surface:server`,
+        `source:agent`, `source:human`.
+
+        `studio_reportIssue` and **Decky: Report Studio Issue** show the text before posting and add a
+        redacted bundle; this form is for filing by hand.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where you saw it. Labelled surface:*.
+      options:
+        - server (the MCP server and its tools)
+        - extension (the editor extension)
+        - deck (the real Steam Deck)
+        - standin (a VM, or a PC running Big Picture)
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Who is filing
+      description: Labelled source:*.
+      options:
+        - human
+        - agent
+    validations:
+      required: true
+  - type: textarea
+    id: observation
+    attributes:
+      label: What you observed
+      description: The observation itself, with the numbers. Quote exact output where you can.
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where and when
+      description: Which machine (`deck` or a stand-in, and its os), which build or version, which date. A real Deck's result is not a stand-in's.
+    validations:
+      required: true
+  - type: textarea
+    id: unverified
+    attributes:
+      label: What you did not check
+      description: What would have to be true for this to be a bug, and what you have not tried.
+  - type: input
+    id: report-id
+    attributes:
+      label: Report id
+      description: The `r......` id from a failed tool's error text, if there was one.
+      placeholder: r1a2b3c
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Diagnostic bundle
+      description: Optional. Paste the bundle from `studio_reportIssue` (a dry run prints it). Read it first and remove anything personal.
+      render: markdown

@@ -1,0 +1,69 @@
+name: Bug
+description: Something in Decky Plugin Studio did the wrong thing.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Easiest path: run **Decky: Report Studio Issue** in the editor, or have your agent call
+        `studio_reportIssue`. Either one shows you the text before anything is posted and adds a redacted
+        diagnostic bundle. This form is for filing by hand.
+
+        **Labels** (a maintainer applies them from your answers below):
+        `surface:deck`, `surface:standin`, `surface:extension`, `surface:server`,
+        `source:agent`, `source:human`.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where it went wrong. Labelled surface:*.
+      options:
+        - server (the MCP server and its tools)
+        - extension (the editor extension)
+        - deck (the real Steam Deck)
+        - standin (a VM, or a PC running Big Picture)
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Who is filing
+      description: Labelled source:*.
+      options:
+        - human
+        - agent
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: "What you saw, in plain words. Quote the exact error text, including any `[DPS report id: r......]`."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The tool calls or commands, in order, with their arguments. Say which machine (`deck`, a stand-in) each one ran on.
+    validations:
+      required: true
+  - type: input
+    id: report-id
+    attributes:
+      label: Report id
+      description: The `r......` id from a failed tool's error text, if there was one.
+      placeholder: r1a2b3c
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Diagnostic bundle
+      description: Paste the bundle from `studio_reportIssue` (a dry run prints it), or the output of `studio_doctor`. Read it first and remove anything personal; redaction misses what it was never told about.
+      render: markdown
