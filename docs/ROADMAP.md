@@ -528,6 +528,9 @@ Four rules keep that safe:
 - **P1-4:** two workspaces with DPS installed silently share one preview (global state file, global ports).
 - bonsAI keeps `.decky/preview.json` only because `deck_openPlugin` reads `panelRootSelector` from it.
 
+### One test failed once in the first full run after the plan 12 merges
+★ · Open — 2026-11-02 — 849 of 850 on the run that followed the docs commit, then 850 of 850 on three runs in a row; the failing test's name was not captured (the integrator's pipeline kept only the totals). Not the registry description edit, which was the only code change between the green merge run and that one, and which the three later runs cover. Recorded for the same reason the entry below was: the next person to see red should know it has happened once. If it repeats, capture the `✖` line.
+
 ### `preview.test.ts` fails intermittently under the full suite
 ★ · **Closed 2026-10-24 by retirement**: the file went with the preview (`9d30a33`). Kept for the lesson below. Found 2026-09-23; did not reproduce in the 2026-10-22 full run (495 pass)
 - **Problem:** *"previewStart reports running:true only once the configured URL actually answers"* failed once in a full `pnpm -r test` run, then passed 5/5 when the file was run on its own, and passed on the next full run. Timing- or port-sensitive under parallel load rather than a real regression.
