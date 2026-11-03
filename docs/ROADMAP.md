@@ -2,7 +2,7 @@
 
 Star ratings follow bonsAI [roadmap](https://github.com/cantcurecancer/bonsAI) legend (effort/risk, 1 = lowest).
 
-Last full check against the code and against bonsAI's device log: **2026-10-22** (`main` at `43afc0b`,
+**2026-11-02: parallel feature session 3 ([plan 12](planning/12-parallel-feature-session-3.md)) landed eight lanes on `main`** (`ba0b771` to `4bd0436`, one squashed commit each; 590 tests became 850; 44 tools became 49; VSIX 8.2 MB with the bundled smoke test green). **Every one of them is desk-verified only**: `deck_probeDebugger` and a "rebuilding" wait for the reload window, a press that refuses after its deadline, a ledger of every run with `deck_runReport`, `deck_typeText` (injection, tagged `injected`), shelf tiles by title and a grid walk that records its layout, `studio_reportIssue`, `deck_sleepAndWake`, and firmware `07_version` (compiled, not flashed). Phase 2 of plan 12 is the next device session. Last full check against the code and against bonsAI's device log: **2026-10-22** (`main` at `43afc0b`,
 version 0.3.11, 493 + 2 tests green). **2026-10-24: parallel feature session 2 ran and all eight lanes landed on `main`** (`a348319` to `0526765`, 578 tests, 43 tools, VSIX packaged). **2026-10-25: phase 2 ran on both machines.** Lanes A, B, C and D are proven on the Windows stand-in; on the Deck the lone Steam button opens the menu again (the 2026-10-10 bug is closed), lane E's snapshot `replace` and loader word passed, lane H's doctor is green, and lane F's Library-grid route ran for the first time and stalled on DOWN after one row (open). A new `deck_focusBigPicture` tool (44 tools, 590 tests) opens Big Picture from the desktop client and brings it in front without a hand. Issues #4 and #5 closed. **The in-IDE preview is retired** (lane G, `9d30a33`). **Correction 2026-10-25:** the push hold was built on a wrong premise. Tag `v0.3.11` has existed on GitHub since the bump on 2026-10-06 (with its auto-published release), the workflow skips the release when the tag exists, and `main` was in fact pushed at `47f569e` on 2026-10-24 (the run built the VSIX and uploaded it as an artifact only). `main` is pushed again at the 2026-10-25 commits; the workflow does not even run for them, since none touches `extension/package.json`. What is still true: the 0.3.11 GitHub release holds the 2026-10-06 build, so everything since lives only in `main` until a 0.3.12 bump, and `CHANGELOG.md` still files the 0.3.11 entries under Unreleased. bonsAI's own record of what each DPS tool did on the real Deck is
 `Documents/bonsAI/docs/mcp-setup.md` § "DPS findings log"; device verdicts below come from there, not
 from commit messages.
@@ -83,6 +83,29 @@ hardware actually do" runs alone, as an experiment before it is a feature. One t
 Windows stand-in `this-pc` is the maintainer's own PC, so a lane can now be proven on a real Steam
 client without the Deck, as long as Big Picture is in front and nobody touches the keyboard.
 
+### Done 2026-11-02: parallel feature session 3 — eight lanes landed; device pass not yet run
+
+Planned and run the same day from one session. Eight subagents in sibling worktrees
+(`../dps-lanes/<lane>`, not nested under `.claude/`), one squashed commit each, merged H, B, D, F,
+C, G, E, A; the conflicts were the `test` script line (every lane), the dispatch seam in
+`index.ts` (B, C, D, F, G, A), `tools/deckAutonomy.ts` (H, G, A), `tools/doctor.ts` (H, C) and the
+evidence writers (B's `outDir` against C's `saveAs`), all resolved by hand. 590 tests became 850;
+`pnpm build`, the extension typecheck and `pnpm run package:vsix` with the bundled smoke test are
+green. **Nothing has run on the Deck or the stand-in yet.**
+
+**Full plan, with the lane briefs and the phase 2 list:** [12-parallel-feature-session-3.md](planning/12-parallel-feature-session-3.md)
+
+| Lane | What landed | Commit | Owed where |
+|------|-------------|--------|------------|
+| **A — The reload window, measured** | `deck_probeDebugger`; the restart note is a file; a reset inside the window is "rebuilding"; a dialog that took the ring is named | `4bd0436` | Deck: three probes, then the stricter 3-round open test |
+| **B — A press after the deadline refuses** | the deadline reaches the press seam; `deck_replayChecks` refuses above 10 checks with no names; `outDir` | `633cda5` | `this-pc` |
+| **C — A ledger of every run** | `runs/ledger/<session>.ndjson`, `saveAs` / `rowId`, `deck_runReport`, a doctor check | `d268552` | PC |
+| **D — Type text, the honest fallback** | `deck_typeText`, fidelity `injected` below `wire-sent` | `aa3938d` | Deck: bonsAI's Ask field |
+| **E — Shortcuts on the shelf, a grid that explains itself** | `title` / `shelfIndex`, `gridStops` in the run file, a read-gated RIGHT/LEFT-then-DOWN fallback | `a7061de` | Deck: Vampire Survivors from the grid, Doom 64 by title |
+| **F — Studio issue intake** | `studio_reportIssue`, Decky: Report Studio Issue, issue templates, `[DPS report id]` on errors | `9b2a533` | PC: one dry run read for leaks, one real post |
+| **G — Sleep the Deck and wake it again** | `deck_sleepAndWake`: arm `rtcwake` and read it back, suspend by Steam's call, read focus on wake | `2814256` | Deck, attended, `seconds: 90` |
+| **H — The firmware says which program it runs** | `07_version`, `bridgeFirmware` in `deck_status`, a doctor check | `ba0b771` | Deck: the flash, then the four-step hand test |
+
 ### Done 2026-10-24: parallel feature session 2 — eight lanes landed; device pass run on both machines 2026-10-25
 
 Ran in one afternoon from this session. Each lane was one subagent in its own worktree; all eight
@@ -116,6 +139,11 @@ second after a reload, is an experiment (measure what CEF's debugger does for fi
 2026-10-24; its hand test is the maintainer's.
 
 ### Then: solo season, in this order
+
+**2026-11-02:** plan 12 took items 1 (the measurement tool and the wait, not yet the verdict),
+2 (the program version in the status reply), 3 (built, never run), 4 (the injection fallback; the
+bridge keyboard stays) and 7 off this list, all desk-verified. What is left, in order: the phase 2
+device pass of plan 12; then 5, 6, 8, 9 below, and the bridge keyboard.
 
 1. **`deck_openPlugin` in the first second after a reload.** Four fixes (2026-09-02, 10-11, 10-14,
    10-22) each passed at the desk and failed on the Deck. bonsAI's stricter test read 1 of 3 on
@@ -192,6 +220,14 @@ Four rules keep that safe:
 - **Acceptance:** an unattended run of 60+ minutes with no input completes with no lost press and no empty read, with `systemd-inhibit --list` showing the hold throughout; afterwards the Deck's configuration is byte-identical to before (trivially — nothing was written), and the Deck sleeps normally again.
 
 ### Sleep the Deck and wake it again
+> **Built 2026-11-02 (plan 12, lane G, `2814256`), never run on the Deck.** `deck_sleepAndWake
+> { seconds }` refuses on every stand-in, with a game running or any block inhibitor held, and
+> until `rtcwake` has armed and read back on the Deck's own clock; records focus before, suspends
+> through `SteamClient.System.SuspendPC()` (wake option 2, the proven way back), waits for SSH to
+> go and return, reads focus without a press and reports where it landed. The power-menu route is
+> accepted and refuses as not implemented. Every seam is faked to the 2026-09-08 timings; the
+> first run is attended, `seconds: 90`. See `docs/MCP_TOOLS.md`.
+
 ★★★ · Planned — asked 2026-09-05
 - **Why it matters:** a bonsAI bug was first seen after the Deck slept and woke — focus landed on an invisible button. Every other way of forcing a redraw (closing a dialog, reopening the menu, restarting the plugin loader) came back clean, so the fix shipped without ever testing the one path that actually showed the bug.
 - **Why it's hard:** presses go through a controller, and a sleeping Deck ignores its controller. Sleeping is easy (power menu, or over the network); waking is the problem — the power button is physical, so a sleep with no way back strands the Deck and ends the session.
@@ -303,6 +339,11 @@ Four rules keep that safe:
 > cannot reach a tile that is not on the shelf. And the Home-screen route (2026-10-11) walks the shelf RIGHT
 > then LEFT on one budget. bonsAI hit the shelf limit again on 2026-09-18: four installed games, none played
 > recently, all refused before a press.
+>
+> **2026-11-02 (plan 12, lane E, `a7061de`), desk-verified only:** shelf tiles by `title` or
+> `shelfIndex` for non-Steam shortcuts (no app id in the tile image, bonsAI 2026-10-24); every grid
+> stop recorded in the run file as `gridStops` so the 2026-10-25 DOWN stall becomes a measurement;
+> a read-gated RIGHT-then-DOWN / LEFT-then-DOWN fallback before the refusal.
 
 ★★★ · Planned — asked 2026-09-07
 - **Problem:** `deck_launchGame` walks the Home screen's Recent Games shelf in one direction. bonsAI's round 34 hit both limits in one night: Black Mesa was installed but not on the shelf, so the launcher refused it, and "the launcher only walks right, so a ring parked at the end of the shelf makes a present game look absent" (`4183f6f`). bonsAI also read the Steam library over SSH by hand twice to plan test titles.
@@ -318,6 +359,12 @@ Four rules keep that safe:
 - **Was blocked on:** L8 in plan 09, which shipped 2026-09-07 and was verified from a packaged build on 2026-09-08: a returned PNG now reaches the model as an `image` content block. Lane C in plan 11 adds the same picture from a Windows stand-in.
 
 ### Type text on the Deck
+> **The fallback shipped 2026-11-02 (plan 12, lane D, `aa3938d`), desk-verified only.**
+> `deck_typeText` injects through CDP `Input.insertText`, refuses unless the ring is on a text field
+> inside the plugin's panel, reads the value back, and reports `fidelity: "injected"`, a new value
+> ranked below `wire-sent`. The bridge keyboard (the real path) stays planned; it shares the
+> hardware work with the sleep tool's wake option 1.
+
 ★★★★ · Planned — asked 2026-09-07
 - **Problem:** nothing can type on the Deck. bonsAI built "frozen test chips" (`b278f7b`) and pins test questions into `settings.json` over SSH with the panel closed, purely because a question can't be entered from a tool. Every Ask test is routed through that workaround. Still true on 2026-10-22: a Steam-keyboard check needed the maintainer's own controller, and an answer variant "could not be made by the rig (it needs A on a text box)".
 - **What to build:** a keyboard interface on the bridge board alongside the gamepad, and a `deck_typeText` that uses it. Shares the firmware work and the "does the extra interface disturb Steam's view of the controller" check with option 1 of *Sleep the Deck and wake it again*.
@@ -325,6 +372,10 @@ Four rules keep that safe:
 - **Acceptance:** a test types a question into the plugin's Ask field through the bridge and the reply arrives, with no pinned chip involved.
 
 ### Keep a log of every run automatically
+> **Shipped 2026-11-02 (plan 12, lane C, `d268552`), desk-verified only.** One JSON line per call
+> at the dispatch seam into `runs/ledger/<session>.ndjson`; `saveAs` and `rowId` on the evidence
+> tools; `deck_runReport` for the markdown block. Status polls are not logged. See `docs/MCP_TOOLS.md`.
+
 ★★ · Planned — asked 2026-09-07
 - **Problem:** bonsAI's `runs/` folder holds 457 hand-named evidence files, `roadmap.md` changed 290 times in a month, and a whole subagent lane exists for "desk paperwork" during device rounds. Each device row means saving a tool result under a name, flipping a testing row, and moving a roadmap entry — three merges were resolved by hand in three days.
 - **What to build:** every `deck_*` tool appends a line to a per-session ledger (row id, build hash, running game, verdict, evidence path), tools accept a `rowId` / `saveAs` so evidence files name themselves, and a report call emits the markdown block a testing row expects.
@@ -343,6 +394,11 @@ Four rules keep that safe:
 - **Acceptance:** each of the three drifts above is reported by name with its fix, instead of surfacing as a silent dead tool.
 
 ### Studio issue intake
+> **Shipped 2026-11-02 (plan 12, lane F, `9b2a533`), desk-verified only.** `studio_reportIssue`
+> (dry run by default, a `confirmToken` bound to the render, `gh issue create` or a prefilled URL),
+> **Decky: Report Studio Issue**, `.github/ISSUE_TEMPLATE/`, and a `[DPS report id]` on every failed
+> tool error. The labels still need creating on GitHub; the real post has never run.
+
 ★★ · Planned
 - **What:** An MCP tool (`studio.reportIssue`) plus a **Decky: Report Studio Issue** IDE command and tree entry, so an agent that hits a bug can file it without leaving the IDE.
 - **Details:** auto-captures a redacted diagnostic bundle (version, Deck env, preview state, recent tool calls), stamps a `reportId` into failed-tool errors, and submits via `gh` or a prefilled issue URL — always previews before posting. Needs `.github/ISSUE_TEMPLATE/` and `surface:*` / `source:*` labels.
@@ -411,7 +467,8 @@ Four rules keep that safe:
 - **The history, as bonsAI's device log records it.** 2026-09-02: retry target enumeration, gate the chord on the pane being closed (issue #3's asks). 2026-09-26: one failed open then a working retry, three times in one night, once four tries. 2026-10-01: failed three times before the fourth. 2026-10-11: wait for the Quick Access page after a reload, keep reading 3 s after the chord; on the Deck 2026-10-12, 0 of 3 first tries. 2026-10-14: try once more inside the same call; on the Deck the morning of 2026-10-22, failed both counted rounds. 2026-10-22: wait for Decky's tab on the rail, close and reopen the menu when it is missing; on the Deck later that day, **3 of 3 on a first set, 1 of 3 on a stricter set** with a read after each call — both failures 1 s after the reload with a "debugger connection reset".
 - **What is known now.** Two faults were tangled. One is fixed: after a reload Decky's tab can be gone from the rail for over 100 s, and waiting does not bring it back, closing and reopening the menu does (the 2026-10-22 reopen step did that by itself in about 25 s, 3 of 3). The other is not: in the first second or two after `plugin_loader` restarts, CEF's debugger resets connections, and a call that starts inside that window fails. Nothing has measured what the debugger does in those seconds; every fix so far was written against a fake CEF that does not reset.
 - **Also found 2026-10-22:** the "a reload just happened" note that makes the tool wait lives in one server process's memory (`deck/loaderRestart.ts`), so a reload done from the extension is invisible to an agent's server.
-- **Next:** item 1 of the solo season. Measure first. Done when bonsAI's row P89-RIG-OPEN-AFTER-RELOAD reads 3 of 3 on the stricter set.
+- **2026-11-02 (plan 12, lane A, `4bd0436`), desk-verified only:** the measurement exists, `deck_probeDebugger { afterReload: true }` (CDP target list, `SharedJSContext` and the Quick Access page sampled every 250 ms, every outcome recorded); the restart note is a file beside the lease, so the extension's reload is visible to an agent's server; inside the 120 s window a reset, hang-up, refused connect, closed socket, empty list or a list without the Quick Access page is re-read with backoff (stage `wait-rebuilding`) instead of failing the call. Written against a fake CEF whose restart is a guess, as every fix before it was; the difference is that the probe now says what the real one does.
+- **Next:** three probes on the Deck, then bonsAI's stricter set. Done when row P89-RIG-OPEN-AFTER-RELOAD reads 3 of 3. If it does not, the probe's timeline is the next fix's spec.
 - The older entry *"intermittently fails to open the QAM"* (2026-08-28, chord delivered before the client could act on it) is this bug's first sighting and is folded in here.
 
 ### Windows stand-in: every focus read waits out the frozen desktop pages, and there is no screenshot
@@ -433,33 +490,33 @@ Four rules keep that safe:
 - **2026-10-24:** `06_trigger_rest` flashed with the Deck-side cable unplugged; the board's `status` read back the triggers resting at -127 on the fresh boot. **2026-10-25:** the four-step hand test passed (GUIDE → menu, B, LT, GUIDE → menu, B). Closed. Still owed: the program version in the status reply, with the next firmware change.
 
 ### A tool call can hang for half an hour, and the server can drop mid-call
-★★ · Open — reported 2026-09-19, 2026-09-26 (twice) and 2026-10-22 (twice) — fix landed 2026-10-24 (plan 11 lane D), stays open until its device pass
+★★ · **Proven on `this-pc` 2026-10-25** for the deadline (`deadlineMs: 1` returned the honest error) and the queue — reported 2026-09-19, 2026-09-26 (twice) and 2026-10-22 (twice); fix landed 2026-10-24 (plan 11 lane D). The one gap lane D named, an abandoned promise that could still press beside the next call, closed at the desk 2026-11-02 (plan 12 lane B, `633cda5`: the deadline reaches the press seam) and is owed a `this-pc` read. Not yet seen on the Deck.
 - **Seen:** one `deck_walkTo` hung for 35 minutes and returned nothing. A tool stalled about 29 minutes with no press sent and no error until the next call; by then the screensaver had changed the screen and the session ended early. On 2026-10-22 the tool connection closed mid-call twice, and the chat lost every DPS tool until a new chat was started (the Claude desktop app cannot restart a project's tool server mid-session). On 2026-09-19 the screen connection stopped answering for several minutes while SSH still worked.
 - **Why it can happen:** `index.ts` has no wall-clock deadline per call and no `unhandledRejection` / `uncaughtException` handler, so a stuck read waits forever and one stray rejection ends the process.
 - **Fix:** a deadline per call at the dispatch seam that ends the call with the stage named and the pad released; process-level handlers that log and keep the server up.
 
 ### Two presses sent at once clash on the bridge's own port
-★ · Open — 2026-09-26 — fix landed 2026-10-24 (plan 11 lane D), stays open until its device pass
+★ · **Proven on `this-pc` 2026-10-25** (two presses at once ran in order, `waitedForPreviousCallMs: 258`, a read beside them did not wait) — 2026-09-26 — fix landed 2026-10-24 (plan 11 lane D). Not yet seen on the Deck's serial port.
 - The lease is per session, so two calls in flight from one session can both reach the board. bonsAI's driver rule since then: one press at a time. The fix is a queue per machine in the server, so the second driving call waits instead of racing.
 
 ### A lease refusal named a holder that was the caller itself
-★ · Open — 2026-10-07 — fix landed 2026-10-24 (plan 11 lane E), stays open until its device pass
+★ · Open — 2026-10-07 — fix landed 2026-10-24 (plan 11 lane E); not exercised under two live servers in the 2026-10-25 pass, still owed
 - One press was refused as "being driven by another session (a process on this desktop)"; `deck_status` a moment later showed the lease as the caller's own; a retry worked. Only one session drove the Deck that night. "Mine" is decided by pid and host (`lease.ts:140`), and Windows recycles pids quickly. Fix: an owner token per server process in the lease record.
 
 ### `deck_exitGame` trusts an empty `RunningApps`, and stops on Home with a game underneath
-★★ · Open — 2026-09-19, 2026-09-25 (twice), 2026-09-26 (twice) — fix landed 2026-10-24 (plan 11 lane F), stays open until its device pass
+★★ · Half proven — 2026-09-19, 2026-09-25 (twice), 2026-09-26 (twice) — fix landed 2026-10-24 (plan 11 lane F). On the Deck 2026-10-25 with nothing running the process check agreed (`processAlive: false`, zero presses); the with-a-game-running shape and the walk UP from Home have not run.
 - Mid-Black Mesa the screen connection dropped; when it came back `RunningApps` read empty while the Black Mesa process ran at full CPU on its own menu, 32 minutes after the last press. The tool believed the list; the session killed the process over SSH by hand. Separately, after a plugin reload left Steam's Home in front of a running game, the exit tool stopped on Home four times and the driver exited by hand. Fix: check the process list over SSH before declaring nothing running; continue the exit route when `RunningApps` says a game is underneath.
 
 ### `deck_getEnv` reports `pluginLoaderActive: "inactive inactive"` while the loader runs
-★ · Open since 2026-08-28 (bonsAI finding P2-5) — fix landed 2026-10-24 (plan 11 lane E), stays open until its device pass
+★ · **Fixed, proven on the Deck 2026-10-25** (`pluginLoaderActive: "active"`) — open since 2026-08-28 (bonsAI finding P2-5), fix landed 2026-10-24 (plan 11 lane E)
 - `tools/deckAutonomy.ts:270` runs `systemctl --user is-active plugin_loader.service || echo inactive`. The unit is system scope, so the `--user` half prints `inactive`, exits non-zero, and the `|| echo` prints a second one. It is the first field anyone reads when a deploy or an open fails, and it points away from the cause.
 
 ### A second settings snapshot taken for proof is refused until the first is restored
-★ · Open — 2026-10-22 — fix landed 2026-10-24 (plan 11 lane E), stays open until its device pass
+★ · **Fixed, proven on the Deck 2026-10-25** (three `replace: true` snapshots in a row, the earlier holds set aside, byte-identical archives, a clean restore) — 2026-10-22, fix landed 2026-10-24 (plan 11 lane E)
 - The refuse-while-unrestored rule is right for a run and wrong for a proof: to take three snapshots in a row the driver moved the hold file aside by hand. Fix: `replace: true` sets the earlier copy aside under a dated name and says so; the default stays refuse.
 
 ### The extension's "Show open plugin hint" command presses buttons and keeps the lease
-★ · Found 2026-10-22 in this audit — fix landed 2026-10-24 (plan 11 lane H), stays open until its device pass
+★ · Found 2026-10-22 in this audit — fix landed 2026-10-24 (plan 11 lane H); compile-checked only, the command has not been run from a live editor since
 - `decky.showOpenPluginHint` (`extension/src/extension.ts:53`) calls `deck_openPlugin {}`, which has driven the Deck by default since v0.3.9, and reads a `checklist` field that only exists on failure. It also takes the machine's lease in the extension's own process, as do the Deploy and Capture commands, and keeps it for up to 10 minutes, during which an agent session's presses are refused naming "another session". The extension's request timeout is 120 s; a worst-case open (45 s restart wait plus a 120 s tab wait plus a retry) runs longer. Fix: `drive: false` in the hint command; release the lease at the end of each one-shot command.
 
 ### The preview reports fiction: five findings from 2026-08-08, never fixed
@@ -472,7 +529,7 @@ Four rules keep that safe:
 - bonsAI keeps `.decky/preview.json` only because `deck_openPlugin` reads `panelRootSelector` from it.
 
 ### `preview.test.ts` fails intermittently under the full suite
-★ · Open — found 2026-09-23; did not reproduce in the 2026-10-22 full run (495 pass)
+★ · **Closed 2026-10-24 by retirement**: the file went with the preview (`9d30a33`). Kept for the lesson below. Found 2026-09-23; did not reproduce in the 2026-10-22 full run (495 pass)
 - **Problem:** *"previewStart reports running:true only once the configured URL actually answers"* failed once in a full `pnpm -r test` run, then passed 5/5 when the file was run on its own, and passed on the next full run. Timing- or port-sensitive under parallel load rather than a real regression.
 - **Why it is worth an entry rather than a shrug:** this repo has already paid for this once. `npm test` failing on a clean checkout for an incidental reason cost four of the eight parallel lanes real time in plan 09, and the note written then still applies — a check that goes red for a reason unrelated to the code teaches people to read red as noise, which is the same disease as a check that goes green when it should not.
 - **Fix idea:** bind the probe to an ephemeral port chosen at test time rather than a fixed one, and assert on the observed transition instead of a timeout window.
@@ -489,6 +546,21 @@ Kept so a repeat is not a surprise. All from bonsAI's device log unless dated ot
 ---
 
 ## Fixed bugs
+
+### Landed 2026-11-02 (plan 12, eight parallel lanes) — device pass not yet run
+
+Every entry is desk-verified only. The lanes' own "what could pass my tests while the real thing
+is broken" paragraphs are in [plan 12](planning/12-parallel-feature-session-3.md) § Outcome.
+
+- **A press after the call's deadline refuses** (lane B, `633cda5`). Plan 11 lane D's gap: the deadline now reaches `pressButton`, `pressChord` and the pad client, which refuse before writing to the port once it has passed, naming the tool, the deadline and the stage. Proven at the desk with a real walk abandoned mid-run beside a second call on a loopback pad.
+- **`deck_replayChecks` with no names ran all 100 saved walks** (bonsAI, 2026-10-24: 25 minutes of presses on a Deck in a random state; one setting changed). Lane B: with no `names` and more than `maxChecks` (10) files it refuses, naming the count; `all: true` opts in.
+- **Run files landed in the repo's folders by default** (bonsAI, 2026-10-24). Lane B: `outDir` on the six evidence-writing tools, checked at the seam; `deck_getEnv` reports `artifactDirs`.
+- **The launch tool could not pick a non-Steam shortcut from the shelf** (bonsAI, 2026-10-24: no app id in the tile image). Lane E: `title` and `shelfIndex`, and a shortcut named by name is matched on the shelf by its library name.
+- **The Library grid stalled on DOWN with nothing to read** (Deck, 2026-10-25). Lane E: every grid stop is recorded in the run file (rows, focused tile, scroll container, route, each press's effect), and a read-gated RIGHT/LEFT-then-DOWN fallback runs before the refusal.
+- **The restart note lived in one process's memory** (found 2026-10-22). Lane A: a file beside the lease, written by the reload and by `deck_deploy`.
+- **`deck_openPlugin` named "the panel did not mount" when a dialog had the ring** (`this-pc`, 2026-10-08). Lane A: the failure names the dialog and its focused control.
+- **`ws.ts` reported a socket closed before the handshake as a timeout** (lane A): it is now "socket hang up", the shape an SSH forward gives when the far end refuses.
+- **The firmware's program could only be guessed from the resting axes** (owed since 2026-10-25). Lane H: `07_version` names itself in the status reply; `deck_status` reads it. Compiled, not flashed.
 
 ### Landed 2026-10-24 (plan 11, eight parallel lanes) — device pass run 2026-10-25 on `this-pc` (A to D) and the Deck (E, F, H)
 

@@ -350,6 +350,43 @@ menu and B closes it.
 Item 7 runs last and alone. Items 4 to 6 need the Deck's lease free of bonsAI sessions, as on
 2026-10-25.
 
-## Outcome
+## Outcome (2026-11-02)
 
-_(written after the session)_
+Run the same day it was approved, from the planning session itself, with `main` at `df90060`
+(the plan commit). All eight lanes were spawned at once (Opus for A, E and G, Sonnet for the
+rest) into sibling worktrees `../dps-lanes/<lane>` on branches `p12/<lane>`; every lane ran
+`pnpm install --frozen-lockfile` in its own tree and `main` was untouched by it (the 2026-10-24
+"node_modules emptied" reading was most likely `ls` without `-a` on a pnpm root that holds only
+dot-entries). Lanes finished between 8 and 25 minutes after spawn; merges went in the order the
+lanes reported, which was H, B, D, F, C, G, E, A, one squashed commit each. Conflicts: the `test`
+script line (every lane but E), `index.ts` at the dispatch seam (B's `outDir` check, D's per-tool
+default deadline, F's call ring, C's ledger wrapper, G's sleep deadline, A's `callClassOf(tool,
+params)`), `tools/deckAutonomy.ts` imports and the function boundary between H's
+`readBridgeFirmware` and G's `sleepAndWakeFromParams`, `tools/doctor.ts` (H's and C's checks),
+`tools/deck.ts` and the three evidence writers (B's `outDir` beside C's `saveAs`; the signatures
+now take `saveAs` then `outDir`), and the `deck_openPlugin` / `studio_doctor` descriptions in the
+registry. All resolved by hand with a small Python script per merge. Tests: 590 → 850 in
+`mcp-server`. `pnpm build`, the extension typecheck and `pnpm run package:vsix` with the bundled
+smoke test are green; the VSIX is 8.2 MB (2785 files). Tool count 49.
+
+| Lane | Commit | Tests added | What its honesty paragraph said to check on a device |
+|------|--------|-------------|------------------------------------------------------|
+| A | `4bd0436` | 38 | The fake CEF's restart is a guess (a clean block of resets, hang-ups or empty lists, then health). The real one may refuse only the Quick Access socket while the list answers, 404 stale ids on upgrade (an `http-error`, deliberately not retried), stall into timeouts (not retried), or flap past 120 s. A reload done by hand or by Decky writes no note. `wait-rebuilding` can cost up to 120 s inside the window, unmeasured. Only `ModalDialogOverlay` has been read for the dialog naming. Three `deck_probeDebugger { afterReload: true }` runs settle the shape; the stricter 3-round open test settles issue #3. |
+| B | `633cda5` | 19 | The headline test uses a loopback vpad, never the serial `pad.py` path, where the fence is a check just before `spawn`; a `pad.py` already spawned and acked before the deadline is unaffected. AsyncLocalStorage was proven across timers, sockets and the walk's sleep, not across a real SSH tunnel acquire. Reads can still run after the deadline; only presses are fenced. `outDir` on screenshot and record is untested end to end. |
+| C | `d268552` | 61 | The seam is covered by a source-text check plus one private smoke run of registry tools; no driving tool's result has gone through it. `presses` and `fidelity` are copied by field name from fixtures, never from a recorded Deck result. `buildHash` appears only when `deck_checkReady { buildMatches: true }` ran in the same server process within 30 min. Cross-process append on Windows is untested. The markdown shape is read from testing.md's prose, not confirmed with bonsAI. |
+| D | `aa3938d` | 40 | The fake DOM is the lane's own model of Chromium and React. Nothing shows Steam's CEF accepts `Input.insertText` in gamepad-UI mode, that the `input` event reaches bonsAI's React state, or that the ring sits on the `<input>` itself rather than a Focusable wrapper (in which case the tool refuses every time). Enter as a synthetic key event may not submit. |
+| E | `a7061de` | 20 | The fake's grid (row-major, equal tops, a stall a neighbour's DOWN gets past) is invented; the real cause of the 2026-10-25 stall is unknown, so the fallback may be 3 to 6 wasted presses. `gridTiles` dedupes by app id and keeps the first `<img>`, so hero art elsewhere on the page would displace a tile's box and could invent a "row below". A grid that scrolls by transform or paginates reads `scroll: null`. The title match trusts the ring's own label; the one shelf read that saw shortcuts does not say whether the label or the text carried the name. "Any app in RunningApps" would accept a launcher starting. |
+| F | `9b2a533` | 29 | Every post test uses a fake `gh`: the `--body-file -` stdin path on Windows, `--label`, and the stderr wording the label-missing regex matches are unproven. Whether GitHub keeps `title`, `body` and `labels` on `issues/new` when issue forms exist, and whether a 7000-character URL survives, is untested. Redaction catches the values it was told about and nothing else: plugin names, hostname aliases not in `machines.json`, SSH key paths outside home, pass through. The extension command is typechecked only. |
+| G | `2814256` | 33 | Every seam is faked to the 2026-09-08 timings. Unproven: that a deferred `SuspendPC()` suspends; that SSH goes quiet inside 30 s and two failed fresh probes are not a Wi-Fi blip; that wakealarm reads back on the Deck's clock within 5 s (an RTC in local time refuses, the safe side); that the kernel empties wakealarm after it fires (`alarmFired` depends on it); that `sudo -n rtcwake -m disable` exits 0 with no alarm; that CEF answers within 30 s of SSH returning; that the journal grep catches the real lines. Needs NOPASSWD sudo for `rtcwake` (the `setup-dev.ps1` sudoers rule covers it). |
+| H | `ba0b771` | 20 | Everything is injected or source-text. The `.ino` compiles clean (`arduino-cli`, 373 KB) but the status reply's real bytes are unseen; a printf slip in `reply()` could drop `ax` and break the LT/RT refusal logic. `parseStatusFirmware` has seen hand-written lines, not a live port with CRLF and banner noise. Flashing is untested. |
+
+**Decisions made at merge time, for the maintainer to veto:** lane C does not log `deck_status`,
+`deck_automationStatus` or `deck_runReport` (the extension polls status every 30 s); lane F's
+`confirmToken` is bound to the stored render, not a fresh one (a re-render would never match,
+since the bundle carries timestamps); lane H's doctor reads a board that answers without a name as
+`ok` with "flash deck_bridge" in `saw`, reserving `unknown` for not asked, leased or unreached;
+lane G takes the machine's lease at the seam before its own kind check refuses on a stand-in;
+lane D's default deadline is 60 s through a per-tool table at the seam.
+
+**Open after the session, owed to phase 2** (the table at the top of this file): all of it.
+Nothing has run on a device. The push and the 0.3.12 bump wait for the pass, as the plan says.

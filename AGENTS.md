@@ -10,7 +10,8 @@ This repository is configured for **Decky Plugin Studio**. Use the bundled MCP t
 - **Build parity:** After changes to `src/`, `main.py`, or `plugin.json`, run `plugin.build` (MCP) or `./scripts/build.sh` / `./scripts/build.ps1` before on-device QA.
 - **Check on the Deck:** there is no in-IDE preview (it was retired on 2026-10-24). Run `deck.deploy`, then check the UI on the Deck or a stand-in. Start a run with `deck.checkReady`, so a run on a sleeping Deck or a stale build fails at step zero.
 - **Which machine:** every `deck.*` tool takes `machine: "<name>"` (see `deck.listMachines`). Without it you drive `deck`, the real Deck. A stand-in (a Bazzite VM, or the maintainer's PC running Big Picture with Decky for Windows) is `kind: "standin"`, and **every result says `machine: { name, kind, os }`** -- never file a stand-in's verdict as the Deck's; declare `machineKind: "deck"` in `deck.checkReady` when a run must only ever run on the real Deck. **One driver per machine:** a driving call takes the machine's lease for your session; if another live session holds it you get a refusal naming them -- stop and tell the user, do not look for another way to press.
-- **Every call has a deadline:** every tool takes `deadlineMs`. The defaults are 10 minutes for driving tools, 30 s for `deck.status` and the registry tools, 60 s for the rest. A call past its deadline returns an error naming its last stage, and a driving tool releases the pad.
+- **Every call has a deadline:** every tool takes `deadlineMs`. The defaults are 10 minutes for driving tools, 30 s for `deck.status` and the registry tools, 60 s for the rest. A call past its deadline returns an error naming its last stage, a driving tool releases the pad, and a press after the deadline refuses (so an abandoned walk cannot press beside the next call).
+- **Every call is logged:** one line per `deck.*` / `plugin.*` call in `runs/ledger/<session>.ndjson`; pass `rowId` and `saveAs` so evidence files name themselves, and `deck.runReport` renders the block a testing row expects.
 
 ## MCP tools (Decky Plugin Studio)
 
@@ -33,7 +34,9 @@ MCP names use underscores (`deck_deploy`); the dotted names here mean the same t
 | `deck.installCaptureHelper` | Install capture helpers on Deck |
 | `deck.deploy` | Build + deploy (local SteamOS/Bazzite or remote SSH), then wait for the loader |
 | `deck.reloadPlugin` | Restart plugin_loader without redeploy |
-| `deck.openPlugin` | Open the QAM and your plugin's panel by driving the Deck through the bridge, with a focus read before every step; `drive: false` returns the manual checklist instead |
+| `deck.openPlugin` | Open the QAM and your plugin's panel by driving the Deck through the bridge, with a focus read before every step; `drive: false` returns the manual checklist instead. Inside 120 s of a reload or deploy a debugger reset is waited out as "rebuilding" (desk-verified only) |
+| `deck.probeDebugger` | Sample what CEF's debugger does every 250 ms after a loader restart (`afterReload: true` issues the reload itself); the measurement behind the open-after-reload bug. Desk-verified only |
+| `deck.typeText` | Type into the plugin's own text field over CDP; `fidelity: "injected"`, ranked below `wire-sent`, because it bypasses the controller and Steam's keyboard. Refuses unless the ring is on a text field. Desk-verified only |
 | `deck.readFocus` | Where the gamepad ring is, and whether a person could see it (`visibility`) |
 | `deck.readPage` / `deck.waitFor` | Ask the plugin's page a question, or poll it until true. Read, do not drive |
 | `deck.pressButton` | One real press through the bridge, including the triggers `LT` and `RT`; a list is a simultaneous press, not a chord |
@@ -47,7 +50,10 @@ MCP names use underscores (`deck_deploy`); the dotted names here mean the same t
 | `deck.exitGame` | Exit the running game — Steam menu → Exit game → Confirm; done when `RunningApps` empties and no game process is left |
 | `deck.checkReady` | Declare the state a run needs (awake, build hash, game, tab, no foreign tunnel, no modal, ring owned, machine kind, Big Picture in front) and get the diff against reality — fails at step zero with a named reason. An unknown never reads as a pass |
 | `deck.focusBigPicture` | Windows stand-in only: bring Big Picture back in front (Win32 restore if minimized, then Steam's own bring-to-front and focus calls) and read the gate again; presses nothing |
-| `deck.saveCheck` / `deck.replayChecks` | Save a sweep or sequence with its expected landings as a named check file; rerun them all after a deploy and diff. Timing, retries and fidelity are ignored on purpose |
+| `deck.saveCheck` / `deck.replayChecks` | Save a sweep or sequence with its expected landings as a named check file; rerun them after a deploy and diff. Timing, retries and fidelity are ignored on purpose. **Always pass `names`**: with none, more than 10 saved checks refuses (one no-argument call replayed 100 walks for 25 minutes) |
+| `deck.sleepAndWake` | Deck only, never run on the Deck yet: arm `rtcwake` and read it back, record focus, suspend through Steam's own call, wait for SSH back, read where focus landed without a press. Refuses with a game running or an inhibitor held |
+| `deck.runReport` | Render the run ledger (`runs/ledger/<session>.ndjson`, one line per call) as the markdown block a testing row expects. Read-only. `rowId` and `saveAs` on evidence tools name the files |
+| `studio.reportIssue` | File a redacted diagnostic bundle as a GitHub issue; dry run by default, posts only with the `confirmToken` from that dry run. Read the dry run for anything that should have been redacted |
 | `deck.holdAwake` / `deck.restorePowerSettings` | Hold a logind sleep inhibitor for a run, then release it. Nothing on the Deck is changed, and the lock releases itself after its TTL. **Still pair every hold with a restore** |
 | `deck.snapshotSettings` / `deck.restoreSettings` | Copy the plugin's settings (optionally data) directory off the Deck and put exactly that copy back |
 | `plugin.detect` / `plugin.build` / `plugin.verifyZip` | Workspace validation and build |

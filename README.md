@@ -8,7 +8,7 @@ The in-IDE preview was retired on 2026-10-24. UI checks run on the Deck, or on a
 
 | Feature | What it does |
 |---------|----------------|
-| **MCP tools** | 44 tools for agents: build, deploy, logs, capture, and driving the Deck (see the list below) |
+| **MCP tools** | 49 tools for agents: build, deploy, logs, capture, and driving the Deck (see the list below) |
 | **Composited capture** | Screenshots and recordings that include QAM + your plugin UI (not raw game-only kmsgrab) |
 | **Init Pack** | Drops `AGENTS.md`, MCP config, agents/skills/hooks for **Cursor and/or Claude Code**, and optional `scripts/` into your plugin repo |
 | **Create New Plugin** | Clones decky-plugin-template, renames boilerplate, runs Init Pack |
@@ -21,7 +21,9 @@ What the tools cover:
 - **Run hygiene.** Check the Deck is ready before a run, keep it awake, snapshot and restore the plugin's settings, and replay saved checks after a deploy.
 - **Stand-in machines.** Drive a Bazzite VM or a Windows PC running Big Picture as well as the Deck. Every result names the machine, and only one session drives a machine at a time.
 - **Focus lint.** `plugin.lintFocus` checks D-pad wiring from source.
-- **Doctor.** `studio.doctor` (and **Decky: Doctor**) checks DPS's own setup.
+- **Doctor.** `studio.doctor` (and **Decky: Doctor**) checks DPS's own setup. `studio.reportIssue` (and **Decky: Report Studio Issue**) files a redacted diagnostic bundle upstream.
+- **A ledger of every run.** One line per call in `runs/ledger/`, evidence files that name themselves (`saveAs`, `rowId`), and `deck.runReport` for the block a testing row expects.
+- **New and not yet proven on a Deck (2026-11-02):** `deck.typeText` (injection, honestly tagged), `deck.sleepAndWake` (wake alarm armed first), `deck.probeDebugger` (what CEF does after a reload).
 
 ## Install
 
