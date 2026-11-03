@@ -23,6 +23,28 @@ export interface Fake {
   evaluations: () => number;
   /** How many /json/list calls have been served -- a settle loop's poll count. */
   lists: () => number;
+  /**
+   * Act out a plugin_loader restart: for `forMs` from now, every connection is
+   * answered the way `mode` says, then the fake behaves normally again.
+   *
+   *   "reset"  -- /json/list and every websocket upgrade are reset (TCP RST):
+   *               the client reads ECONNRESET, or "socket hang up" when the
+   *               reset lands before any reply byte.
+   *   "hangup" -- the connection is closed with no reply and no RST (a FIN),
+   *               the way an SSH forward closes its channel when the far
+   *               end refused: "socket hang up".
+   *   "empty"  -- /json/list answers [] and upgrades work.
+   *
+   * THIS IS A GUESS AT THE SHAPE, NOT A MEASUREMENT. bonsAI's log has "debugger
+   * connection reset" 1 s after a reload (2026-10-22) and "read ECONNRESET"
+   * 3 s after one (2026-10-12), and nothing more; deck_probeDebugger exists to
+   * record the real sequence. Until it has run on the Deck, a test written
+   * against this proves the code's reaction to these three shapes, not that
+   * CEF makes them.
+   */
+  restart: (forMs: number, mode?: "reset" | "hangup" | "empty") => void;
+  /** Connections the restart has refused so far (HTTP and websocket). */
+  resets: () => number;
   close: () => Promise<void>;
 }
 
@@ -33,7 +55,7 @@ export interface Fake {
  */
 export async function startFakeCdp(
   targetTitles: string[] | (() => string[]),
-  pageValue: (title: string, readIndex: number) => unknown,
+  pageValue: (title: string, readIndex: number, expression: string) => unknown,
   /**
    * `screenshot`: base64 PNG answered to Page.captureScreenshot, or
    * `{ __error }` to refuse it the way a page that cannot paint would.
@@ -43,12 +65,25 @@ export async function startFakeCdp(
   const sockets = new Set<Socket>();
   let reads = 0;
   let lists = 0;
+  let resets = 0;
+  let restartUntil = 0;
+  let restartMode: "reset" | "hangup" | "empty" = "reset";
+  const restarting = (): boolean => Date.now() < restartUntil;
+  /** Drop a connection the way the restart mode says. True when it was dropped. */
+  const drop = (socket: Socket): boolean => {
+    if (!restarting() || restartMode === "empty") return false;
+    resets++;
+    if (restartMode === "reset") socket.resetAndDestroy();
+    else socket.destroy();
+    return true;
+  };
   // A function lets a test change the target list between /json/list calls:
   // the shape of the seconds after a plugin_loader restart, when CEF names
   // only SharedJSContext until Steam has rebuilt its UI pages (issue #3).
   const titles = (): string[] => (typeof targetTitles === "function" ? targetTitles() : targetTitles);
 
   const server = http.createServer((req, res) => {
+    if (drop(req.socket)) return;
     if (req.url === "/json/version") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ Browser: "Chrome/126.0.0.0", "Protocol-Version": "1.3" }));
@@ -60,7 +95,7 @@ export async function startFakeCdp(
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify(
-          titles().map((title, i) => ({
+          (restarting() && restartMode === "empty" ? [] : titles()).map((title, i) => ({
             id: `T${i}`,
             type: "page",
             title,
@@ -76,6 +111,7 @@ export async function startFakeCdp(
   });
 
   server.on("upgrade", (req, socket: Socket) => {
+    if (drop(socket)) return;
     sockets.add(socket);
     const key = req.headers["sec-websocket-key"] as string;
     const accept = crypto
@@ -126,10 +162,12 @@ export async function startFakeCdp(
 
       let id = 1;
       let method = "";
+      let expression = "";
       try {
         const cmd = JSON.parse(payload.toString("utf8"));
         id = cmd.id ?? 1;
         method = cmd.method ?? "";
+        expression = String(cmd.params?.expression ?? "");
       } catch {
         /* keep the default */
       }
@@ -152,13 +190,19 @@ export async function startFakeCdp(
       // A pageValue of { __throw: "..." } comes back as a real CDP
       // exceptionDetails, so the "expression threw in the page" path can be
       // tested without asking this fake to actually evaluate JavaScript.
-      let produced = pageValue(title, reads++) as { __throw?: string } | unknown;
+      let produced = pageValue(title, reads++, expression) as { __throw?: string } | unknown;
       // { __hang: true } never replies (a frozen CEF page); { __delayMs, __value }
-      // replies with __value after that many ms.
+      // replies with __value after that many ms; { __reset: true } resets the
+      // connection instead of replying (a page torn down mid-read).
       let delayMs = 0;
       if (produced && typeof produced === "object") {
-        const p = produced as { __hang?: boolean; __delayMs?: number; __value?: unknown };
+        const p = produced as { __hang?: boolean; __reset?: boolean; __delayMs?: number; __value?: unknown };
         if (p.__hang) return;
+        if (p.__reset) {
+          resets++;
+          socket.resetAndDestroy();
+          return;
+        }
         if (typeof p.__delayMs === "number") {
           delayMs = p.__delayMs;
           produced = p.__value;
@@ -205,6 +249,11 @@ export async function startFakeCdp(
     base: `http://127.0.0.1:${port}`,
     evaluations: () => reads,
     lists: () => lists,
+    restart: (forMs: number, mode: "reset" | "hangup" | "empty" = "reset") => {
+      restartMode = mode;
+      restartUntil = Date.now() + forMs;
+    },
+    resets: () => resets,
     close: async () => {
       for (const s of sockets) s.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));

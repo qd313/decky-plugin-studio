@@ -36,6 +36,7 @@ import {
 import { withImage } from "../toolContent.js";
 import { evidencePath } from "../evidenceName.js";
 import { captureStandinWindows } from "../deck/cdpScreenshot.js";
+import { noteLoaderRestart } from "../deck/loaderRestart.js";
 
 let tunnelProcess: ReturnType<typeof spawn> | null = null;
 /** Registry id of the live ingest tunnel, so the killswitch can reach it. */
@@ -407,7 +408,8 @@ export async function deployRemote(
   pluginName: string,
   opts: DeployRemoteOptions = {}
 ): Promise<{ target: string; copied: string[]; loader: LoaderReadiness | null }> {
-  const { user, host } = sshTarget(currentMachine());
+  const m = currentMachine();
+  const { user, host } = sshTarget(m);
 
   runPreDeployHook(pluginRoot);
 
@@ -437,6 +439,9 @@ export async function deployRemote(
   moveDeployedPluginIntoPlace(user, host, tempDir, targetDir, pluginName, sources);
 
   sshRestartLoader(user, host);
+  // The note every server process reads (loaderRestart.ts): deck_openPlugin
+  // waits for the Quick Access page while it is fresh.
+  noteLoaderRestart(m.name, Date.now(), "deck_deploy");
 
   // Return when the Deck is usable again, not when the restart was ISSUED.
   // Issue #3: every deck_openPlugin called straight after a deploy found the

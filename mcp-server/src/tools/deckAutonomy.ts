@@ -24,7 +24,7 @@ import {
   labelOf,
   Machine,
 } from "../machines.js";
-import { openPadEndpoint } from "../deck/cdpTunnel.js";
+import { openCdpTunnel, openPadEndpoint } from "../deck/cdpTunnel.js";
 import { padStatus, PadEndpoint, PadExchange } from "../deck/padClient.js";
 import { noteLoaderRestart } from "../deck/loaderRestart.js";
 import { leaseHeldByOther } from "../deck/lease.js";
@@ -35,6 +35,14 @@ import {
   parseStatusFirmware,
 } from "../deck/bridgeTools.js";
 import { sleepAndWake, SleepWakeResult } from "../deck/sleepWake.js";
+import {
+  describeProbe,
+  sampleDebugger,
+  DEFAULT_PROBE_SECONDS,
+  MAX_PROBE_SECONDS,
+  type ProbeDebuggerSummary,
+} from "../deck/probeDebugger.js";
+import { getWorkspaceArtifactsDir, timestamp } from "./captureOrchestrator.js";
 
 function shellCmd(): string {
   return process.platform === "win32" ? "cmd.exe" : "/bin/sh";
@@ -61,7 +69,7 @@ export async function reloadPlugin(
   if (deployMode === "local") {
     const method = await restartLoaderLocal(undefined, m);
     // Leave a note for deck_openPlugin: the Quick Access page is still coming back.
-    noteLoaderRestart(m.name);
+    noteLoaderRestart(m.name, Date.now(), "deck_reloadPlugin");
     const loader =
       opts.waitForLoader === false
         ? null
@@ -77,7 +85,7 @@ export async function reloadPlugin(
   if (!host) throw new Error("DECK_IP not configured — run deck.configure first");
 
   sshRestartLoader(user, host);
-  noteLoaderRestart(m.name);
+  noteLoaderRestart(m.name, Date.now(), "deck_reloadPlugin");
   // Same restart as deck_deploy, same window after it (issue #3): return
   // when the Deck is usable again, and say so if the deadline passed.
   const loader =
@@ -85,6 +93,139 @@ export async function reloadPlugin(
       ? null
       : await waitForLoaderReady(user, host, { timeoutMs: opts.loaderTimeoutMs });
   return { ok: true, mode: "remote", method: `ssh ${user}@${host} plugin_loader restart`, loader };
+}
+
+/** Without afterReload the call has the 60 s read deadline (index.ts), so sampling stops short of it. */
+export const PROBE_READ_ONLY_MAX_SECONDS = 55;
+
+export interface ProbeDebuggerToolOptions {
+  seconds?: number;
+  afterReload?: boolean;
+  /** Reload mode, as deck_reloadPlugin's. Only with afterReload. */
+  mode?: "auto" | "local" | "remote";
+  /** Test seams: a CDP endpoint already reachable, the reload, the sample spacing, and whether to write the run file. */
+  cdpUrl?: string;
+  reload?: typeof reloadPlugin;
+  intervalMs?: number;
+  opTimeoutMs?: number;
+  writeEvidence?: boolean;
+}
+
+export interface ProbeDebuggerToolResult extends ProbeDebuggerSummary {
+  ok: boolean;
+  afterReload: boolean;
+  /** Present with afterReload: what the reload did, and how long its restart command took before the note (the zero) was written. */
+  reload: { ok: boolean; mode: string; method: string; commandMs: number; error?: string } | null;
+  /** Set when `seconds` was cut to fit the read deadline. */
+  secondsRequested?: number;
+  /** runs/probe-debugger_<ts>.json, with every sample; null when it could not be written. */
+  file: string | null;
+  reason?: string;
+  summary: string;
+}
+
+/**
+ * deck_probeDebugger: sample Steam's CEF debugger (deck/probeDebugger.ts), and
+ * with afterReload restart plugin_loader first, through reloadPlugin above
+ * with no loader wait, so sampling starts as soon as the restart command
+ * returns. Read-only otherwise; the lease for afterReload is taken at the
+ * dispatch seam, as for deck_reloadPlugin.
+ */
+/** The seconds a probe will sample: clamped to 1..300, and to 55 without afterReload. */
+export function probeSeconds(asked: unknown, afterReload: boolean): { requested: number; seconds: number } {
+  const n = Number(asked ?? DEFAULT_PROBE_SECONDS);
+  const requested = Math.min(MAX_PROBE_SECONDS, Math.max(1, Number.isFinite(n) && n > 0 ? n : DEFAULT_PROBE_SECONDS));
+  return { requested, seconds: afterReload ? requested : Math.min(requested, PROBE_READ_ONLY_MAX_SECONDS) };
+}
+
+export async function probeDebugger(opts: ProbeDebuggerToolOptions = {}): Promise<ProbeDebuggerToolResult> {
+  const afterReload = opts.afterReload === true;
+  const { requested, seconds } = probeSeconds(opts.seconds, afterReload);
+  const m = currentMachine();
+
+  const empty = (reason: string, reload: ProbeDebuggerToolResult["reload"]): ProbeDebuggerToolResult => ({
+    ok: false,
+    afterReload,
+    reload,
+    zero: "probe-start",
+    zeroAt: new Date().toISOString(),
+    restartNote: null,
+    seconds,
+    intervalMs: opts.intervalMs ?? 250,
+    samples: 0,
+    firstReadableQuickAccessMs: null,
+    quickAccessStableFromMs: null,
+    firstDeckyTabMs: null,
+    resetsSeen: 0,
+    lastResetMs: null,
+    outcomes: { list: {}, sharedJs: {}, quickAccess: {} },
+    timeline: [],
+    file: null,
+    reason,
+    summary: `nothing was sampled: ${reason}`,
+  });
+
+  // The tunnel first: once the loader is restarting, every second spent on SSH
+  // setup is a second of the window not recorded.
+  let cdpBase = opts.cdpUrl;
+  if (!cdpBase) {
+    try {
+      cdpBase = (await openCdpTunnel()).base;
+    } catch (err) {
+      return empty(`could not reach the Deck's debugger: ${(err as Error).message}`, null);
+    }
+  }
+
+  let reload: ProbeDebuggerToolResult["reload"] = null;
+  if (afterReload) {
+    const issued = Date.now();
+    try {
+      const r = await (opts.reload ?? reloadPlugin)(opts.mode ?? "auto", { waitForLoader: false });
+      reload = { ok: r.ok, mode: r.mode, method: r.method, commandMs: Date.now() - issued };
+    } catch (err) {
+      reload = { ok: false, mode: opts.mode ?? "auto", method: "", commandMs: Date.now() - issued, error: (err as Error).message };
+      return empty(`the reload failed, so there was no restart to measure: ${(err as Error).message}`, reload);
+    }
+  }
+
+  const { summary, samples } = await sampleDebugger({
+    cdpBase,
+    seconds,
+    intervalMs: opts.intervalMs,
+    opTimeoutMs: opts.opTimeoutMs,
+    restartMachine: m.name,
+  });
+
+  let file: string | null = null;
+  let fileError: string | undefined;
+  if (opts.writeEvidence !== false) {
+    try {
+      file = path.join(getWorkspaceArtifactsDir("runs"), `probe-debugger_${timestamp()}.json`);
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ tool: "deck_probeDebugger", machine: labelOf(m), afterReload, reload, ...summary, sampleList: samples }, null, 2),
+        "utf8",
+      );
+    } catch (err) {
+      file = null;
+      fileError = (err as Error).message;
+    }
+  }
+
+  const cut = seconds < requested;
+  return {
+    ok: true,
+    afterReload,
+    reload,
+    ...summary,
+    ...(cut ? { secondsRequested: requested } : {}),
+    file,
+    ...(fileError ? { reason: `the run file could not be written: ${fileError}` } : {}),
+    summary:
+      (afterReload ? `restarted plugin_loader (${reload?.method}, ${reload?.commandMs} ms), then ` : "") +
+      describeProbe(summary) +
+      (cut ? `; sampled ${seconds} s of the ${requested} asked, to fit the 60 s read deadline (afterReload: true allows up to ${MAX_PROBE_SECONDS} s)` : ""),
+  };
 }
 
 export function openPlugin(): {

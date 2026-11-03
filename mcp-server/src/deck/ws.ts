@@ -70,6 +70,12 @@ export class MiniWebSocket {
       };
 
       socket.on("error", fail);
+      // A connection closed before the handshake answered, with no error: what
+      // an SSH forward does when the far end refused or reset (plan 12 lane A).
+      // Without this the connect sat out its whole handshake timeout and was
+      // reported as one, which hid the shape of a loader restart.
+      const onEarlyClose = (): void => fail(new Error("socket hang up: closed before the websocket handshake answered"));
+      socket.on("close", onEarlyClose);
 
       socket.on("connect", () => {
         socket.write(
@@ -108,6 +114,7 @@ export class MiniWebSocket {
         clearTimeout(timer);
         socket.removeListener("data", onHandshakeData);
         socket.removeListener("error", fail);
+        socket.removeListener("close", onEarlyClose);
 
         const ws = new MiniWebSocket(socket);
         if (rest.length > 0) ws.onData(rest);

@@ -327,6 +327,28 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "deck_probeDebugger",
+    description:
+      "Record what Steam's CEF debugger does after a plugin_loader restart, sample by sample -- the measurement issue #3 (deck_openPlugin failing its first try after a reload) has never had. Every 250 ms for `seconds` it lists the CDP targets, opens a socket to SharedJSContext and one to the Quick Access page and runs one trivial Runtime.evaluate in each, and records per sample: the targets listed (ids and titles), each connect's outcome (ok, ECONNRESET, 'socket hang up', ECONNREFUSED, timeout, http-error, closed, not-listed, error), whether Decky's tab is on the Quick Access rail (Decky's pane mounted in that page, the same read deck_openPlugin waits on), and the ms since the restart note. Read-only: it presses nothing and, without afterReload, takes no lease. With afterReload: true it restarts plugin_loader itself first, through deck_reloadPlugin's code with no loader wait (that takes the lease, like the reload), and samples from the moment the restart command returns. Writes runs/probe-debugger_<ts>.json with every sample and returns the leading numbers -- firstReadableQuickAccessMs, quickAccessStableFromMs, firstDeckyTabMs, resetsSeen, lastResetMs -- plus per-channel outcome counts and a compact timeline of the distinct states seen. Times are ms after the restart note when one is fresh (`zero: \"restart-note\"`; the reload's `commandMs` is how long the restart command ran before that), else after the probe started. Limits: through the SSH forward a refused connect on the Deck reads here as a reset or a hang-up; a sample that waits out a 1.5 s timeout delays the next; with the Quick Access menu shut Steam may mount no panes, so open the menu first if the rail matters. Without afterReload sampling stops at 55 s, inside the 60 s read deadline.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        seconds: {
+          type: "number",
+          default: 30,
+          description: "How long to sample, 1-300 (55 at most without afterReload).",
+        },
+        afterReload: {
+          type: "boolean",
+          default: false,
+          description:
+            "true restarts plugin_loader first (as deck_reloadPlugin, without its loader wait) and samples from the moment the restart command returns. This is a driving call: it takes the machine's lease.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_openPlugin",
     description:
       "Open this plugin's panel on the Deck by driving Steam through the bridge board, verifying every stage against a live focus read rather than replaying a fixed button sequence. It only uses the D-pad while searching, and only presses A once a read confirms the ring is on a control labelled with the plugin's name, so it cannot activate something in an unrelated menu. If it runs out of budget it refuses and returns the manual checklist plus the list of controls it actually saw. Set rootSelector (or panelRootSelector in .decky/preview.json) to a selector your panel renders: without it, 'is the panel already open' is inferred from Decky's pane labels, and Decky's plugin LIST advertises every installed plugin's name, so an unmounted panel can read as open. Pass drive:false for the old checklist-only behaviour. Safe to call straight after deck_deploy: the first read waits out the loader restart, and the QAM open chord (a toggle) is fired only on the Quick Access page's own report that the menu is shut — never on a null read from another page. If the first try fails with nothing pressed, or with only the open chord pressed (seen right after deck_reloadPlugin), the tool reads again and tries once more inside the same call; the result then carries a `retried` object (why the first try failed) and says so in `summary`, and the stages are prefixed try1: and try2:.",

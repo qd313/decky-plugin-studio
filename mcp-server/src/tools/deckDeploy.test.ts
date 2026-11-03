@@ -31,7 +31,7 @@ import path from "node:path";
 import { deployPlugin, localPluginDirName, remotePluginDirName } from "./plugin.js";
 import { deployRemote } from "./deck.js";
 import { reloadPlugin } from "./deckAutonomy.js";
-import { msSinceLoaderRestart, clearLoaderRestart } from "../deck/loaderRestart.js";
+import { msSinceLoaderRestart, clearLoaderRestart, restartNotePath } from "../deck/loaderRestart.js";
 import { currentMachine } from "../machines.js";
 import {
   proc,
@@ -554,6 +554,9 @@ test("deck_reloadPlugin leaves a note that the loader just restarted, for deck_o
   const ranCommands: string[] = [];
   const savedIp = process.env.DECK_IP;
   process.env.DECK_IP = "192.0.2.7";
+  // The note is a file in the config dir since plan 12 lane A: keep it in the sandbox.
+  process.env.USERPROFILE = tempHome;
+  process.env.HOME = tempHome;
   try {
     const name = currentMachine().name;
     clearLoaderRestart(name);
@@ -568,9 +571,34 @@ test("deck_reloadPlugin leaves a note that the loader just restarted, for deck_o
     assert.ok(ranCommands.some((c) => c.includes("systemctl restart plugin_loader")), "the restart ran");
     const age = msSinceLoaderRestart(name);
     assert.ok(age !== null && age < 5000, "a fresh note exists for this machine");
+    const note = JSON.parse(fs.readFileSync(restartNotePath(name), "utf8"));
+    assert.equal(note.source, "deck_reloadPlugin", "the note on disk, where another server process reads it, names the reload");
+    assert.ok(restartNotePath(name).startsWith(tempHome), "and it is in the sandbox");
     clearLoaderRestart(name);
   } finally {
     if (savedIp === undefined) delete process.env.DECK_IP;
     else process.env.DECK_IP = savedIp;
+  }
+});
+
+test("deck_deploy leaves the same note as the reload, on disk, so another server's deck_openPlugin waits too", async () => {
+  // Plan 12 lane A: both the reload tool and the deploy's loader wait write it.
+  process.env.USERPROFILE = tempHome;
+  process.env.HOME = tempHome;
+  process.env.DECK_IP = "203.0.113.5";
+  process.env.DECK_USER = "deck";
+  const root = makeFixturePlugin("bonsAI");
+  try {
+    const name = currentMachine().name;
+    clearLoaderRestart(name);
+    await withFakeExec(() => "", () => deployRemote(root, "bonsAI", { waitForLoader: false }));
+    const note = JSON.parse(fs.readFileSync(restartNotePath(name), "utf8"));
+    assert.equal(note.source, "deck_deploy");
+    assert.equal(note.machine, name);
+    const age = msSinceLoaderRestart(name);
+    assert.ok(age !== null && age < 5000, "a fresh note exists for this machine");
+    clearLoaderRestart(name);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

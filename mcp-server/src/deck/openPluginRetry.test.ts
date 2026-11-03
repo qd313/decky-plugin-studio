@@ -21,11 +21,15 @@ import assert from "node:assert/strict";
 import net from "node:net";
 
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
+import { sandboxHome } from "./__testutil__/sandboxHome.js";
 import { openPluginDriven } from "./openPlugin.js";
 import { probeQuickAccess } from "./readFocus.js";
 import { openPluginWithRetry, isRetryableOpenFailure } from "./openPluginRetry.js";
 import type { OpenPluginResult } from "./openPlugin.js";
 import type { PressOptions, PressResult } from "./pressButton.js";
+
+// The restart note is a file in the config dir: keep it off the real one.
+sandboxHome("dps-open-");
 
 const TARGETS = ["SharedJSContext", "QuickAccess_uid2"];
 /** The Quick Access page with the menu shut: no ring, no pane (answers the focus scan and the probe alike). */

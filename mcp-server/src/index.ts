@@ -222,7 +222,7 @@ async function handleTool(method: string, params: Record<string, unknown>): Prom
   // Plan 11 lane D: every tool call runs under a wall-clock deadline, and a
   // driving call waits its turn on its machine (callDeadline.ts, callQueue.ts).
   // The switch in dispatch() is untouched; this only wraps it.
-  const cls = callClassOf(tool);
+  const cls = callClassOf(tool, params);
   const taken = takeDeadlineArg(params, cls);
   const { source, rest: args } = taken;
   // A call that asked for its own limit keeps it; otherwise a tool with a
@@ -246,7 +246,7 @@ async function handleTool(method: string, params: Record<string, unknown>): Prom
 
   const { machine: machineArg, ...rest } = args;
   const machine = resolveMachine(machineArg != null ? String(machineArg) : undefined);
-  const driving = DRIVING_TOOLS.has(tool);
+  const driving = drivesThisCall(tool, rest);
   const result = await runWithMachine(machine, () =>
     guardCall({
       tool,
@@ -272,8 +272,17 @@ const callQueue = new MachineCallQueue();
  */
 const LONG_NON_DRIVING_TOOLS: ReadonlySet<string> = new Set(["deck_restoreSettings", "deck_restorePowerSettings"]);
 
-function callClassOf(tool: string): CallClass {
-  if (DRIVING_TOOLS.has(tool) || LONG_NON_DRIVING_TOOLS.has(tool)) return "driving";
+/**
+ * A driving tool, or a call that drives because of its arguments:
+ * deck_probeDebugger reads only, unless `afterReload: true` asks it to restart
+ * plugin_loader first, which takes the lease as deck_reloadPlugin does.
+ */
+function drivesThisCall(tool: string, args: Record<string, unknown>): boolean {
+  return DRIVING_TOOLS.has(tool) || (tool === "deck_probeDebugger" && args.afterReload === true);
+}
+
+function callClassOf(tool: string, args: Record<string, unknown> = {}): CallClass {
+  if (drivesThisCall(tool, args) || LONG_NON_DRIVING_TOOLS.has(tool)) return "driving";
   if (REGISTRY_TOOLS.has(tool) || tool === "deck_status") return "status";
   return "read";
 }
@@ -511,6 +520,12 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       return deckAutonomy.reloadPlugin((params.mode as "auto" | "local" | "remote") ?? "auto", {
         waitForLoader: params.waitForLoader !== false,
         loaderTimeoutMs: params.loaderTimeoutMs != null ? Number(params.loaderTimeoutMs) : undefined,
+      });
+
+    case "tools/deck_probeDebugger":
+      return deckAutonomy.probeDebugger({
+        seconds: params.seconds != null ? Number(params.seconds) : undefined,
+        afterReload: params.afterReload === true,
       });
 
     case "tools/deck_openPlugin": {

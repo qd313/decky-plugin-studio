@@ -6,6 +6,7 @@ import { copyPluginToLocal, restartLoaderLocal, waitForLoaderReadyLocal } from "
 import { deployRemote, DeployRemoteOptions } from "./deck.js";
 import { runPreDeployHook } from "../deploy/deployHelpers.js";
 import { currentMachine, DEFAULT_CDP_PORT } from "../machines.js";
+import { noteLoaderRestart } from "../deck/loaderRestart.js";
 
 export function detectPlugin() {
   const root = getWorkspaceRoot();
@@ -139,6 +140,7 @@ export async function deployPlugin(mode: "auto" | "local" | "remote" = "auto", o
   if (deployMode === "local") {
     const target = copyPluginToLocal(info.root!, localPluginDirName(info.name), m.pluginsDir);
     const restartMethod = await restartLoaderLocal(undefined, m);
+    noteLoaderRestart(m.name, Date.now(), "deck_deploy");
     // Same window after the restart as the remote path (issue #3): return
     // when the loader and Steam's UI pages are back, and say so if not.
     const loader =

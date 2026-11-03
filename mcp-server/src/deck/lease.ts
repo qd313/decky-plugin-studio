@@ -77,7 +77,7 @@ export interface LeaseOptions {
   pidAlive?: (pid: number) => boolean;
 }
 
-function leaseDir(): string {
+export function leaseDir(): string {
   return path.join(getConfigDir(), "leases");
 }
 

@@ -22,9 +22,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
+import { sandboxHome } from "./__testutil__/sandboxHome.js";
 import { openPluginDriven } from "./openPlugin.js";
 import { noteLoaderRestart, msSinceLoaderRestart, clearLoaderRestart, RESTART_WINDOW_MS } from "./loaderRestart.js";
 import type { PressOptions, PressResult } from "./pressButton.js";
+
+// The restart note is a file in the config dir: keep it off the real one.
+sandboxHome("dps-open-");
 
 const TARGETS = ["SharedJSContext", "QuickAccess_uid2"];
 /** What the Quick Access page's own probe answers. */

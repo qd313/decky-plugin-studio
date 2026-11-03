@@ -1200,6 +1200,19 @@ export interface QuickAccessProbe {
 }
 
 /**
+ * The read probeQuickAccess runs in the Quick Access page: which pane is on
+ * screen, whether the page owns the ring, and whether Decky's pane (the tab on
+ * the rail) is mounted. Exported so deck_probeDebugger asks the same question.
+ */
+export const QUICK_ACCESS_PROBE_EXPRESSION =
+  "(() => { var panes = document.querySelectorAll('[id^=\"quickaccess_content_\"]'); var visible = null; " +
+  "for (var i = 0; i < panes.length; i++) { var r = panes[i].getBoundingClientRect(); " +
+  "if (r.width > 0 && r.height > 0) { visible = panes[i].id.replace('quickaccess_content_', ''); break; } } " +
+  "return { visiblePane: visible, ownsFocus: !!document.querySelector('.gpfocus'), " +
+  "visibilityState: String(document.visibilityState), paneCount: panes.length, " +
+  "deckyPaneMounted: !!document.getElementById('quickaccess_content_999') }; })()";
+
+/**
  * Ask the Quick Access Menu's own page whether it is open.
  *
  * A focus read answers from whichever page carries the ring. When that is not
@@ -1259,13 +1272,7 @@ export async function probeQuickAccess(
     await sleep(Math.min(pollMs, settleMs - waited));
   }
 
-  const expr =
-    "(() => { var panes = document.querySelectorAll('[id^=\"quickaccess_content_\"]'); var visible = null; " +
-    "for (var i = 0; i < panes.length; i++) { var r = panes[i].getBoundingClientRect(); " +
-    "if (r.width > 0 && r.height > 0) { visible = panes[i].id.replace('quickaccess_content_', ''); break; } } " +
-    "return { visiblePane: visible, ownsFocus: !!document.querySelector('.gpfocus'), " +
-    "visibilityState: String(document.visibilityState), paneCount: panes.length, " +
-    "deckyPaneMounted: !!document.getElementById('quickaccess_content_999') }; })()";
+  const expr = QUICK_ACCESS_PROBE_EXPRESSION;
   try {
     const page = await evaluate<{ visiblePane?: unknown; ownsFocus?: unknown; visibilityState?: unknown; paneCount?: unknown; deckyPaneMounted?: unknown }>(
       rewriteWsHost(qam.webSocketDebuggerUrl!, base),

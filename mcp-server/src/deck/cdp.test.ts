@@ -17,12 +17,16 @@ process.env.DPS_NO_BRIDGE ??= "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startFakeCdp, focusedPage, unfocusedPage } from "./__testutil__/fakeCdp.js";
+import { sandboxHome } from "./__testutil__/sandboxHome.js";
 
 import { evaluate, listTargets, getVersion, rewriteWsHost, hasSteamUiTargets } from "./cdp.js";
 import { readFocusAt, probeQuickAccess } from "./readFocus.js";
 import { pressButton, pressChord, findPadTool, findBridgeTool } from "./pressButton.js";
 import { assertFocusMove } from "./assertFocusMove.js";
 import { openPluginDriven } from "./openPlugin.js";
+
+// The restart note is a file in the config dir: keep it off the real one.
+sandboxHome("dps-open-");
 
 test("lists targets and reads the browser version", async () => {
   const fake = await startFakeCdp(["SharedJSContext"], () => unfocusedPage);

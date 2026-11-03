@@ -33,6 +33,7 @@ import {
   readFocusAt,
   DEFAULT_TARGETS_SETTLE_MS,
   QuickAccessProbe,
+  ReadFocusAtOptions,
   ReadFocusResult,
 } from "./readFocus.js";
 import { focusKey, describe, labelIsBorrowed } from "./focusKey.js";
@@ -40,7 +41,7 @@ import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { acquireFocusIfUnowned } from "./walkTo.js";
 import { readPage } from "./readPage.js";
 import { readRunningApps } from "./gameSession.js";
-import { clearLoaderRestart, msSinceLoaderRestart } from "./loaderRestart.js";
+import { clearLoaderRestart, msSinceLoaderRestart, RESTART_WINDOW_MS } from "./loaderRestart.js";
 
 export interface OpenStage {
   stage: string;
@@ -81,6 +82,29 @@ export interface OpenPluginResult {
     firstSummary: string;
     firstStages: OpenStage[];
   };
+  /**
+   * Present only when A was pressed, the panel did not mount, and a read found
+   * the ring inside a modal or a dialog: which one, and the control it focused.
+   */
+  dialog?: RingDialog;
+}
+
+/** A dialog that holds the gamepad ring, as one read of the page that owns the ring saw it. */
+export interface RingDialog {
+  /** The CEF page the ring was read from. */
+  target: string;
+  /** The dialog's own title as the page renders it, or null when none could be read. */
+  title: string | null;
+  /** The focused control's label, or a description of it when it has none. */
+  focusedControl: string;
+  /** What marked it as a dialog: the container's selector pattern and id. */
+  container: string;
+  /**
+   * "measured": inside a ModalDialogOverlay, the one modal class read on a Deck
+   * (gameSession.ts's exit-game confirmation). "unmeasured": a role or a class
+   * taken from Steam's markup that has never been read on a Deck.
+   */
+  evidence: "measured" | "unmeasured";
 }
 
 /**
@@ -143,6 +167,12 @@ export interface OpenPluginOptions {
   /** Test-only: which machine's reload note to look at. Defaults to the current one. */
   restartMachine?: string;
   /**
+   * Pauses between reads that failed as "rebuilding" inside the restart window
+   * (see whileRebuilding); the last one repeats. Default 250, 500, 1000, 2000 ms.
+   * Tests shorten it.
+   */
+  rebuildingBackoffMs?: number[];
+  /**
    * Test-only seam: substitutes every D-pad press, so the navigation ORDER can
    * be exercised without the bridge board. Production code never sets this and
    * always gets the real press.
@@ -186,6 +216,46 @@ const DECKY_TAB_REOPEN_EVERY_MS = 10_000;
 const AFTER_CHORD_REREAD_MS = 3000;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Pauses between "rebuilding" re-reads; the last repeats until the window closes. */
+const REBUILDING_BACKOFF_MS = [250, 500, 1000, 2000];
+
+/**
+ * The failures that, in the seconds after a plugin_loader restart, mean "CEF's
+ * debugger is rebuilding" rather than "broken". Matched against the reason text
+ * readFocusAt, probeQuickAccess and readPage return, which carry the socket
+ * error's own words. bonsAI's log has two of these from the Deck: "debugger
+ * connection reset" 1 s after a reload (2026-10-22, twice) and "read ECONNRESET"
+ * 3 s after one (2026-10-12). The others are the shapes a restart could take
+ * that nothing has ruled out; the order of them after a real restart is what
+ * deck_probeDebugger records, and is still unmeasured.
+ */
+const REBUILDING_SHAPES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/ECONNRESET/i, "a connection reset"],
+  [/socket hang up/i, "a hang-up"],
+  [/ECONNREFUSED/i, "a refused connect"],
+  [/EPIPE/i, "a broken pipe"],
+  [/connection closed before a reply/i, "a connection closed before its reply"],
+  [/no debuggable targets listed/i, "an empty target list"],
+  [/not enumerable/i, "a target list with only SharedJSContext in it"],
+  [/no Quick Access page is listed/i, "a target list without the Quick Access page"],
+];
+
+/** Which rebuilding shape a failure's reason shows, in words, or null when it is some other failure. */
+export function rebuildingKind(reason: string | null | undefined): string | null {
+  const text = reason ?? "";
+  for (const [re, words] of REBUILDING_SHAPES) if (re.test(text)) return words;
+  return null;
+}
+
+/** The part of a long reason around the socket error, for a stage detail. */
+function clipReason(reason: string): string {
+  for (const [re] of REBUILDING_SHAPES) {
+    const m = re.exec(reason);
+    if (m) return reason.slice(Math.max(0, m.index - 60), m.index + m[0].length + 40).trim();
+  }
+  return reason.length > 140 ? `${reason.slice(0, 137)}...` : reason;
+}
 
 /** What the Quick Access page said about itself after a chord that opened nothing, as a detail suffix. */
 function describeProbe(p: QuickAccessProbe | null): string {
@@ -291,18 +361,111 @@ export function looksLikeOpenPanelFor(r: ReadFocusResult | null, name: string): 
  * endpoint falls back to the labels instead of reading as "not open".
  */
 export async function panelRootMounted(selector: string, cdpBase: string): Promise<boolean | null> {
+  return (await panelRootRead(selector, cdpBase)).value;
+}
+
+/** panelRootMounted, with why the page could not be asked when it could not. */
+async function panelRootRead(selector: string, cdpBase: string): Promise<{ value: boolean | null; reason: string | null }> {
   const expr =
     `(() => { try { var el = document.querySelector(${JSON.stringify(selector)}); ` +
     "if (!el) return false; var r = el.getBoundingClientRect(); " +
     "return r.width > 0 && r.height > 0; } catch (e) { return null; } })()";
   const r = await readPage<boolean | null>({ expression: expr, cdpUrl: cdpBase });
-  if (!r.ok) return null;
+  if (!r.ok) return { value: null, reason: r.reason ?? "the page could not be asked" };
   // readPage falls back to whatever page is listed first when the Quick
   // Access page is absent -- SharedJSContext, during a loader restart -- and
   // that page has no plugin root in it. An answer from anywhere else is not
   // "the panel is not mounted"; it is "the panel could not be asked".
-  if (!(r.target?.title ?? "").toLowerCase().includes("quickaccess")) return null;
-  return typeof r.value === "boolean" ? r.value : null;
+  if (!(r.target?.title ?? "").toLowerCase().includes("quickaccess")) {
+    return {
+      value: null,
+      reason: `no Quick Access page is listed (the answer came from ${r.target?.title ?? "no page"})`,
+    };
+  }
+  return typeof r.value === "boolean" ? { value: r.value, reason: null } : { value: null, reason: "the selector could not be queried" };
+}
+
+/**
+ * Runs in the page that owns the ring: is the focused control inside a modal or
+ * a dialog, and what does that dialog call itself? Read-only. The marker comment
+ * lets a test double tell this read from the others.
+ *
+ * Only ModalDialogOverlay has been read on a Deck (gameSession.ts, the exit-game
+ * confirmation, `#ModalDialogOverlay_Modal_0`). The roles and the two Steam
+ * class names after it are taken from markup nobody here has measured; a dialog
+ * that matches none of them is not named, and the old message stands.
+ */
+export const RING_DIALOG_EXPRESSION = `(() => { /*dps:ring-dialog*/ try {
+  var el = document.querySelector('.gpfocus'); if (!el || !el.closest) return null;
+  var picks = [['[id^="ModalDialogOverlay"]', 'measured'], ['[role="dialog"]', 'unmeasured'],
+    ['[role="alertdialog"]', 'unmeasured'], ['[aria-modal="true"]', 'unmeasured'],
+    ['.ModalPosition', 'unmeasured'], ['.GenericConfirmDialog', 'unmeasured']];
+  var box = null, how = null, ev = null;
+  for (var i = 0; i < picks.length && !box; i++) {
+    var c = el.closest(picks[i][0]);
+    if (c) { box = c; how = picks[i][0]; ev = picks[i][1]; }
+  }
+  if (!box) return null;
+  var title = null;
+  var h = box.querySelector('.DialogHeader, h1, h2, h3, [role="heading"]');
+  if (h && h.textContent) title = h.textContent.trim();
+  if (!title) title = box.getAttribute('aria-label');
+  if (!title) {
+    var lb = box.getAttribute('aria-labelledby');
+    var le = lb ? document.getElementById(lb) : null;
+    if (le) title = (le.textContent || '').trim();
+  }
+  if (!title) title = String(box.innerText || box.textContent || '').trim().split('\\n')[0];
+  if (title && title.length > 80) title = title.slice(0, 77) + '...';
+  return { container: how + (box.id ? ' #' + box.id : ''), title: title || null, evidence: ev };
+} catch (e) { return null; } })()`;
+
+/**
+ * After a mount check failed: is the ring in a dialog? Null when the ring is
+ * unowned or nothing marks its control as inside one. Read-only.
+ */
+export async function dialogOwningRing(cdpBase: string, after: ReadFocusResult | null): Promise<RingDialog | null> {
+  if (!after?.ok || !after.target) return null;
+  const focusedControl = labelOf(after) || describe(after);
+  const r = await readPage<{ container?: unknown; title?: unknown; evidence?: unknown } | null>({
+    expression: RING_DIALOG_EXPRESSION,
+    target: after.target.title,
+    cdpUrl: cdpBase,
+    timeoutMs: 5000,
+  });
+  const v = r.ok && r.target?.title === after.target.title ? r.value : null;
+  if (v && typeof v.container === "string") {
+    return {
+      target: after.target.title,
+      title: typeof v.title === "string" && v.title ? v.title : null,
+      focusedControl,
+      container: v.container,
+      evidence: v.evidence === "measured" ? "measured" : "unmeasured",
+    };
+  }
+  // The page could not be asked, or saw no container: the focus read's own
+  // selectors still carry the one measured modal id.
+  const selectors = [after.gpfocus?.selector, ...after.gpfocusWithin.map((w) => w.selector)].filter(
+    (s): s is string => Boolean(s),
+  );
+  const modal = selectors.find((s) => s.includes("ModalDialogOverlay"));
+  if (!modal) return null;
+  return {
+    target: after.target.title,
+    title: null,
+    focusedControl,
+    container: `ModalDialogOverlay (from the focus read's selector ${modal})`,
+    evidence: "measured",
+  };
+}
+
+/** One sentence naming the dialog, for a reason or a stage detail. */
+function dialogSentence(d: RingDialog): string {
+  return (
+    `a dialog holds the ring: ${d.title ? `"${d.title}"` : "an untitled dialog"} in ${d.target} ` +
+    `(${d.container}${d.evidence === "unmeasured" ? ", a marker never measured on a Deck" : ""}), ` +
+    `focused control "${d.focusedControl}"`
+  );
 }
 
 export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPluginResult> {
@@ -373,13 +536,101 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
   const press = opts.pressFn ?? pressButton;
   const chord = opts.chordFn ?? pressChord;
 
+  /*
+   * A RESET INSIDE THE RESTART WINDOW IS "REBUILDING", NOT A FAILURE (plan 12
+   * lane A).
+   *
+   * The Deck, 2026-10-22, bonsAI's stricter set: 1 of 3, both failures 1 s
+   * after the reload with a "debugger connection reset". In the seconds after
+   * plugin_loader restarts, CEF's debugger resets connections, and a read that
+   * lands there used to end the call (or, worse, read as "nothing owns the
+   * ring" and earn a blind DOWN press). So while a restart note is fresh
+   * (loaderRestart.ts, 120 s), every read in this call that fails with a
+   * reset, a hang-up, a refused connect or an empty target list is read again
+   * with backoff until it answers or the window closes. Nothing is pressed
+   * while waiting. Outside the window, or for any other failure, the read's
+   * first answer stands, as before. The window runs 120 s from the restart
+   * itself: the note being cleared once the Quick Access page has answered
+   * (below) ends the wait for that page, not this window, so the retry inside
+   * openPluginRetry.ts and a later call still get it.
+   *
+   * What CEF really does in that window has not been measured; the shapes
+   * here are the ones the log names plus the ones nothing has ruled out.
+   * deck_probeDebugger records the real sequence.
+   */
+  const sinceRestart = msSinceLoaderRestart(opts.restartMachine);
+  const sinceRestartAny = msSinceLoaderRestart(opts.restartMachine, Date.now(), { includeCleared: true });
+  const windowEndsAt = sinceRestartAny === null ? null : Date.now() - sinceRestartAny + RESTART_WINDOW_MS;
+  const backoff = opts.rebuildingBackoffMs?.length ? opts.rebuildingBackoffMs : REBUILDING_BACKOFF_MS;
+
+  const whileRebuilding = async <T>(
+    what: string,
+    run: () => Promise<T>,
+    failure: (r: T) => string | null,
+  ): Promise<T> => {
+    let r = await run();
+    let why = failure(r);
+    if (windowEndsAt === null || why === null || !rebuildingKind(why) || Date.now() >= windowEndsAt) return r;
+    const first = why;
+    const firstKind = rebuildingKind(why)!;
+    const started = Date.now();
+    const intoRestartS = Math.round((started - (windowEndsAt - RESTART_WINDOW_MS)) / 1000);
+    let tries = 0;
+    while (why !== null && rebuildingKind(why) && Date.now() < windowEndsAt) {
+      abortIfStopped();
+      await sleep(Math.max(0, Math.min(backoff[Math.min(tries, backoff.length - 1)], windowEndsAt - Date.now())));
+      r = await run();
+      tries++;
+      why = failure(r);
+    }
+    const cured = why === null || !rebuildingKind(why);
+    stages.push({
+      stage: "wait-rebuilding",
+      ok: cured,
+      detail:
+        `${what} ${intoRestartS} s after the plugin_loader restart failed with ${firstKind} (${clipReason(first)}); ` +
+        `read again ${tries} time${tries === 1 ? "" : "s"} over ${Date.now() - started} ms, ` +
+        (cured
+          ? why === null
+            ? "and it answered"
+            : `and it then failed another way: ${clipReason(why)}`
+          : `and it was still failing when the ${RESTART_WINDOW_MS / 1000} s window closed (${clipReason(why ?? "")})`),
+      presses: 0,
+    });
+    return r;
+  };
+
+  /** Every focus read in this call. */
+  const read = (timeoutMs: number, at?: ReadFocusAtOptions): Promise<ReadFocusResult> =>
+    whileRebuilding(
+      "a focus read",
+      () => readFocusAt(cdpBase!, timeoutMs, undefined, at),
+      (r) => (r.ok ? null : r.reason ?? "could not read focus"),
+    );
+  /** Every read of the Quick Access page's own state in this call. */
+  const probe = (o: ReadFocusAtOptions & { timeoutMs?: number }): Promise<QuickAccessProbe> =>
+    whileRebuilding(
+      "a read of the Quick Access page",
+      () => probeQuickAccess(cdpBase!, o),
+      (p) => (p.answered ? null : p.reason ?? "the Quick Access page could not be read"),
+    );
+  /** Every ask of the plugin's root selector in this call. */
+  const rootMountedNow = async (selector: string): Promise<boolean | null> =>
+    (
+      await whileRebuilding(
+        "a read of the panel's root",
+        () => panelRootRead(selector, cdpBase!),
+        (r) => (r.value === null ? r.reason : null),
+      )
+    ).value;
+
   /** A D-pad press followed by a settle and a fresh read. Never A, never B. */
   const nudge = async (dir: "UP" | "DOWN" | "LEFT" | "RIGHT"): Promise<ReadFocusResult> => {
     abortIfStopped();
     const p = await press({ buttons: [dir], port: opts.port });
     if (!p.ok) throw new Error(p.reason ?? "press failed");
     await sleep(180);
-    return readFocusAt(cdpBase!, 10_000);
+    return read(10_000);
   };
 
   /**
@@ -416,7 +667,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
 
     for (;;) {
       abortIfStopped();
-      const p = await probeQuickAccess(cdpBase!, { targetsSettleMs: 0, timeoutMs: 5000 });
+      const p = await probe({ targetsSettleMs: 0, timeoutMs: 5000 });
       const waitedMs = Date.now() - started;
       // Only a page that answered, with a pane on screen, can say the tab is missing.
       const missing = p.answered && p.visiblePane !== null && p.deckyPaneMounted === false;
@@ -466,7 +717,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         await sleep(900);
         let shut = false;
         for (const until = Date.now() + AFTER_CHORD_REREAD_MS; ; ) {
-          const q = await probeQuickAccess(cdpBase!, { targetsSettleMs: 0, timeoutMs: 5000 });
+          const q = await probe({ targetsSettleMs: 0, timeoutMs: 5000 });
           if (q.answered && q.visiblePane === null) {
             shut = true;
             break;
@@ -491,7 +742,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         await sleep(900);
         let opened = false;
         for (const until = Date.now() + AFTER_CHORD_REREAD_MS; ; ) {
-          const q = await probeQuickAccess(cdpBase!, { targetsSettleMs: 0, timeoutMs: 5000 });
+          const q = await probe({ targetsSettleMs: 0, timeoutMs: 5000 });
           if (q.answered && q.visiblePane !== null) {
             opened = true;
             break;
@@ -543,9 +794,8 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
      * is read or pressed until the Quick Access page is listed and has
      * answered. If it never does, the call refuses with nothing pressed.
      */
-    const sinceRestart = msSinceLoaderRestart(opts.restartMachine);
     if (sinceRestart !== null) {
-      const wait = await probeQuickAccess(cdpBase, {
+      const wait = await probe({
         timeoutMs: 10_000,
         targetsSettleMs: opts.afterRestartSettleMs ?? AFTER_RESTART_SETTLE_MS,
       });
@@ -568,7 +818,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
       }
       clearLoaderRestart(opts.restartMachine);
     }
-    let focus = await readFocusAt(cdpBase, 10_000, undefined, settle);
+    let focus = await read(10_000, settle);
 
     /*
      * NO RING ANYWHERE: an unowned ring in Steam's UI, or a game?
@@ -594,7 +844,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
      * list must not turn into a stray press either way.
      */
     if (!focus.ok && (focus.reason ?? "").includes("gpfocus marker not found")) {
-      const qam = await probeQuickAccess(cdpBase, { ...settle, timeoutMs: 10_000 });
+      const qam = await probe({ ...settle, timeoutMs: 10_000 });
       if (qam.answered && qam.visiblePane === null) {
         const running = await readRunningApps(cdpBase).catch(() => null);
         const apps = running?.ok ? running.apps : null;
@@ -620,14 +870,14 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
           );
         }
         await sleep(900);
-        focus = await readFocusAt(cdpBase, 10_000);
+        focus = await read(10_000);
         // The ring may still be unowned with the menu open (doc 03), or read
         // from a page other than the Quick Access one; the page's own word
         // decides whether Steam UI is on screen now.
         let paneAfter: string | null = focus.ok ? focus.visibleQuickAccessTab : null;
         let lastProbe: QuickAccessProbe | null = null;
         if (paneAfter === null) {
-          const again = await probeQuickAccess(cdpBase, { ...settle, timeoutMs: 10_000 });
+          const again = await probe({ ...settle, timeoutMs: 10_000 });
           lastProbe = again;
           paneAfter = again.answered ? again.visiblePane : null;
         }
@@ -760,7 +1010,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
        */
       let menuShut = isQuickAccessTarget(focus);
       if (!menuShut) {
-        const qam = await probeQuickAccess(cdpBase, { ...settle, timeoutMs: 10_000 });
+        const qam = await probe({ ...settle, timeoutMs: 10_000 });
         stages.push({
           stage: "probe-qam",
           ok: qam.answered,
@@ -790,7 +1040,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
           const deadline = Date.now() + 3000;
           while (!(focus.ok && isQuickAccessTarget(focus)) && Date.now() < deadline) {
             await sleep(300);
-            focus = await readFocusAt(cdpBase, 10_000);
+            focus = await read(10_000);
           }
           const settled = focus.ok && isQuickAccessTarget(focus);
           stages.push({
@@ -820,7 +1070,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
           return fail(p.reason ?? "chord failed", focus, "the QAM chord could not be delivered");
         }
         await sleep(900);
-        focus = await readFocusAt(cdpBase, 10_000);
+        focus = await read(10_000);
         /*
          * A SLOW MENU IS NOT A FAILED CHORD. One read 900 ms after the toggle
          * reported "no pane became visible" for a menu that drew a moment later,
@@ -831,12 +1081,12 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         const reReadUntil = Date.now() + AFTER_CHORD_REREAD_MS;
         while (!(focus.ok && focus.visibleQuickAccessTab !== null) && Date.now() < reReadUntil) {
           await sleep(300);
-          focus = await readFocusAt(cdpBase, 10_000);
+          focus = await read(10_000);
         }
         const opened = focus.ok && focus.visibleQuickAccessTab !== null;
         // A chord that opened nothing: record what the Quick Access page says about
         // itself, so the next failure shows whether the overlay was ever shown.
-        const diag = opened ? null : await probeQuickAccess(cdpBase, { targetsSettleMs: 0, timeoutMs: 5000 });
+        const diag = opened ? null : await probe({ targetsSettleMs: 0, timeoutMs: 5000 });
         stages.push({
           stage: "open-qam",
           ok: opened,
@@ -879,7 +1129,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
         }
         if (railWait.reopened) {
           // The menu is a fresh one: the old read of the ring is stale.
-          focus = await readFocusAt(cdpBase, 10_000);
+          focus = await read(10_000);
           if (!focus.ok) {
             abortIfStopped();
             const outcome = await acquireFocusIfUnowned(focus, {
@@ -1016,7 +1266,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
     const rootSelector = (opts.rootSelector ?? "").trim();
     let rootMounted: boolean | null = null;
     if (rootSelector) {
-      rootMounted = await panelRootMounted(rootSelector, cdpBase);
+      rootMounted = await rootMountedNow(rootSelector);
       stages.push({
         stage: "check-panel-root",
         ok: rootMounted !== null,
@@ -1114,7 +1364,7 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
       return fail(activate.reason ?? "press failed", focus, "the A press could not be delivered");
     }
     await sleep(700);
-    const after = await readFocusAt(cdpBase, 10_000);
+    const after = await read(10_000);
 
     /*
      * Opening a Decky plugin leaves the ring unowned -- measured, see
@@ -1126,14 +1376,36 @@ export async function openPluginDriven(opts: OpenPluginOptions): Promise<OpenPlu
      * half of P1-9: the tool reported success having never asked the Deck
      * whether the plugin actually came up.
      */
-    const openedRoot = rootSelector ? await panelRootMounted(rootSelector, cdpBase) : null;
+    const openedRoot = rootSelector ? await rootMountedNow(rootSelector) : null;
     if (openedRoot === false) {
+      /*
+       * NAME THE DIALOG. On this-pc (2026-10-08) this said "the panel did not
+       * mount" while bonsAI's first-run dialog held the ring, which sent the
+       * caller looking at the wrong thing. When the read after the press puts
+       * the ring inside a modal or a dialog, the failure says which, and what
+       * it focused. Read-only, and nothing more is pressed: a press into a
+       * dialog nobody identified is the accident rule 2 exists to prevent.
+       */
+      const dialog = await dialogOwningRing(cdpBase, after).catch(() => null);
       stages.push({
         stage: "activate",
         ok: false,
-        detail: `pressed A on "${pluginName}" but "${rootSelector}" never appeared in the document`,
+        detail:
+          `pressed A on "${pluginName}" but "${rootSelector}" never appeared in the document` +
+          (dialog ? `; ${dialogSentence(dialog)}` : after.ok ? `; the ring is on ${describe(after)}` : ""),
         presses: 1,
       });
+      if (dialog) {
+        return {
+          ...fail(
+            `A was pressed on a control labelled "${pluginName}" but the panel did not mount: ${dialogSentence(dialog)}`,
+            after,
+            `a dialog took the ring instead of "${pluginName}"'s panel - ${dialog.title ? `"${dialog.title}"` : "untitled"}, ` +
+              `focused on "${dialog.focusedControl}"; nothing more was pressed. Deal with the dialog on the Deck, then call again`,
+          ),
+          dialog,
+        };
+      }
       return fail(
         `A was pressed on a control labelled "${pluginName}" but the panel did not mount ` +
           `("${rootSelector}" is absent)`,
