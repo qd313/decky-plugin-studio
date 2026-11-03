@@ -55,6 +55,7 @@ import { saveCheck, replayChecks } from "./checks/checkRunner.js";
 import { checkDeckReady, DeclaredState } from "./deck/checkReady.js";
 import { bigPictureStatus, focusBigPicture, defaultRestoreWindow } from "./deck/foreground.js";
 import { holdAwake, restorePowerSettings } from "./deck/holdAwake.js";
+import { sleepWakeDeadlineMs } from "./deck/sleepWake.js";
 import { snapshotSettings, restoreSettings } from "./deck/settingsSnapshot.js";
 import { loadPluginConfig } from "./pluginConfig.js";
 import {
@@ -123,6 +124,7 @@ const DRIVING_TOOLS: ReadonlySet<string> = new Set([
   "deck_deploy",
   "deck_reloadPlugin",
   "deck_holdAwake",
+  "deck_sleepAndWake",
   "deck_snapshotSettings",
   "deck_record",
   "deck_captureScreenshot",
@@ -225,7 +227,13 @@ async function handleTool(method: string, params: Record<string, unknown>): Prom
   const { source, rest: args } = taken;
   // A call that asked for its own limit keeps it; otherwise a tool with a
   // shorter default than its class gets that one (deck_typeText: 60 s).
-  const deadlineMs = source === "default" ? (TOOL_DEFAULT_DEADLINE_MS[tool] ?? taken.deadlineMs) : taken.deadlineMs;
+  // deck_sleepAndWake waits out the sleep itself: its deadline is seconds + 180 s.
+  const deadlineMs =
+    tool === "deck_sleepAndWake"
+      ? sleepWakeDeadlineMs(args.seconds, taken.deadlineMs, source)
+      : source === "default"
+        ? (TOOL_DEFAULT_DEADLINE_MS[tool] ?? taken.deadlineMs)
+        : taken.deadlineMs;
   // Plan 12 lane B: a bad outDir refuses here, before the queue or a press, not
   // after a sweep whose evidence write then fails quietly.
   if (args.outDir != null) {
@@ -813,6 +821,9 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
 
     case "tools/deck_restorePowerSettings":
       return restorePowerSettings();
+
+    case "tools/deck_sleepAndWake":
+      return deckAutonomy.sleepAndWakeFromParams(params);
 
     case "tools/deck_snapshotSettings":
       return snapshotSettings({

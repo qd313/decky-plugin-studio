@@ -1003,6 +1003,51 @@ export const TOOLS: ToolDef[] = [
     inputSchema: noArgs,
   },
   {
+    name: "deck_sleepAndWake",
+    description:
+      "Put the real Deck to sleep, let it wake itself after `seconds`, and record where the focus ring was before " +
+      "and where it is after -- for a bug that only shows after a sleep and wake. Runs only on kind 'deck' with os " +
+      "steamos or bazzite; every stand-in, every Windows machine and a local server are refused before anything " +
+      "else. Refuses, with nothing slept, when: seconds is under 45 or over 600; a game is running (RunningApps over " +
+      "CDP AND the process list over SSH, as deck_exitGame asks; a check that could not be made is a refusal too); a " +
+      "logind block inhibitor on sleep is held by anyone (logind would refuse the suspend -- deck_holdAwake's lock is " +
+      "released with deck_restorePowerSettings); the killswitch is set. THE WAY BACK IS ARMED FIRST: `sudo -n rtcwake " +
+      "-m no -s <seconds>` over SSH, then /sys/class/rtc/rtc0/wakealarm is read back and compared with the Deck's own " +
+      "clock plus seconds (within 5 s); a failed or disagreeing read-back clears the alarm and refuses. Needs a " +
+      "NOPASSWD sudo rule for the Deck's user, as deck_holdAwake does. Then the before state (focus, route, uptime -s, " +
+      "the killswitch files on this PC) is written to runs/sleep-wake_<ts>.json BEFORE the suspend. The suspend is " +
+      "SteamClient.System.SuspendPC() in SharedJSContext over CDP -- the call Steam's idle timer makes (measured " +
+      "2026-09-08) -- reported as via 'steam-suspend-call', fidelity null: not a press. via 'power-menu' is accepted " +
+      "and refuses as not implemented. SSH must stop answering within 30 s (else suspended:false, the alarm is " +
+      "cleared, and it stops) and answer again within seconds + 60 s (else back:false: press the power button). On " +
+      "the way back it opens a fresh CDP tunnel and reads focus WITHOUT pressing anything and WITHOUT opening the " +
+      "panel; a ring that came back somewhere else is reported (focusMoved:true, focusReport), never fixed. The alarm " +
+      "is cleared at the end whether or not it fired, read back, and ok is false if it could not be. Result: before / " +
+      "after (focus with visibility, route, uptimeSince, killswitch), suspendedForMs and sshBackAfterMs (SSH probes, " +
+      "2-3 s steps), alarmFired (best effort), alarmCleared, rebooted, journal (suspend and resume lines, best " +
+      "effort), stages, runFile. Its deadline is seconds + 180 s; a shorter deadlineMs is refused. DEVICE-UNVERIFIED " +
+      "as a whole: only the rtcwake arm/clear and the SuspendPC call were measured, separately.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        seconds: {
+          type: "number",
+          description:
+            "How long the Deck sleeps before its RTC alarm wakes it: 45..600. Measured 2026-09-08: back on the network about 7 s after the resume.",
+        },
+        via: {
+          type: "string",
+          enum: ["steam-suspend-call", "power-menu"],
+          default: "steam-suspend-call",
+          description:
+            "How the Deck is put to sleep. 'steam-suspend-call' is SteamClient.System.SuspendPC() over CDP. 'power-menu' is not built yet and refuses.",
+        },
+      },
+      required: ["seconds"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "deck_snapshotSettings",
     description:
       "Copy the plugin's settings directory on the Deck (~/homebrew/settings/<name>), and " +

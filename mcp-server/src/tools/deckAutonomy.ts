@@ -34,6 +34,7 @@ import {
   FIRMWARE_PRE_07,
   parseStatusFirmware,
 } from "../deck/bridgeTools.js";
+import { sleepAndWake, SleepWakeResult } from "../deck/sleepWake.js";
 
 function shellCmd(): string {
   return process.platform === "win32" ? "cmd.exe" : "/bin/sh";
@@ -614,4 +615,17 @@ export async function readBridgeFirmware(
   }
   const r = await (opts.probe ?? probeBridge)();
   return { probed: true, firmware: r.bridgeFirmware, port: r.port, ...(r.reason ? { reason: r.reason } : {}) };
+}
+
+/**
+ * deck_sleepAndWake's arguments, as the dispatch hands them over. Only
+ * `seconds` and `via` reach the tool; `machine` and `deadlineMs` were taken
+ * off at the seam (index.ts), and the deadline for this tool is seconds +
+ * 180 s there (sleepWakeDeadlineMs).
+ */
+export function sleepAndWakeFromParams(params: Record<string, unknown>): Promise<SleepWakeResult> {
+  return sleepAndWake({
+    seconds: params.seconds != null ? Number(params.seconds) : Number.NaN,
+    via: params.via != null ? String(params.via) : undefined,
+  });
 }
