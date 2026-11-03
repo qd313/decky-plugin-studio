@@ -25,6 +25,7 @@ import { pressButton } from "./pressButton.js";
 import { readFocusAt, ReadFocusResult } from "./readFocus.js";
 import { focusKey, describe } from "./focusKey.js";
 import { earnedFidelity, type Fidelity } from "./fidelity.js";
+import { attachNamedEvidence } from "../evidenceName.js";
 
 export interface AssertFocusMoveResult {
   ok: boolean;
@@ -59,11 +60,25 @@ export interface AssertFocusMoveOptions {
   cdpUrl?: string;
   /** How long to wait for focus to stop changing. */
   settleTimeoutMs?: number;
+  /** Writes the result as runs/<saveAs>.json (sanitised) and returns its path as evidenceFile. */
+  saveAs?: string;
+  /** The testing row this press belongs to; goes in that file and the ledger line. */
+  rowId?: string;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
 
+/**
+ * The tool entry. A press-and-check used to leave no file of its own; with
+ * `saveAs` it does (evidenceName.ts), and without it nothing changes.
+ */
 export async function assertFocusMove(
+  opts: AssertFocusMoveOptions,
+): Promise<AssertFocusMoveResult & { evidenceFile?: string; evidenceError?: string; rowId?: string }> {
+  return attachNamedEvidence("deck_assertFocusMove", await assertFocusMoveRun(opts), opts);
+}
+
+async function assertFocusMoveRun(
   opts: AssertFocusMoveOptions,
 ): Promise<AssertFocusMoveResult> {
   const press = (Array.isArray(opts.press) ? opts.press : [opts.press]).map((b) =>

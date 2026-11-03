@@ -16,6 +16,8 @@ import {
   checkMachines,
   checkDeckEnv,
   checkKillswitch,
+  checkLedgerWritable,
+  ALL_CHECKS,
   type DoctorContext,
   type CheckFn,
 } from "./doctor.js";
@@ -233,4 +235,56 @@ test("a check that throws is unknown for that check and the others still run", a
   assert.equal(report.failCount, 1);
   assert.equal(report.unknownCount, 1);
   assert.equal(report.checks[0].name, "failing", "failures sort first");
+});
+
+// ---- 8. the run ledger folder ----------------------------------------------
+
+test("ledger check: a workspace with no runs/ yet is fine, and the probe leaves nothing behind", async () => {
+  const ws = tmp("ledger-missing");
+  const c = await checkLedgerWritable(ctxFor(ws));
+  assert.equal(c.ok, true);
+  assert.match(c.saw, /does not exist yet; the first call creates it/);
+  assert.deepEqual(fs.readdirSync(ws), [], "no folder made, no file left");
+});
+
+test("ledger check: an existing ledger folder is writable, and a server that has written says so", async () => {
+  const ws = tmp("ledger-there");
+  fs.mkdirSync(path.join(ws, "runs", "ledger"), { recursive: true });
+  const c = await checkLedgerWritable(
+    ctxFor(ws, { ledgerStatus: () => ({ session: "S", file: "f", appended: 3, lastError: null }) }),
+  );
+  assert.equal(c.ok, true);
+  assert.match(c.saw, /session S has written 3 lines without error/);
+  assert.deepEqual(fs.readdirSync(path.join(ws, "runs", "ledger")), []);
+});
+
+test("ledger check: runs is a file, so the ledger cannot exist -- failing, with what to move", async () => {
+  const ws = tmp("ledger-file");
+  fs.writeFileSync(path.join(ws, "runs"), "not a folder");
+  const c = await checkLedgerWritable(ctxFor(ws));
+  assert.equal(c.ok, false);
+  assert.match(c.saw, /is a file/);
+  assert.match(c.fix, /Move /);
+});
+
+test("ledger check: a server whose last ledger write failed is failing even when a probe file can be made", async () => {
+  const ws = tmp("ledger-lasterr");
+  fs.mkdirSync(path.join(ws, "runs", "ledger"), { recursive: true });
+  const c = await checkLedgerWritable(
+    ctxFor(ws, { ledgerStatus: () => ({ session: "S", file: "x/S.ndjson", appended: 0, lastError: "EBUSY: resource busy or locked" }) }),
+  );
+  assert.equal(c.ok, false);
+  assert.match(c.saw, /last ledger write failed: EBUSY/);
+});
+
+test("ledger check: nowhere to try is unknown, never a pass", async (t) => {
+  if (process.platform !== "win32") return t.skip("needs a drive letter that does not exist; Windows only");
+  const free = "ZYXWVUTSRQPONMLKJIHGFED".split("").find((d) => !fs.existsSync(`${d}:/`));
+  if (!free) return t.skip("every drive letter exists");
+  const c = await checkLedgerWritable(ctxFor(`${free}:/no/such/place`));
+  assert.equal(c.ok, "unknown");
+});
+
+test("ledger check is one of the doctor's checks", () => {
+  assert.ok(ALL_CHECKS.some(([name]) => name === "Run ledger folder is writable"));
 });

@@ -1466,3 +1466,27 @@ test("a press the bridge cannot deliver is reported at its stage, not as a miss"
   assert.equal(r.stages[r.stages.length - 1].stage, "open-main-menu");
   assert.equal(r.stages[r.stages.length - 1].ok, false);
 });
+
+test("saveAs names the launch and exit evidence files (wins over runName), and rowId is in each", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "dps-gamesession-saveas-"));
+  const previous = process.env.DECKY_STUDIO_WORKSPACE;
+  process.env.DECKY_STUDIO_WORKSPACE = workspace;
+  try {
+    const deck = fakeDeck({ shelf: [HL2.appid] });
+    const r = await launchGame({ ...deck.seams, writeEvidence: true, runName: "ignored", saveAs: "../../p12c-launch", rowId: "ROW-L", name: "Half-Life 2" });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.evidenceFile, path.join(workspace, "runs", "p12c-launch.json"));
+    assert.equal(JSON.parse(fs.readFileSync(r.evidenceFile!, "utf8")).rowId, "ROW-L");
+
+    const exit = await exitGame({ ...fakeDeck({ running: [HL2] }).seams, writeEvidence: true, saveAs: "p12c-exit.json", rowId: "ROW-L" });
+    assert.equal(exit.evidenceFile, path.join(workspace, "runs", "p12c-exit.json"));
+    assert.equal(JSON.parse(fs.readFileSync(exit.evidenceFile!, "utf8")).rowId, "ROW-L");
+
+    const plain = await exitGame({ ...fakeDeck({ running: [HL2] }).seams, writeEvidence: true, runName: "plain-exit" });
+    assert.equal("rowId" in JSON.parse(fs.readFileSync(plain.evidenceFile!, "utf8")), false);
+  } finally {
+    if (previous === undefined) delete process.env.DECKY_STUDIO_WORKSPACE;
+    else process.env.DECKY_STUDIO_WORKSPACE = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});

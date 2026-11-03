@@ -41,6 +41,7 @@ import { findCycle, CycleReport, Visit } from "./runSequence.js";
 import { pressButton } from "./pressButton.js";
 import { weakestFidelity, type Fidelity } from "./fidelity.js";
 import { getWorkspaceArtifactsDir, timestamp } from "../tools/captureOrchestrator.js";
+import { evidencePath } from "../evidenceName.js";
 
 export type LaneButton = "LB" | "RB";
 
@@ -75,6 +76,10 @@ export interface SweepOptions {
   cdpUrl?: string;
   /** Name for the evidence file. Defaults to sweep_<timestamp>. */
   runName?: string;
+  /** Names the evidence file (sanitised, ".json" kept; wins over runName). See evidenceName.ts. */
+  saveAs?: string;
+  /** The testing row this run belongs to; copied into the evidence file and the ledger line. */
+  rowId?: string;
   /** Set false to skip writing an evidence file. Default true. */
   writeEvidence?: boolean;
   /** Folder for the evidence file: absolute, or relative to the workspace. Default `<workspace>/runs`. */
@@ -148,6 +153,8 @@ export interface NotVisibleStop {
 /** The evidence file, exactly. Nothing in here depends on the clock. */
 export interface SweepReport {
   tool: "deck_sweep";
+  /** Only present when the caller passed a rowId, so an unnamed run's file is unchanged. */
+  rowId?: string;
   pattern: {
     direction: WalkDirection;
     returnTrip: boolean;
@@ -281,6 +288,7 @@ export async function sweep(opts: SweepOptions = {}): Promise<SweepResult> {
     const { totals, notVisible } = summarize(stops, legs, presses);
     const report: SweepReport = {
       tool: "deck_sweep",
+      ...(opts.rowId ? { rowId: opts.rowId } : {}),
       pattern,
       ok,
       reason: extra.reason,
@@ -304,8 +312,7 @@ export async function sweep(opts: SweepOptions = {}): Promise<SweepResult> {
     if (opts.writeEvidence !== false && stops.length > 0) {
       try {
         const dir = getWorkspaceArtifactsDir("runs", opts.outDir);
-        const name = (opts.runName ?? `sweep_${timestamp()}`).replace(/[^A-Za-z0-9._-]/g, "_");
-        const file = path.join(dir, `${name}.json`);
+        const file = evidencePath(dir, { saveAs: opts.saveAs, runName: opts.runName, fallback: `sweep_${timestamp()}`, ext: ".json" });
         // The report, not the result: durationMs and the file's own path would
         // make every diff against a baseline dirty.
         fs.writeFileSync(file, JSON.stringify(report, null, 2) + "\n", "utf8");

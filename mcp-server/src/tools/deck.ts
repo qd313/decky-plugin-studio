@@ -34,6 +34,7 @@ import {
   timestamp,
 } from "./captureOrchestrator.js";
 import { withImage } from "../toolContent.js";
+import { evidencePath } from "../evidenceName.js";
 import { captureStandinWindows } from "../deck/cdpScreenshot.js";
 
 let tunnelProcess: ReturnType<typeof spawn> | null = null;
@@ -181,13 +182,19 @@ function refuseCaptureOnWindows(m: Machine, tool: string): void {
 export async function captureScreenshot(
   mode: string,
   allowNonPluginUi = false,
+  /** Names the PNG (sanitised, ".png" kept). Default DeckCapture_<ts>_<mode>.png. See evidenceName.ts. */
+  saveAs?: string,
   outDir?: string,
 ): Promise<{ path: string; bytes: number; mode: string; method: string; quickAccessPagePresent?: boolean }> {
   const m = currentMachine();
   if (m.os === "windows") {
     // A Windows stand-in has no gamescope or Wayland compositor: take the picture over
     // Steam's CEF debugger instead, falling back to a PowerShell window grab.
-    const outPath = path.join(getWorkspaceArtifactsDir("screenshots", outDir), `DeckCapture_${timestamp()}_bigpicture.png`);
+    const outPath = evidencePath(getWorkspaceArtifactsDir("screenshots", outDir), {
+      saveAs,
+      fallback: `DeckCapture_${timestamp()}_bigpicture`,
+      ext: ".png",
+    });
     const shot = await captureStandinWindows(
       { outPath },
       () => path.join(getScriptsDir(), "standin", "windows", "grab-window.ps1"),
@@ -206,7 +213,11 @@ export async function captureScreenshot(
   const host = m.host;
   const user = m.user ?? DEFAULT_SSH_USER;
   const ts = timestamp();
-  const outPath = path.join(getWorkspaceArtifactsDir("screenshots", outDir), `DeckCapture_${ts}_${mode}.png`);
+  const outPath = evidencePath(getWorkspaceArtifactsDir("screenshots", outDir), {
+    saveAs,
+    fallback: `DeckCapture_${ts}_${mode}`,
+    ext: ".png",
+  });
 
   const remoteFile = "/tmp/deck_ui_capture.png";
   const remoteDiag = "/tmp/studio-capture.diag";
@@ -283,6 +294,8 @@ export async function recordDeck(
   mode: string,
   quality = "compressed",
   allowNonPluginUi = false,
+  /** Names the recording (sanitised, ".mkv" kept). Default DeckRecord_<ts>_<mode>.mkv. See evidenceName.ts. */
+  saveAs?: string,
   outDir?: string,
 ): Promise<{ path: string; bytes: number; mode: string; method: string; seconds: number }> {
   const m = currentMachine();
@@ -293,10 +306,11 @@ export async function recordDeck(
   const duration = Math.max(1, Number(seconds) || 10);
   const ts = timestamp();
   const suffixMode = mode === "auto" ? "auto" : mode;
-  const outPath = path.join(
-    getWorkspaceArtifactsDir("recordings", outDir),
-    `DeckRecord_${ts}_${suffixMode}.mkv`
-  );
+  const outPath = evidencePath(getWorkspaceArtifactsDir("recordings", outDir), {
+    saveAs,
+    fallback: `DeckRecord_${ts}_${suffixMode}`,
+    ext: ".mkv",
+  });
 
   const remoteFile = "/tmp/deck_record.mkv";
   const remoteDiag = "/tmp/studio-record.diag";

@@ -55,6 +55,13 @@ export interface FieldCheck {
   actual: unknown;
   verdict: Verdict;
   reason: string;
+  /**
+   * buildMatches only: the local build's hash, when the comparison ran. With
+   * `actual: true` it is also the hash of what is installed on the machine
+   * (that is what "matches" means). The run ledger (ledger.ts) reads it so a
+   * ledger line can name the build without reading the Deck again.
+   */
+  localHash?: string | null;
 }
 
 function pass(declared: unknown, actual: unknown, reason: string): FieldCheck {
@@ -183,13 +190,16 @@ function checkBuildMatches(declared: boolean, opts: CheckReadyOptions): FieldChe
       return unknown(declared, local.reason ?? "could not verify the installed build");
     }
     const word = (b: boolean) => (b ? "matches the local build" : "does not match the local build");
-    return local.matches === declared
-      ? pass(
-          declared,
-          local.matches,
-          local.reason ?? `the installed build ${word(local.matches)} (${local.localCount} file(s))`,
-        )
-      : fail(declared, local.matches, local.reason ?? `the installed build ${word(local.matches)}`);
+    return {
+      ...(local.matches === declared
+        ? pass(
+            declared,
+            local.matches,
+            local.reason ?? `the installed build ${word(local.matches)} (${local.localCount} file(s))`,
+          )
+        : fail(declared, local.matches, local.reason ?? `the installed build ${word(local.matches)}`)),
+      localHash: local.localHash,
+    };
   }
   const missing = [
     !pluginRoot && "pluginRoot",
@@ -205,13 +215,16 @@ function checkBuildMatches(declared: boolean, opts: CheckReadyOptions): FieldChe
     return unknown(declared, result.reason ?? "could not verify the deployed build");
   }
   const describe = (b: boolean) => (b ? "matches the local build" : "does not match the local build");
-  return result.matches === declared
-    ? pass(
-        declared,
-        result.matches,
-        result.reason ?? `the deployed build ${describe(result.matches)} (${result.localCount} file(s))`,
-      )
-    : fail(declared, result.matches, result.reason ?? `the deployed build ${describe(result.matches)}`);
+  return {
+    ...(result.matches === declared
+      ? pass(
+          declared,
+          result.matches,
+          result.reason ?? `the deployed build ${describe(result.matches)} (${result.localCount} file(s))`,
+        )
+      : fail(declared, result.matches, result.reason ?? `the deployed build ${describe(result.matches)}`)),
+    localHash: result.localHash,
+  };
 }
 
 function checkNoForeignTunnel(declared: boolean): FieldCheck {

@@ -9,6 +9,11 @@
  *
  * Rule for every check: an error inside it is `ok: "unknown"` with the error
  * text, never a pass, and never stops the other checks.
+ *
+ * One exception to "none of them writes": the ledger check creates and removes
+ * one empty file in the ledger folder (or its nearest existing parent). A read
+ * cannot answer "can this process write there": on Windows access() reports a
+ * read-only attribute, not the folder's permissions.
  */
 import fs from "fs";
 import net from "net";
@@ -25,6 +30,7 @@ import { isIngestRunning } from "../ingest/server.js";
 import { verifyPackagedScripts } from "./captureOrchestrator.js";
 import { readBridgeFirmware } from "./deckAutonomy.js";
 import { FIRMWARE_PRE_07 } from "../deck/bridgeTools.js";
+import { getLedger, ledgerDir, type LedgerStatus } from "../ledger.js";
 
 export type CheckVerdict = true | false | "unknown";
 
@@ -64,6 +70,8 @@ export interface DoctorContext {
    * context without it reads as "could not be checked".
    */
   bridgeFirmware?: () => Promise<{ probed: boolean; firmware: string; port: string; reason?: string }>;
+  /** This server's own ledger (ledger.ts), when the check runs inside the server. Absent in a test that has none. */
+  ledgerStatus?: () => LedgerStatus;
 }
 
 export type CheckFn = (ctx: DoctorContext) => DoctorCheck | Promise<DoctorCheck>;
@@ -387,6 +395,76 @@ export const checkKillswitch: CheckFn = () => {
   return pass(name, s.summary);
 };
 
+// ---- 8. the run ledger -----------------------------------------------------
+
+const NOT_WRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOSPC", "ENOTDIR", "EISDIR", "EEXIST"]);
+
+export const checkLedgerWritable: CheckFn = (ctx) => {
+  const name = "Run ledger folder is writable";
+  const dir = ledgerDir(ctx.workspace);
+
+  // The nearest folder that exists: the ledger creates its own folder on the
+  // first call, so what matters is whether a file can be made there.
+  let probeIn = dir;
+  let missing = false;
+  while (!fs.existsSync(probeIn)) {
+    const parent = path.dirname(probeIn);
+    if (parent === probeIn) return unknown(name, `no part of ${dir} exists, so there is nowhere to try`);
+    probeIn = parent;
+    missing = true;
+  }
+  let isDir: boolean;
+  try {
+    isDir = fs.statSync(probeIn).isDirectory();
+  } catch (err) {
+    return unknown(name, `could not look at ${probeIn}: ${(err as Error).message}`);
+  }
+  if (!isDir) {
+    return fail(
+      name,
+      `${probeIn} is a file, so ${dir} cannot be created under it`,
+      `Move ${probeIn} out of the way; the ledger writes to ${dir}.`,
+    );
+  }
+
+  const probe = path.join(probeIn, `.dps-ledger-probe-${process.pid}-${Date.now()}`);
+  try {
+    fs.writeFileSync(probe, "");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code && NOT_WRITABLE_CODES.has(code)
+      ? fail(
+          name,
+          `could not create a file in ${probeIn} (${code}): the ledger cannot write there, and every tool call after this will go unrecorded`,
+          `Make ${probeIn} writable for the user the server runs as, or point DECKY_STUDIO_WORKSPACE at a folder that is.`,
+        )
+      : unknown(name, `could not tell whether ${probeIn} is writable: ${(err as Error).message}`);
+  }
+  try {
+    fs.unlinkSync(probe);
+  } catch {
+    /* the file was made, which is the answer; a leftover empty dotfile is harmless */
+  }
+
+  // A server that already tried to write says more than a probe can.
+  let session = "";
+  const status = ctx.ledgerStatus?.();
+  if (status) {
+    if (status.lastError) {
+      return fail(
+        name,
+        `a file can be created in ${probeIn}, but this server's last ledger write failed: ${status.lastError}`,
+        `Check ${status.file}: it may be locked by another program or on a full disk.`,
+      );
+    }
+    session = `; this server's session ${status.session} has written ${status.appended} line${status.appended === 1 ? "" : "s"} without error`;
+  }
+  return pass(
+    name,
+    `${dir}${missing ? " does not exist yet; the first call creates it, and" : " exists and"} a file can be created in ${probeIn}${session}`,
+  );
+};
+
 // ---- runner ----------------------------------------------------------------
 
 export const ALL_CHECKS: Array<[string, CheckFn]> = [
@@ -398,6 +476,7 @@ export const ALL_CHECKS: Array<[string, CheckFn]> = [
   ["machines.json is valid", checkMachines],
   ["deck.env has the real Deck's address", checkDeckEnv],
   ["Killswitch state", checkKillswitch],
+  ["Run ledger folder is writable", checkLedgerWritable],
 ];
 
 /** Run each check on its own; an exception becomes `unknown` for that check only. */
@@ -439,6 +518,7 @@ export function defaultContext(workspace?: string, extensionVersion?: string): D
     probePython: defaultProbePython,
     ingestRunningHere: isIngestRunning,
     bridgeFirmware: () => readBridgeFirmware(),
+    ledgerStatus: () => getLedger().status(),
   };
 }
 

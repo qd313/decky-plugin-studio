@@ -1051,9 +1051,31 @@ export const TOOLS: ToolDef[] = [
 
   // ---- Studio: self-check -----------------------------------------------
   {
+    name: "deck_runReport",
+    description:
+      "Read the run ledger and return the markdown block a testing row expects: one table row per call (tool, machine, build, verdict, evidence path) and a totals line. Read-only; takes no lease and presses nothing. The ledger is written by the server itself, one line per deck_* or plugin_* call (deck_status, deck_automationStatus and this tool are not recorded), under runs/ledger/<session>.ndjson, errors and deadline expiries included; with no arguments this reports THIS server's session. A verdict is \"the call returned ok\", NOT \"the row passed\": a fidelity of wire-sent is still only sent. The build column is the last deck_checkReady { buildMatches } answer this server got for that machine (and 'not read' when there was none in the last 30 minutes, or deck_deploy has run since); it is never read from the Deck for the report. Machine kinds are shown, and a report that includes a stand-in says so, so a stand-in's run is never filed as the Deck's. Pass the same rowId to the evidence tools (deck_sweep, deck_runSequence, deck_walkTo...) and to this tool to get one row's calls across sessions.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        session: {
+          type: "string",
+          description:
+            "A ledger session id (the file name under runs/ledger/, e.g. 20261102T153012Z_pid4242, with or without .ndjson), or \"all\". Default: this server's own session, unless rowId or since is given, in which case every session is read.",
+        },
+        rowId: { type: "string", description: "Only the calls that carried this rowId, exactly." },
+        since: {
+          type: "string",
+          description: "Only calls that started at or after this: an ISO date or time (2026-11-02T14:00:00Z) or a span back from now (30m, 2h, 1d).",
+        },
+        machine: { type: "string", description: "Only the calls on this machine name." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "studio_doctor",
     description:
-      "Check Decky Plugin Studio itself for setup drift, without touching a Deck (the one serial status read described below touches the board, not the Deck). Returns a list of checks, each { name, ok: true | false | \"unknown\", saw, fix }, plus okCount, failCount and unknownCount; failures come first. Checks: the MCP config your IDE reads (.mcp.json, mcp.json, .cursor/mcp.json, .vscode/mcp.json) points at a server entry file that exists and is the same version as the extension; the four version pins agree (when the workspace is a DPS checkout); no other process holds the ingest port (the only port the server listens on); bridge/tools pad.py, chord.py and vpad.py and the capture scripts resolve from the running build, and Python can import serial (and vgamepad on Windows); machines.json parses and each machine has what its press transport needs; deck.env has DECK_IP and DECK_USER (absent is fine for a stand-in-only setup); the killswitch latch state; and the bridge board's firmware, read with one `status` over its serial port when this machine presses through the board and no other session holds its lease (it presses nothing, and the check is \"unknown\" when the port is not free, the board does not answer, or the machine has no board). \"unknown\" means the check could not run (no Python, an unreadable file, a check that errored) and is never a pass. Read-only.",
+      "Check Decky Plugin Studio itself for setup drift, without touching a Deck (the one serial status read described below touches the board, not the Deck). Returns a list of checks, each { name, ok: true | false | \"unknown\", saw, fix }, plus okCount, failCount and unknownCount; failures come first. Checks: the MCP config your IDE reads (.mcp.json, mcp.json, .cursor/mcp.json, .vscode/mcp.json) points at a server entry file that exists and is the same version as the extension; the four version pins agree (when the workspace is a DPS checkout); no other process holds the ingest port (the only port the server listens on); bridge/tools pad.py, chord.py and vpad.py and the capture scripts resolve from the running build, and Python can import serial (and vgamepad on Windows); machines.json parses and each machine has what its press transport needs; deck.env has DECK_IP and DECK_USER (absent is fine for a stand-in-only setup); the killswitch latch state; whether the run ledger folder (runs/ledger) can be written (the one check that makes a file: an empty one, removed again); and the bridge board's firmware, read with one `status` over its serial port when this machine presses through the board and no other session holds its lease (it presses nothing, and the check is \"unknown\" when the port is not free, the board does not answer, or the machine has no board). \"unknown\" means the check could not run (no Python, an unreadable file, a check that errored) and is never a pass. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1160,6 +1182,8 @@ for (const t of TOOLS) {
   if (!t.name.startsWith("deck_")) continue;
   if (Object.prototype.hasOwnProperty.call(t.inputSchema.properties, "machine")) continue;
   if (t.name === "deck_listMachines" || t.name === "deck_automationStatus") continue;
+  // deck_runReport's `machine` is a filter on ledger lines, declared in its own schema.
+  if (t.name === "deck_runReport") continue;
   t.inputSchema = {
     ...t.inputSchema,
     properties: { ...t.inputSchema.properties, machine: MACHINE_PARAM },
@@ -1180,6 +1204,68 @@ for (const t of TOOLS) {
   t.inputSchema = {
     ...t.inputSchema,
     properties: { ...t.inputSchema.properties, deadlineMs: DEADLINE_PARAM },
+  };
+}
+
+/**
+ * Every deck_* and plugin_* call may carry a `rowId` (plan 12, lane C): the
+ * testing row it belongs to. The dispatch seam copies it onto the call's ledger
+ * line; the evidence-writing tools also write it into their file. Described
+ * here, once. deck_runReport declares its own (a filter), and so does nothing
+ * else: the seam strips it from a tool that does not use it.
+ */
+const ROW_ID_PARAM = {
+  type: "string",
+  description:
+    "The testing row this call belongs to (for example P89-RIG-OPEN-AFTER-RELOAD). Recorded on the call's ledger line (see deck_runReport), and copied into the evidence file by the tools that write one. Never changes what the call does.",
+};
+const EVIDENCE_ROW_ID_PARAM = {
+  type: "string",
+  description:
+    "The testing row this run belongs to. Copied into the evidence file and onto the call's ledger line (see deck_runReport).",
+};
+for (const t of TOOLS) {
+  if (!t.name.startsWith("deck_") && !t.name.startsWith("plugin_")) continue;
+  if (Object.prototype.hasOwnProperty.call(t.inputSchema.properties, "rowId")) continue;
+  t.inputSchema = {
+    ...t.inputSchema,
+    properties: { ...t.inputSchema.properties, rowId: ROW_ID_PARAM },
+  };
+}
+
+/**
+ * `saveAs` on every tool that writes evidence: names the file (a file NAME:
+ * anything before the last / or \ is dropped, odd characters become _, and the
+ * real extension is kept). Per-tool text, because what the file is differs.
+ */
+const SAVE_AS_TEXT: Record<string, string> = {
+  deck_sweep: "Name of the evidence file under runs/ (sanitised; .json added if missing). Wins over runName.",
+  deck_runSequence:
+    "Name of the evidence file under runs/ (sanitised; .json added if missing). Wins over runName, and asks for the file the way runName does (an unnamed run writes none).",
+  deck_launchGame: "Name of the evidence file under runs/ (sanitised; .json added if missing). Wins over runName.",
+  deck_exitGame: "Name of the evidence file under runs/ (sanitised; .json added if missing). Wins over runName.",
+  deck_walkTo:
+    "Write the result as runs/<saveAs>.json (sanitised) and return its path as evidenceFile, with rowId inside. Without it a walk writes no file.",
+  deck_assertFocusMove:
+    "Write the result as runs/<saveAs>.json (sanitised) and return its path as evidenceFile, with rowId inside. Without it a press-and-check writes no file.",
+  deck_snapshotSettings:
+    "Also write a small record of the snapshot (where the copy is, its size and checksum, rowId) as runs/<saveAs>.json. The archive itself keeps its own name, because deck_restoreSettings finds it through the snapshot's run file.",
+  deck_captureScreenshot:
+    "Name of the PNG under screenshots/ (sanitised; .png added if missing) instead of DeckCapture_<time>_<mode>.png. A picture cannot carry a rowId; it goes on the ledger line.",
+  deck_record:
+    "Name of the recording under recordings/ (sanitised; .mkv added if missing) instead of DeckRecord_<time>_<mode>.mkv. A video cannot carry a rowId; it goes on the ledger line.",
+};
+for (const t of TOOLS) {
+  const text = SAVE_AS_TEXT[t.name];
+  if (!text) continue;
+  t.inputSchema = {
+    ...t.inputSchema,
+    properties: {
+      ...t.inputSchema.properties,
+      saveAs: { type: "string", description: text },
+      // The evidence tools describe rowId in terms of their file.
+      rowId: EVIDENCE_ROW_ID_PARAM,
+    },
   };
 }
 

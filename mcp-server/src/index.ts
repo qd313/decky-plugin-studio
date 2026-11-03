@@ -76,6 +76,9 @@ import {
 import { MachineCallQueue } from "./callQueue.js";
 import { TOOLS, TOOL_NAMES } from "./toolRegistry.js";
 import { buildToolCallContent, buildToolErrorContent } from "./toolContent.js";
+import { getLedger, ledgerDir, MachineStamp, recordAtSeam } from "./ledger.js";
+import { cleanRowId } from "./evidenceName.js";
+import { runReport } from "./tools/runReport.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.11" };
@@ -145,7 +148,55 @@ const REGISTRY_TOOLS: ReadonlySet<string> = new Set([
   "deck_releaseMachine",
   "deck_stopAutomation",
   "deck_automationStatus",
+  // Reads the ledger; about no machine in particular (`machine` is a filter), takes no lease.
+  "deck_runReport",
 ]);
+
+/**
+ * Tools that read `rowId` / `saveAs` themselves (evidence-writing tools, and
+ * deck_runReport, whose rowId is a filter). For every other tool the seam strips
+ * `rowId` before dispatch -- it is the ledger's, and several tools hand their
+ * whole params object on (deck_configure writes it into deck.env).
+ */
+const ROW_ID_TOOLS: ReadonlySet<string> = new Set([
+  "deck_sweep",
+  "deck_runSequence",
+  "deck_assertFocusMove",
+  "deck_walkTo",
+  "deck_launchGame",
+  "deck_exitGame",
+  "deck_snapshotSettings",
+  "deck_captureScreenshot",
+  "deck_record",
+  "deck_runReport",
+]);
+
+/**
+ * THE RUN LEDGER (plan 12 lane C, ledger.ts). Every deck_* and plugin_* call
+ * ends in one appended line under runs/ledger/, whatever its outcome. This only
+ * wraps handleCall(): nothing the ledger does can change what the tool returned
+ * or threw, and a ledger that cannot write logs once and goes quiet.
+ */
+function machineStampOf(args: Record<string, unknown>): MachineStamp | null {
+  try {
+    const m = resolveMachine(args.machine != null ? String(args.machine) : undefined);
+    return labelOf(m);
+  } catch {
+    return null;
+  }
+}
+
+async function handle(method: string, params: Record<string, unknown>): Promise<unknown> {
+  if (!method.startsWith("tools/")) return handleCall(method, params);
+  const tool = method.slice("tools/".length);
+  return recordAtSeam(
+    getLedger(),
+    { rowIdTools: ROW_ID_TOOLS, registryTools: REGISTRY_TOOLS, stampOf: machineStampOf },
+    tool,
+    params,
+    (args) => handleCall(method, args),
+  );
+}
 
 /**
  * THE DISPATCH SEAM (plan 10 § 5). Every deck_* call resolves its `machine`
@@ -156,7 +207,7 @@ const REGISTRY_TOOLS: ReadonlySet<string> = new Set([
  * every result is stamped `machine: { name, kind, os }`, so a stand-in's
  * verdict can never be filed as the Deck's.
  */
-async function handle(method: string, params: Record<string, unknown>): Promise<unknown> {
+async function handleCall(method: string, params: Record<string, unknown>): Promise<unknown> {
   if (!method.startsWith("tools/")) return dispatch(method, params);
   // Every tool call lands in a small ring (studio_reportIssue's bundle), and a
   // call that throws carries a reportId in its error text (tools/reportIssue.ts).
@@ -433,6 +484,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       return deck.captureScreenshot(
         String(params.mode ?? "auto"),
         Boolean(params.allowNonPluginUi),
+        params.saveAs != null ? String(params.saveAs) : undefined,
         params.outDir != null ? String(params.outDir) : undefined,
       );
 
@@ -500,6 +552,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         acquireFocus: params.acquireFocus != null ? Boolean(params.acquireFocus) : undefined,
         port: params.port != null ? String(params.port) : undefined,
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
+        saveAs: params.saveAs != null ? String(params.saveAs) : undefined,
+        rowId: cleanRowId(params.rowId),
       });
 
     case "tools/deck_typeText":
@@ -524,6 +578,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         outDir: params.outDir != null ? String(params.outDir) : undefined,
         acquireFocus: params.acquireFocus != null ? Boolean(params.acquireFocus) : undefined,
         requireVisible: params.requireVisible != null ? Boolean(params.requireVisible) : undefined,
+        saveAs: params.saveAs != null ? String(params.saveAs) : undefined,
+        rowId: cleanRowId(params.rowId),
       });
 
     case "tools/deck_sweep":
@@ -546,6 +602,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
         outDir: params.outDir != null ? String(params.outDir) : undefined,
+        saveAs: params.saveAs != null ? String(params.saveAs) : undefined,
+        rowId: cleanRowId(params.rowId),
       });
 
     case "tools/deck_saveCheck": {
@@ -632,6 +690,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
         outDir: params.outDir != null ? String(params.outDir) : undefined,
+        saveAs: params.saveAs != null ? String(params.saveAs) : undefined,
+        rowId: cleanRowId(params.rowId),
       });
 
     case "tools/deck_exitGame":
@@ -642,6 +702,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         runName: params.runName != null ? String(params.runName) : undefined,
         writeEvidence: params.writeEvidence != null ? Boolean(params.writeEvidence) : undefined,
         outDir: params.outDir != null ? String(params.outDir) : undefined,
+        saveAs: params.saveAs != null ? String(params.saveAs) : undefined,
+        rowId: cleanRowId(params.rowId),
       });
 
     case "tools/deck_listGames":
@@ -656,6 +718,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         cdpUrl: params.cdpUrl != null ? String(params.cdpUrl) : undefined,
         settleTimeoutMs:
           params.settleTimeoutMs != null ? Number(params.settleTimeoutMs) : undefined,
+        saveAs: params.saveAs != null ? String(params.saveAs) : undefined,
+        rowId: cleanRowId(params.rowId),
       });
 
     case "tools/deck_readFocus":
@@ -756,10 +820,27 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         ttlMinutes: params.ttlMinutes != null ? Number(params.ttlMinutes) : undefined,
         note: params.note != null ? String(params.note) : undefined,
         replace: params.replace === true ? true : undefined,
+        saveAs: params.saveAs != null ? String(params.saveAs) : undefined,
+        rowId: cleanRowId(params.rowId),
       });
 
     case "tools/deck_restoreSettings":
       return restoreSettings();
+
+    case "tools/deck_runReport":
+      return runReport(
+        {
+          session: params.session != null ? String(params.session) : undefined,
+          rowId: cleanRowId(params.rowId),
+          since: params.since != null ? String(params.since) : undefined,
+          machine: params.machine != null ? String(params.machine) : undefined,
+        },
+        {
+          dir: ledgerDir(getWorkspaceRoot()),
+          currentSession: getLedger().session,
+          workspaceRoot: getWorkspaceRoot(),
+        },
+      );
 
     case "tools/studio_doctor":
       return studioDoctor({
@@ -800,6 +881,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         String(params.mode ?? "auto"),
         String(params.quality ?? "compressed"),
         Boolean(params.allowNonPluginUi),
+        params.saveAs != null ? String(params.saveAs) : undefined,
         params.outDir != null ? String(params.outDir) : undefined,
       );
 

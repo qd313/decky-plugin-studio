@@ -40,6 +40,7 @@ import { checkTarFile } from "./tarCheck.js";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { attachNamedEvidence } from "../evidenceName.js";
 
 import { getConfigDir } from "../config.js";
 import { currentMachine } from "../machines.js";
@@ -598,6 +599,15 @@ export interface SnapshotSettingsOptions {
   note?: string;
   /** Set aside a live unrestored earlier snapshot (kept under a dated name) instead of refusing. */
   replace?: boolean;
+  /**
+   * Writes a small JSON record of the snapshot (where the copy is, its size and
+   * checksum) as runs/<saveAs>.json. The archive itself keeps its own name:
+   * deck_restoreSettings finds it through the snapshot's run file, and renaming
+   * it here could only break that.
+   */
+  saveAs?: string;
+  /** The testing row this snapshot belongs to; goes in that record and the ledger line. */
+  rowId?: string;
   /** Test-only clock override; production always uses Date.now. */
   now?: () => number;
 }
@@ -611,7 +621,13 @@ export type SnapshotSettingsResult = TakeReport<SettingsSnapshotValues> & {
   methodNote: string;
 };
 
-export async function snapshotSettings(opts: SnapshotSettingsOptions = {}): Promise<SnapshotSettingsResult> {
+export async function snapshotSettings(
+  opts: SnapshotSettingsOptions = {},
+): Promise<SnapshotSettingsResult & { evidenceFile?: string; evidenceError?: string; rowId?: string }> {
+  return attachNamedEvidence("deck_snapshotSettings", await snapshotSettingsRun(opts), opts);
+}
+
+async function snapshotSettingsRun(opts: SnapshotSettingsOptions = {}): Promise<SnapshotSettingsResult> {
   const ttlMinutes = opts.ttlMinutes ?? DEFAULT_TTL_MINUTES;
   const includeData = Boolean(opts.includeData);
   const ctrl: SnapshotController<SettingsSnapshotValues> = {

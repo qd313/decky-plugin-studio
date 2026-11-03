@@ -96,6 +96,7 @@ import { focusKey, describe, labelIsBorrowed } from "./focusKey.js";
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { readPage, ReadPageOptions, ReadPageResult } from "./readPage.js";
 import { getWorkspaceArtifactsDir, timestamp } from "../tools/captureOrchestrator.js";
+import { evidencePath } from "../evidenceName.js";
 import { currentMachine, sshTarget, type Machine } from "../machines.js";
 
 /**
@@ -199,6 +200,10 @@ export interface GameSessionOptions {
   waitMs?: number;
   /** Name for the evidence file under runs/. Defaults to launch-game_<ts> / exit-game_<ts>. */
   runName?: string;
+  /** Names the evidence file (sanitised, ".json" kept; wins over runName). See evidenceName.ts. */
+  saveAs?: string;
+  /** The testing row this run belongs to; copied into the evidence file and the ledger line. */
+  rowId?: string;
   /** Set false to skip the evidence file. Default true. */
   writeEvidence?: boolean;
   /** Folder for the evidence file: absolute, or relative to the workspace. Default `<workspace>/runs`. */
@@ -1101,12 +1106,12 @@ async function runSession(
   if (opts.writeEvidence !== false) {
     try {
       const dir = getWorkspaceArtifactsDir("runs", opts.outDir);
-      const name = (opts.runName ?? `${tool}_${timestamp()}`).replace(/[^A-Za-z0-9._-]/g, "_");
-      const file = path.join(dir, `${name}.json`);
+      const file = evidencePath(dir, { saveAs: opts.saveAs, runName: opts.runName, fallback: `${tool}_${timestamp()}`, ext: ".json" });
       // Stages, what was seen, the RunningApps reads before and after, and the
       // durations. Nothing else clock-dependent, and not the file's own path.
       const evidence = {
         tool,
+        ...(opts.rowId ? { rowId: opts.rowId } : {}),
         ok: result.ok,
         reason: result.reason ?? null,
         stopped: result.stopped,

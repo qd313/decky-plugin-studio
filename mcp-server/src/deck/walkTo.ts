@@ -42,11 +42,16 @@ import { focusKey, describe, describeVisibility, labelOfElement } from "./focusK
 import { automationStopped, stoppedMessage } from "./killswitch.js";
 import { readBigPictureForeground, notForegroundSentence } from "./foreground.js";
 import { currentMachineIfAny, resolveMachine } from "../machines.js";
+import { attachNamedEvidence } from "../evidenceName.js";
 
 export type WalkDirection = "UP" | "DOWN" | "LEFT" | "RIGHT";
 
 export interface WalkToOptions {
   direction: WalkDirection;
+  /** Writes the result as runs/<saveAs>.json (sanitised) and returns its path as evidenceFile. */
+  saveAs?: string;
+  /** The testing row this walk belongs to; goes in that file and the ledger line. */
+  rowId?: string;
   /** Text to look for on the focused control, or on its nearest labelled ancestor. */
   text: string;
   /** Max presses. Default 20. */
@@ -224,7 +229,15 @@ export async function acquireFocusIfUnowned(
   return { focus: reread, acquired: true, presses: 1, fidelity: earnedFidelity(reread.ok) };
 }
 
-export async function walkTo(opts: WalkToOptions): Promise<WalkToResult> {
+/**
+ * The tool entry. A walk used to leave no file of its own; with `saveAs` it
+ * does (evidenceName.ts), and without it nothing changes.
+ */
+export async function walkTo(opts: WalkToOptions): Promise<WalkToResult & { evidenceFile?: string; evidenceError?: string; rowId?: string }> {
+  return attachNamedEvidence("deck_walkTo", await walkToRun(opts), opts);
+}
+
+async function walkToRun(opts: WalkToOptions): Promise<WalkToResult> {
   const direction = (opts.direction ?? "").toString().toUpperCase() as WalkDirection;
   const text = opts.text ?? "";
   const budget = opts.budget ?? 20;

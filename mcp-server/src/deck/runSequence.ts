@@ -47,6 +47,7 @@ import { acquireFocusIfUnowned } from "./walkTo.js";
 import { pressButton } from "./pressButton.js";
 import { weakestFidelity, type Fidelity } from "./fidelity.js";
 import { getWorkspaceArtifactsDir, timestamp } from "../tools/captureOrchestrator.js";
+import { evidencePath } from "../evidenceName.js";
 
 export interface SequenceStep {
   /** Button(s) for this step, as for deck_pressButton. A list is a chord. */
@@ -134,6 +135,10 @@ export interface RunSequenceOptions {
   cdpUrl?: string;
   /** Name for the evidence file. Defaults to a timestamp. */
   runName?: string;
+  /** Names the evidence file (sanitised, ".json" kept; wins over runName, and asks for the file like runName does). */
+  saveAs?: string;
+  /** The testing row this run belongs to; copied into the evidence file and the ledger line. */
+  rowId?: string;
   /**
    * Write the evidence file under runs/. Default: only when runName is given, so an
    * unnamed exploratory run leaves nothing behind (464 throwaway files were once
@@ -162,6 +167,8 @@ export interface RunSequenceOptions {
 }
 
 export interface RunSequenceResult {
+  /** Only present when the caller passed a rowId. */
+  rowId?: string;
   ok: boolean;
   reason?: string;
   fidelity: Fidelity;
@@ -607,6 +614,7 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
   ].filter(Boolean);
 
   const result: RunSequenceResult = {
+    ...(opts.rowId ? { rowId: opts.rowId } : {}),
     ok,
     reason: stoppedMidRun ? stoppedMessage(automationStopped() ?? latchedBefore!) : undefined,
     fidelity: weakestFidelity(fidelities),
@@ -627,12 +635,11 @@ export async function runSequence(opts: RunSequenceOptions): Promise<RunSequence
     summary: parts.join("; "),
   };
 
-  const wantEvidence = opts.writeEvidence ?? Boolean(opts.runName);
+  const wantEvidence = opts.writeEvidence ?? Boolean(opts.runName || opts.saveAs);
   if (wantEvidence) {
     try {
       const dir = getWorkspaceArtifactsDir("runs", opts.outDir);
-      const name = (opts.runName ?? `run_${timestamp()}`).replace(/[^A-Za-z0-9._-]/g, "_");
-      const file = path.join(dir, `${name}.json`);
+      const file = evidencePath(dir, { saveAs: opts.saveAs, runName: opts.runName, fallback: `run_${timestamp()}`, ext: ".json" });
       fs.writeFileSync(file, JSON.stringify(result, null, 2), "utf8");
       result.evidenceFile = file;
     } catch (err) {
