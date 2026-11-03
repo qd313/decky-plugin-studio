@@ -9,6 +9,10 @@
   python pad.py release
   python pad.py watchdog-test              # prove the safety net fires
 
+`status` prints the board's reply untouched, so the "fw" field a board running
+07_version or later carries (the program's name) reaches the caller as the board
+wrote it. A board from before 07_version has no such field; this never adds one.
+
 A short press needs no heartbeat: the board's own timed release (80 ms) beats
 the 750 ms watchdog. A hold does need one, which is the design working.
 """
