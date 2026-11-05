@@ -82,7 +82,7 @@ import { cleanRowId } from "./evidenceName.js";
 import { runReport } from "./tools/runReport.js";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.11" };
+const SERVER_INFO = { name: "decky-plugin-studio", version: "0.3.12" };
 setServerInfo(SERVER_INFO);
 
 // Before anything else can fail: a stray rejection or exception is logged

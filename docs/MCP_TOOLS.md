@@ -91,8 +91,8 @@ over from the preview. Two keys are still read; any other key is ignored.
   flashed), `"unknown (pre-07)"` when the board answered without a name, `"unknown (not
   probed)"` on a machine that presses through a virtual pad or whose port another session
   leases. Never a guess from the resting axes. A virtual pad answers `"vpad"`. On 2026-11-03 the
-  unflashed board read `"unknown (pre-07)"` and the stand-in's pad `"vpad"`; a flashed board has
-  not been read yet.
+  unflashed board read `"unknown (pre-07)"` and the stand-in's pad `"vpad"`; on 2026-11-04,
+  flashed, the board's `status` read `"fw":"07_version"` with the triggers at -127.
 - **deck.focusBigPicture** — `{ settleMs?: 700, timeoutMs?: 4000, modeSwitchWaitMs?: 20000 }`,
   **Windows stand-in only**. Puts Big Picture in front without a hand. If no Big Picture page is
   listed and Steam reports UI mode 7 (the desktop client), it switches Steam to Big Picture

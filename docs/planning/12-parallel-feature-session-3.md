@@ -403,7 +403,7 @@ on the PC but did not touch the Deck.
 | # | Item | Verdict |
 |---|------|---------|
 | 1 | H | Not flashed (the maintainer's hand). The negative read passed on the real board: `bridgeFirmware: "unknown (pre-07)"`, and the doctor check says to flash. The stand-in's pad daemon answers `"vpad"`. |
-| 2 | B | Could not run on `this-pc`: `deck_focusBigPicture` switched Steam to Big Picture and asked for the front, the gate stayed hidden, `checkReady` failed, nothing pressed. Run on the Deck instead: a walk with `deadlineMs: 300` beside a press in one server returned the deadline error naming "press DOWN" with the pad release acked; the press waited 506 ms and ran steam-routed; a sweep with `outDir` and `saveAs` landed in the scratch folder. The late press's refusal is only on the server's stderr and was not captured. |
+| 2 | B | On 2026-11-03 `this-pc` could not run: `deck_focusBigPicture` switched Steam to Big Picture and asked for the front, the gate stayed hidden with `hasFocus: true`, `checkReady` failed, nothing pressed. Run on the Deck instead: a walk with `deadlineMs: 300` beside a press in one server returned the deadline error naming "press DOWN" with the pad release acked; the press waited 506 ms and ran steam-routed; a sweep with `outDir` and `saveAs` landed in the scratch folder. **On 2026-11-04 the `this-pc` half ran too:** Big Picture alt-tabbed behind came forward in 0.7 s, the same pair gave the deadline error, the virtual pad's release acked, the press waited 308 ms and ran steam-routed, and the server's stderr read "abandoned deck_walkTo finished 30 ms after its deadline; its result was discarded". Both halves passed. |
 | 3 | C, F | 9 of 9 doctor checks. Ledger lines per call, `deck_runReport {}` and `{ rowId }` across sessions. Dry-run bundle clean of addresses, user names and home paths; `gh` authenticated; nothing posted (the real post is the maintainer's call). |
 | 4 | A | Three probes: the window is about 7 s (old pages to 0.75 s, resets to 3 s, partial list to 6 s). Three rounds of no-wait reload then open from a new process: **3 of 3 first-try opens**. The second probe's restart hung for seven minutes; see below. |
 | 5 | D | Acceptance row passed: clear and type matched on the Ask `<input>` itself, an append matched, four D-pad presses to "Ask", A steam-routed, the field cleared, the reply arrived. |
@@ -422,8 +422,10 @@ call opens the panel; the grid refusal's reason text has mojibake where the run 
 bonsAI's panel still had the Hollow Knight chat open, so the typed question was answered about
 Hollow Knight with "No game" running.
 
-**Left for the maintainer:** the `07_version` flash and its hand test; the first
-`deck_sleepAndWake { seconds: 90 }` with a thumb on the power button; one real
-`studio_reportIssue` post; an alt-tab to Big Picture on `this-pc` if the stand-in half of lane B is
-wanted; bonsAI's row P89-RIG-OPEN-AFTER-RELOAD from their own session; then the push and the
-0.3.12 bump.
+**Done the next evening (2026-11-04), with the maintainer at the PC:** the sleep test (passed first
+time); the `this-pc` half of lane B (passed, with the stderr line captured); the `07_version` flash
+with the Deck-side cable unplugged, then the replug, `deck_status` reading `"07_version"` and the
+four-step hand test through the rig; the push of `main`; the 0.3.12 bump. **Still the
+maintainer's:** one real `studio_reportIssue` post (the dry run was clean; the post itself was
+refused by the session's permission layer), and bonsAI's row P89-RIG-OPEN-AFTER-RELOAD from their
+own session.

@@ -87,7 +87,7 @@ name is `FW_PROGRAM` in `deck_bridge.ino`. Bump it with every change to the file
 | `04_command` | 2026-08 | the JSON command channel and the watchdog | no |
 | `05_triggers` | 2026-10-08 | `LT` and `RT` as the Z and Rz axes; they rest at 0 (half pulled) | no |
 | `06_trigger_rest` | 2026-10-11 | the triggers rest at -127; a lone Steam button opens its menu again (flashed 2026-10-24) | no |
-| `07_version` | 2026-11-02 | the `status` reply and the boot banner carry `"fw":"07_version"`; nothing else | yes |
+| `07_version` | 2026-11-02 | the `status` reply and the boot banner carry `"fw":"07_version"`; nothing else (flashed 2026-11-04: `status` read `"fw":"07_version"`, `ax:[0,0,-127,-127,0,0]`) | yes |
 
 Before `07_version` the only tell was the resting axes (`06` rests the triggers
 at -127, `05` at 0), which is a guess about a program, not its name. Now:
@@ -101,7 +101,7 @@ and `studio_doctor` carries the same word; neither works out an older program's
 name from the axes. A stand-in's virtual pad (`vpad.py`) answers `"fw":"vpad"`,
 so the field is never absent from a machine that has no board.
 
-**Flashing `07_version` (written at the desk and compiled; not yet flashed):**
+**Flashing `07_version` (flashed 2026-11-04 this way; the steps stay for the next program):**
 
 1. Unplug the board's **Deck-side** cable (the rule above: a reflash while it is
    connected can inject phantom input).
