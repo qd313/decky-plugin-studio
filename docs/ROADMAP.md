@@ -122,7 +122,7 @@ panel shut, no lease held, the rig armed. Verdicts, in the order they ran:
 | E, shelf | Doom 64: Retribution (non-Steam) launched by `title` from shelf position 1 in 6 presses; `deck_exitGame` with it running: menu, Resume, 6 DOWN, Exit, Confirm, gone from `RunningApps` in 1 s. |
 | B (Deck, not `this-pc`) | A walk with `deadlineMs: 300` fired beside a press in one server: the walk returned the deadline error naming "press DOWN", the pad release acked, the press waited 506 ms and ran steam-routed; both on the ledger. A two-press sweep with `outDir` and `saveAs` landed where asked. The late-press refusal itself was not observed (stderr only). |
 | B (`this-pc`) | Not run. `deck_focusBigPicture` switched Steam from the desktop client to Big Picture and asked for the front, but the gate stayed `visibilityState: hidden`, so `checkReady` failed honestly and no press was sent. Differs from 2026-10-25; open below. |
-| G | Not run; needs the maintainer present. |
+| G | **Passed on the first run, 2026-11-04 evening** (the maintainer present). `deck_sleepAndWake { seconds: 90 }`: no game, no inhibitor; `rtcwake` armed and `wakealarm` read back at the Deck's clock + 90 s (drift 1 s); the before record written; `SteamClient.System.SuspendPC()` suspended the Deck (the journal: "suspend requested from client PID … ('dbus-send')", "PM: suspend entry (deep)"); SSH gone 2.0 s after the call, back 98.0 s after it (away 96 s); the alarm fired and cleared; focus came back exactly where it was, bonsAI's Ask field, visible; route unchanged; the latch files unchanged; no reboot. 100.9 s wall clock, 0 presses. |
 
 **Found and fixed during the pass** (`sshRestartLoader`, `deploy/deployHelpers.ts`): the loader
 restart ran `ssh` through `execSync` with `stdio: "inherit"` and no timeout. On the second probe
@@ -250,8 +250,11 @@ Four rules keep that safe:
 > until `rtcwake` has armed and read back on the Deck's own clock; records focus before, suspends
 > through `SteamClient.System.SuspendPC()` (wake option 2, the proven way back), waits for SSH to
 > go and return, reads focus without a press and reports where it landed. The power-menu route is
-> accepted and refuses as not implemented. Every seam is faked to the 2026-09-08 timings; the
-> first run is attended, `seconds: 90`. See `docs/MCP_TOOLS.md`.
+> accepted and refuses as not implemented. **Passed on the Deck on its first run, 2026-11-04:**
+> armed and read back (drift 1 s), suspended by Steam's own call with the journal agreeing, SSH
+> gone at 2 s and back at 98 s, alarm fired and cleared, focus back on bonsAI's Ask field with no
+> press, latch files intact. The acceptance ("the suspend/resume test can run unattended and
+> report where the ring landed") is met; the power-menu route stays unbuilt.
 
 ★★★ · Planned — asked 2026-09-05
 - **Why it matters:** a bonsAI bug was first seen after the Deck slept and woke — focus landed on an invisible button. Every other way of forcing a redraw (closing a dialog, reopening the menu, restarting the plugin loader) came back clean, so the fix shipped without ever testing the one path that actually showed the bug.

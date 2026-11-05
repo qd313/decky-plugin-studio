@@ -416,8 +416,12 @@ running game.
   still `ok: true`, reported in capitals, and nothing is pressed to put it back. `via:
   "power-menu"` is accepted and refuses as not implemented. Deadline `seconds + 180`; a shorter
   `deadlineMs` is refused. Needs NOPASSWD sudo for `rtcwake` (the `setup-dev.ps1` sudoers rule
-  covers it), as `deck.holdAwake` does. Every seam is faked to the 2026-09-08 timings; the first
-  run is the maintainer's, with a thumb on the power button and `seconds: 90`.
+  covers it), as `deck.holdAwake` does. **Passed on the Deck on its first run, 2026-11-04**
+  (`seconds: 90`, the maintainer present): `wakealarm` read back at the Deck's clock + 90 s with
+  1 s drift; the journal carries "suspend requested … ('dbus-send')" and "PM: suspend entry
+  (deep)"; SSH gone 2.0 s after the call and back 98.0 s after it; `alarmFired: true`, cleared;
+  `focusMoved: false`, the ring on bonsAI's Ask field, visible; `killswitchSurvived: true`,
+  `rebooted: false`; 100.9 s wall clock. `via: "power-menu"` still refuses as not implemented.
 - **deck.runReport** — `{ session?, rowId?, since?, machine? }` (2026-11-02, desk-verified only).
   Read-only, no lease. Renders the ledger as the markdown table a bonsAI testing row expects
   (when, tool, machine, build, verdict, row, evidence), a stand-in warning when any line is a

@@ -408,7 +408,7 @@ on the PC but did not touch the Deck.
 | 4 | A | Three probes: the window is about 7 s (old pages to 0.75 s, resets to 3 s, partial list to 6 s). Three rounds of no-wait reload then open from a new process: **3 of 3 first-try opens**. The second probe's restart hung for seven minutes; see below. |
 | 5 | D | Acceptance row passed: clear and type matched on the Ask `<input>` itself, an append matched, four D-pad presses to "Ask", A steam-routed, the field cleared, the reply arrived. |
 | 6 | E | Doom 64: Retribution launched by title from the shelf and exited with the game running. Vampire Survivors from the grid stalled at row 5 with the layout recorded (five tiles a row, a scrolling container, four rows below that DOWN would not enter; RIGHT moved and scrolled the container a row). |
-| 7 | G | Not run; waits for the maintainer to be present. |
+| 7 | G | **Passed on the first run** (2026-11-04 evening, the maintainer present): armed and read back with 1 s drift, suspended by `SuspendPC()` with the journal agreeing, SSH gone at 2 s and back at 98 s, alarm fired and cleared, focus back on the Ask field with no press, latch files intact, no reboot. Run file `runs/sleep-wake_20261104_191221.json` in bonsAI. |
 
 **Found and fixed during the pass.** `sshRestartLoader` ran its `ssh` through `execSync` with
 `stdio: "inherit"` and no timeout. Probe 2's restart child sat seven minutes with no TCP socket
